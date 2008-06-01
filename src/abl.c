@@ -1,7 +1,6 @@
 /* as per abl-ref in cruft/ */
 #include <assert.h>
 #include <string.h>
-#include <utils.h>
 #include "util.h"
 #include "gcry.h"
 #include "binio.h"

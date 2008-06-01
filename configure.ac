@@ -2,7 +2,7 @@
 # Process this file with autoconf to produce a configure script.
 
 AC_PRERE(2.61)
-AC_INIT(scubed3, 0.1pre0)
+AC_INIT(scubed3, 0.1pre-SVN)
 AC_CONFIG_SRCDIR([src/scubed3.c])
 AC_CONFIG_HEADER([config.h])
 AM_INIT_AUTOMAKE

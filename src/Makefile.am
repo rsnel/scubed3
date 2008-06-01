@@ -1,6 +1,9 @@
-AUTOMAKE_OPTIONS = foreign dist-bzip2
+AUTOMAKE_OPTIONS = foreign
 noinst_PROGRAMS = scubed3
-scubed3_SOURCES = scubed3.c abl.c binio.c bit.c bitmap.c blockio.c cipher.c \
-	       dllist.c fuse_io.c gcry.c hashtbl.c pthd.c util.c verbose.c
+scubed3_SOURCES = scubed3.c scubed3.h abl.c binio.c binio.h bit.c bit.h \
+		  bitmap.c bitmap.h blockio.c blockio.h cipher.c cipher.h \
+		  dllist.c dllist.h fuse_io.c fuse_io.h gcry.c gcry.h \
+		  hashtbl.c hashtbl.h pthd.c pthd.h util.c util.h \
+		  verbose.c verbose.h
 AM_CFLAGS = -D_GNU_SOURCE -Wall -Werror -D_FILE_OFFSET_BITS=64
 AM_LDFLAGS = -lpthread -lfuse -lgcrypt

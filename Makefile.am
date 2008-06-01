@@ -1,2 +1,2 @@
-AUTOMAKE_OPTIONS = foreign dist-bzip2
+AUTOMAKE_OPTIONS = foreign
 SUBDIRS = src

@@ -1,5 +1,9 @@
 #!/bin/sh
 
+if [ ! -d .svn/ ]; then
+	echo UNKNOWN
+	exit
+fi
 test "$1" && extra="-$1"
 
 svn_revision=`LC_ALL=C svn info 2> /dev/null | grep Revision | cut -d' ' -f2`

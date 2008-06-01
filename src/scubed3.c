@@ -413,7 +413,8 @@ int main(int argc, char **argv) {
 					sizeof(uint32_t));
 		}
 		dev.no_macroblocks = dev.b->no_macroblocks;
-
+		dev.macroblocks = ecalloc(dev.no_macroblocks,
+				sizeof(blockio_info_t*));
 		for (i = 0; i < dev.b->no_macroblocks; i++) {
 			if (dev.b->blockio_infos[i].dev == &dev) {
 				assert(j < dev.no_macroblocks);

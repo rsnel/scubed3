@@ -1,4 +1,4 @@
-#define FUSE_USE_VERSION 26
+#define FUSE_USE_VERSION 25
 
 #include <fuse.h>
 #include <string.h>
@@ -19,9 +19,12 @@ typedef struct fuse_io_entry_s {
 	scubed3_t *l;
 } fuse_io_entry_t;
 
+/* in Debian Etch fuse 26 is not yet available, we are not yet
+ * able to pass a pointer to this struct as private data */
+static hashtbl_t fuse_io_entries;
+
 static int fuse_io_getattr(const char *path, struct stat *stbuf) {
 	fuse_io_entry_t *entry;
-	hashtbl_t *entries = fuse_get_context()->private_data;
 	assert(path && *path == '/');
 
 	memset(stbuf, 0, sizeof(*stbuf));
@@ -32,7 +35,7 @@ static int fuse_io_getattr(const char *path, struct stat *stbuf) {
 		return 0;
 	}
 
-	entry = hashtbl_find_element_bykey(entries, path + 1);
+	entry = hashtbl_find_element_bykey(&fuse_io_entries, path + 1);
 	if (!entry) return -ENOENT;
 
 	stbuf->st_mode = S_IFREG|0600;
@@ -51,7 +54,6 @@ typedef struct fuse_io_readdir_priv_s {
 
 static int fuse_io_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 		off_t offset, struct fuse_file_info *fi) {
-	hashtbl_t *entries = fuse_get_context()->private_data;
 	fuse_io_readdir_priv_t priv = {
 		.filler = filler,
 		.buf = buf
@@ -63,15 +65,15 @@ static int fuse_io_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 
 	filler(buf, ".", NULL, 0); filler(buf, "..", NULL, 0);
 
-	hashtbl_ts_traverse(entries, (void (*)(void*, hashtbl_elt_t*))rep,
-			&priv);
+	hashtbl_ts_traverse(&fuse_io_entries,
+			(void (*)(void*, hashtbl_elt_t*))rep, &priv);
 
 	return 0;
 }
 
 static int fuse_io_open(const char *path, struct fuse_file_info *fi) {
-	hashtbl_t *entries = fuse_get_context()->private_data;
-	fuse_io_entry_t *entry = hashtbl_find_element_bykey(entries, path + 1);
+	fuse_io_entry_t *entry =
+		hashtbl_find_element_bykey(&fuse_io_entries, path + 1);
 	if (!entry) return -ENOENT;
 	if (entry->inuse) {
 		hashtbl_unlock_element_byptr(entry);
@@ -83,8 +85,8 @@ static int fuse_io_open(const char *path, struct fuse_file_info *fi) {
 }
 
 static int fuse_io_release(const char *path, struct fuse_file_info *fi) {
-	hashtbl_t *entries = fuse_get_context()->private_data;
-	fuse_io_entry_t *entry = hashtbl_find_element_bykey(entries, path + 1);
+	fuse_io_entry_t *entry =
+		hashtbl_find_element_bykey(&fuse_io_entries, path + 1);
 	if (!entry) return -ENOENT;
 	assert(entry->inuse);
 	/* we should do some kind of cleanup here */
@@ -96,8 +98,8 @@ static int fuse_io_release(const char *path, struct fuse_file_info *fi) {
 
 static int fuse_io_read(const char *path, char *buf, size_t size, off_t offset,
 		struct fuse_file_info *fi) {
-	hashtbl_t *entries = fuse_get_context()->private_data;
-	fuse_io_entry_t *entry = hashtbl_find_element_bykey(entries, path + 1);
+	fuse_io_entry_t *entry =
+		hashtbl_find_element_bykey(&fuse_io_entries, path + 1);
 	if (!entry) return -ENOENT;
 
 	do_req(entry->l, SCUBED3_READ, offset, size, (char*)buf);
@@ -109,8 +111,8 @@ static int fuse_io_read(const char *path, char *buf, size_t size, off_t offset,
 
 static int fuse_io_write(const char *path, const char *buf, size_t size,
 		off_t offset, struct fuse_file_info *fi) {
-	hashtbl_t *entries = fuse_get_context()->private_data;
-	fuse_io_entry_t *entry = hashtbl_find_element_bykey(entries, path + 1);
+	fuse_io_entry_t *entry =
+		hashtbl_find_element_bykey(&fuse_io_entries, path + 1);
 	if (!entry) return -ENOENT;
 
 	do_req(entry->l, SCUBED3_WRITE, offset, size, (char*)buf);
@@ -136,7 +138,6 @@ static void freer(fuse_io_entry_t *entry) {
 
 int fuse_io_start(int argc, char **argv, scubed3_t *l) {
 	int ret;
-	hashtbl_t fuse_io_entries;
 	fuse_io_entry_t *entry;
 	hashtbl_init_default(&fuse_io_entries, 4, -1, 1, 1,
 			(void (*)(void*))freer);
@@ -151,7 +152,7 @@ int fuse_io_start(int argc, char **argv, scubed3_t *l) {
 	entry->l = l;
 	hashtbl_unlock_element_byptr(entry);
 
-	ret = fuse_main(argc, argv, &fuse_io_operations, &fuse_io_entries);
+	ret = fuse_main(argc, argv, &fuse_io_operations);
 
 	hashtbl_free(&fuse_io_entries);
 

@@ -5,5 +5,5 @@ scubed3_SOURCES = scubed3.c scubed3.h abl.c binio.c binio.h bit.c bit.h \
 		  dllist.c dllist.h fuse_io.c fuse_io.h gcry.c gcry.h \
 		  hashtbl.c hashtbl.h pthd.c pthd.h util.c util.h \
 		  verbose.c verbose.h
-AM_CFLAGS = -D_GNU_SOURCE -Wall -Werror -D_FILE_OFFSET_BITS=64
+AM_CFLAGS = -D_GNU_SOURCE -O2 -g -Wall -Werror -D_FILE_OFFSET_BITS=64
 AM_LDFLAGS = -lpthread -lfuse -lgcrypt

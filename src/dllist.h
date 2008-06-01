@@ -1,6 +1,6 @@
 /* license GPLv3 or any later */
-#ifndef INCLUDE_LSBD_DLLIST_H
-#define INCLUDE_LSBD_DLLIST_H 1
+#ifndef INCLUDE_SCUBED3_DLLIST_H
+#define INCLUDE_SCUBED3_DLLIST_H 1
 
 typedef struct dllist_elt_s {
 	struct dllist_elt_s *prev;
@@ -32,4 +32,4 @@ void *dllist_iterate(dllist_t*, int (*)(dllist_elt_t*, void*), void*);
 
 int dllist_is_empty(dllist_t*);
 
-#endif /* INCLUDE_LSBD_DLLIST_H */
+#endif /* INCLUDE_SCUBED3_DLLIST_H */

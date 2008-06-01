@@ -16,8 +16,8 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
-#ifndef INCLUDE_LSBD_BINIO_H
-#define INCLUDE_LSBD_BINIO_H 1
+#ifndef INCLUDE_SCUBED3_BINIO_H
+#define INCLUDE_SCUBED3_BINIO_H 1
 
 #include <inttypes.h>
 
@@ -49,4 +49,4 @@ void binio_write_uint64_be(void*, uint64_t);
 
 uint64_t binio_read_uint64_be(const void*);
 
-#endif /* INCLUDE_LSBD_BINIO_H */
+#endif /* INCLUDE_SCUBED3_BINIO_H */

@@ -323,12 +323,12 @@ int do_read(lsbd_t *l, uint32_t mesoff, uint32_t muoff, uint32_t size,
 
 int do_req(lsbd_t *l, lsbd_io_t cmd, uint64_t r_offset, size_t size,
 		char *buf) {
-	assert(cmd == LSBD_READ || cmd == LSBD_WRITE);
+	assert(cmd == SCUBED3_READ || cmd == SCUBED3_WRITE);
 	uint32_t meso = r_offset>>l->dev->mesoblk_log;
 	uint32_t inmeso = r_offset%l->dev->mesoblk_size;
 	uint32_t ooff = 0, reqsz;
 	int (*action)(lsbd_t*, uint32_t, uint32_t, uint32_t, char*) =
-		(cmd == LSBD_READ) ? do_read : do_write;
+		(cmd == SCUBED3_READ) ? do_read : do_write;
 
 	if (inmeso) {
 		if (inmeso + size <= l->dev->mesoblk_size) reqsz = size;
@@ -353,7 +353,7 @@ int do_req(lsbd_t *l, lsbd_io_t cmd, uint64_t r_offset, size_t size,
 	return 1;
 }
 
-#define LSBD_OPT_KEY(a,b,c) { a, offsetof(struct options, b), c }
+#define SCUBED3_OPT_KEY(a,b,c) { a, offsetof(struct options, b), c }
 
 int main(int argc, char **argv) {
 	struct options {
@@ -368,10 +368,10 @@ int main(int argc, char **argv) {
 		.macroblock_log = 22
 	};
 	struct fuse_opt lsbd_opts[] = {
-		LSBD_OPT_KEY("-b %s", base, 0),
-		LSBD_OPT_KEY("-r %d", reserved, 0),
-		LSBD_OPT_KEY("-m %d", mesoblock_log, 0),
-		LSBD_OPT_KEY("-M %d", macroblock_log, 0),
+		SCUBED3_OPT_KEY("-b %s", base, 0),
+		SCUBED3_OPT_KEY("-r %d", reserved, 0),
+		SCUBED3_OPT_KEY("-m %d", mesoblock_log, 0),
+		SCUBED3_OPT_KEY("-M %d", macroblock_log, 0),
 		FUSE_OPT_END
 	};
 	int ret, i, j = 0;

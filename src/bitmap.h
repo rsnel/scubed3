@@ -1,5 +1,5 @@
-#ifndef INCLUDE_LSBD_BITMAP_H
-#define INCLUDE_LSBD_BITMAP_H 1
+#ifndef INCLUDE_SCUBED3_BITMAP_H
+#define INCLUDE_SCUBED3_BITMAP_H 1
 
 #include <stdint.h>
 
@@ -33,4 +33,4 @@ void bitmap_read(bitmap_t*, const uint32_t*);
 
 void bitmap_write(uint32_t*, bitmap_t*);
 
-#endif /* INCLUDE_LSBD_BIT_H */
+#endif /* INCLUDE_SCUBED3_BIT_H */

@@ -128,7 +128,7 @@ void blockio_init(blockio_t *b, const char *path, uint8_t macroblock_log) {
 	b->blockio_infos = ecalloc(sizeof(blockio_info_t), b->no_macroblocks);
 }
 
-static const char magic0[8] = "LSBDv0.1";
+static const char magic0[8] = "SSS3v0.1";
 static const uint64_t magic1 = 0x1123456789ABCDEFLL;
 
 void blockio_dev_free(blockio_dev_t *dev) {
@@ -248,7 +248,7 @@ void blockio_dev_read_header(blockio_dev_t *dev, uint32_t no) {
 	dev->b->read(dev->b->priv, BASE, no<<dev->b->macroblock_log,
 			dev->no_indexblocks<<dev->mesoblk_log);
 
-	/* check magic0 = "LSBDv0.1" */
+	/* check magic0 = "SSS3v0.1" */
 	if (memcmp(magic0, MAGIC0, sizeof(magic0))) {
 		//DEBUG("magic \"%.*s\" not found", sizeof(magic0), magic0);
 		return;

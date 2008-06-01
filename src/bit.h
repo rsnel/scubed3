@@ -1,5 +1,5 @@
-#ifndef INCLUDE_LSBD_BIT_H
-#define INCLUDE_LSBD_BIT_H 1
+#ifndef INCLUDE_SCUBED3_BIT_H
+#define INCLUDE_SCUBED3_BIT_H 1
 
 #include <stdint.h>
 
@@ -9,4 +9,4 @@ uint32_t bit_pack(uint32_t*, const uint32_t*, uint16_t, int);
 
 uint32_t bit_unpack(uint32_t*, const uint32_t*, uint16_t, int);
 
-#endif /* INCLUDE_LSBD_BIT_H */
+#endif /* INCLUDE_SCUBED3_BIT_H */

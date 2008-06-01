@@ -16,8 +16,8 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
-#ifndef INCLUDE_LIBUTILS_HASHTBL_H
-#define INCLUDE_LIBUTILS_HASHTBL_H 1
+#ifndef INCLUDE_SCUBED3_HASHTBL_H
+#define INCLUDE_SCUBED3_HASHTBL_H 1
 
 #include <stdio.h>
 #include <stdarg.h>
@@ -92,4 +92,4 @@ void hashtbl_elementp_init_find(void*, hashtbl_t*, void*);
 
 void hashtbl_elementp_init_random(void*, hashtbl_t*);
 
-#endif /* INCLUDE_LIBUTILS_HASHTBL_H */
+#endif /* INCLUDE_SCUBED3_HASHTBL_H */

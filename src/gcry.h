@@ -16,8 +16,8 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
-#ifndef INCLUDE_LSBD_GCRY_H
-#define INCLUDE_LSBD_GCRY_H 1
+#ifndef INCLUDE_SCUBED3_GCRY_H
+#define INCLUDE_SCUBED3_GCRY_H 1
 
 #define GCRY_SEXP_TOKEN_NOT_FOUND	ECCH(GCRY, 0)
 
@@ -44,4 +44,4 @@ uint32_t gcry_randuint32(uint32_t);
 
 uint32_t gcry_fastranduint32(uint32_t);
 
-#endif /* INCLUDE_LSBD_GCRY_H */
+#endif /* INCLUDE_SCUBED3_GCRY_H */

@@ -100,7 +100,7 @@ static int fuse_io_read(const char *path, char *buf, size_t size, off_t offset,
 	fuse_io_entry_t *entry = hashtbl_find_element_bykey(entries, path + 1);
 	if (!entry) return -ENOENT;
 
-	do_req(entry->l, LSBD_READ, offset, size, (char*)buf);
+	do_req(entry->l, SCUBED3_READ, offset, size, (char*)buf);
 
 	hashtbl_unlock_element_byptr(entry);
 
@@ -113,7 +113,7 @@ static int fuse_io_write(const char *path, const char *buf, size_t size,
 	fuse_io_entry_t *entry = hashtbl_find_element_bykey(entries, path + 1);
 	if (!entry) return -ENOENT;
 
-	do_req(entry->l, LSBD_WRITE, offset, size, (char*)buf);
+	do_req(entry->l, SCUBED3_WRITE, offset, size, (char*)buf);
 
 	hashtbl_unlock_element_byptr(entry);
 

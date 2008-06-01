@@ -16,8 +16,8 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
-#ifndef INCLUDE_LSBD_PTHD_H
-#define INCLUDE_LSBD_PTHD_H 1
+#ifndef INCLUDE_SCUBED3_PTHD_H
+#define INCLUDE_SCUBED3_PTHD_H 1
 
 #include <pthread.h>
 
@@ -37,4 +37,4 @@ void pthd_cond_wait(pthread_cond_t*, pthread_mutex_t*);
 
 void pthd_cond_destroy(pthread_cond_t*);
 
-#endif /* INCLUDE_LSBD_PTHD_H */
+#endif /* INCLUDE_SCUBED3_PTHD_H */

@@ -1,5 +1,5 @@
-#ifndef INCLUDE_LSBD_BLOCKIO_H
-#define INCLUDE_LSBD_BLOCKIO_H 1
+#ifndef INCLUDE_SCUBED3_BLOCKIO_H
+#define INCLUDE_SCUBED3_BLOCKIO_H 1
 
 #include <stdint.h>
 
@@ -83,4 +83,4 @@ void blockio_dev_write_macroblock(blockio_dev_t*, const void*, blockio_info_t*);
 
 void blockio_free(blockio_t*);
 
-#endif /* INCLUDE_LSBD_BLOCKIO_H */
+#endif /* INCLUDE_SCUBED3_BLOCKIO_H */

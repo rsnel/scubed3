@@ -1,13 +1,13 @@
-#ifndef INCLUDE_LSBD_H
-#define INCLUDE_LSBD_H 1
+#ifndef INCLUDE_SCUBED3_H
+#define INCLUDE_SCUBED3_H 1
 
 #include <stdint.h>
 #include "bit.h"
 #include "dllist.h"
 
 typedef enum lsbd_io_e {
-	LSBD_READ,
-	LSBD_WRITE
+	SCUBED3_READ,
+	SCUBED3_WRITE
 } lsbd_io_t;
 
 typedef struct lsbd_s {
@@ -38,4 +38,4 @@ int do_req(lsbd_t*, lsbd_io_t, uint64_t, size_t, char*);
 
 #define id(a)   ((a) - l->dev->b->blockio_infos)
 
-#endif /* INCLUDE_LSBD_H */
+#endif /* INCLUDE_SCUBED3_H */

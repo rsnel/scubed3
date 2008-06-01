@@ -1,5 +1,5 @@
-#ifndef INCLUDE_LSBD_CIPHER_H
-#define INCLUDE_LSBD_CIPHER_H 1
+#ifndef INCLUDE_SCUBED3_CIPHER_H
+#define INCLUDE_SCUBED3_CIPHER_H 1
 
 /* To avoid that a compiler optimizes certain memset calls away, these
  * macros may be used instead. */
@@ -39,4 +39,4 @@ void cipher_dec(cipher_t*, uint8_t*, const uint8_t*, const uint8_t*);
 
 void cipher_free(cipher_t*);
 
-#endif /* INCLUDE_LSBD_CIPHER_H */
+#endif /* INCLUDE_SCUBED3_CIPHER_H */

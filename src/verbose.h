@@ -1,5 +1,5 @@
-#ifndef INCLUDE_LSBD_VERBOSE_H
-#define INCLUDE_LSBD_VERBOSE_H 1
+#ifndef INCLUDE_SCUBED3_VERBOSE_H
+#define INCLUDE_SCUBED3_VERBOSE_H 1
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -22,4 +22,4 @@ void verbose_init(char*);
 
 void verbose_md5(char*);
 
-#endif /* INCLUDE_LSBD_VERBOSE_H */
+#endif /* INCLUDE_SCUBED3_VERBOSE_H */

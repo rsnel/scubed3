@@ -2,8 +2,8 @@
 # Process this file with autoconf to produce a configure script.
 
 AC_PRERE(2.61)
-AC_INIT(lsbd, 0.1pre0)
-AC_CONFIG_SRCDIR([lsbd.c])
+AC_INIT(scubed3, 0.1pre0)
+AC_CONFIG_SRCDIR([src/scubed3.c])
 AC_CONFIG_HEADER([config.h])
 AM_INIT_AUTOMAKE
 
@@ -34,5 +34,5 @@ AC_FUNC_MEMCMP
 AC_FUNC_STAT
 AC_CHECK_FUNCS([memset strchr strdup strerror strrchr])
 
-AC_CONFIG_FILES([Makefile])
+AC_CONFIG_FILES([Makefile src/Makefile])
 AC_OUTPUT

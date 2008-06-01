@@ -5,12 +5,12 @@
 #include "bit.h"
 #include "dllist.h"
 
-typedef enum lsbd_io_e {
+typedef enum scubed3_io_e {
 	SCUBED3_READ,
 	SCUBED3_WRITE
-} lsbd_io_t;
+} scubed3_io_t;
 
-typedef struct lsbd_s {
+typedef struct scubed3_s {
 	/* must be set from init */
 	struct blockio_dev_s *dev;
 
@@ -32,9 +32,9 @@ typedef struct lsbd_s {
 	 * bits encode the index of the mesoblock in the specified
 	 * macroblock, see the definitions of ID and NO below */
 	uint32_t *block_indices;
-} lsbd_t;
+} scubed3_t;
 
-int do_req(lsbd_t*, lsbd_io_t, uint64_t, size_t, char*);
+int do_req(scubed3_t*, scubed3_io_t, uint64_t, size_t, char*);
 
 #define id(a)   ((a) - l->dev->b->blockio_infos)
 

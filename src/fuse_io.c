@@ -16,7 +16,7 @@ typedef struct fuse_io_entry_s {
 
 	uint64_t size;
 	int inuse;
-	lsbd_t *l;
+	scubed3_t *l;
 } fuse_io_entry_t;
 
 static int fuse_io_getattr(const char *path, struct stat *stbuf) {
@@ -134,7 +134,7 @@ static void freer(fuse_io_entry_t *entry) {
 	free(entry);
 }
 
-int fuse_io_start(int argc, char **argv, lsbd_t *l) {
+int fuse_io_start(int argc, char **argv, scubed3_t *l) {
 	int ret;
 	hashtbl_t fuse_io_entries;
 	fuse_io_entry_t *entry;

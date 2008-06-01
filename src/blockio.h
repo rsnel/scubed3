@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 
-#include "lsbd.h"
+#include "scubed3.h"
 #include "dllist.h"
 #include "cipher.h"
 #include "bitmap.h"

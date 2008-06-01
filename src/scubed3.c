@@ -19,7 +19,7 @@
 #include <assert.h>
 #include <fuse/fuse_opt.h>
 
-#include "lsbd.h"
+#include "scubed3.h"
 #include "gcry.h"
 #include "bit.h"
 #include "blockio.h"
@@ -35,7 +35,7 @@
 #define ID	(index>>l->mesobits)
 #define NO	(index&l->mesomask)
 
-void obsolete_mesoblk(lsbd_t *l, blockio_info_t *bi, uint32_t no) {
+void obsolete_mesoblk(scubed3_t *l, blockio_info_t *bi, uint32_t no) {
 	assert(bi);
 	assert(bi->no_nonobsolete);
 	bi->no_nonobsolete--;
@@ -44,12 +44,12 @@ void obsolete_mesoblk(lsbd_t *l, blockio_info_t *bi, uint32_t no) {
 	if (!bi->no_nonobsolete) dllist_remove(&bi->elt);
 }
 
-void obsolete_mesoblk_byidx(lsbd_t *l, uint32_t index) {
+void obsolete_mesoblk_byidx(scubed3_t *l, uint32_t index) {
 	if (index != 0xFFFFFFFF)
 		obsolete_mesoblk(l, &l->dev->b->blockio_infos[ID], NO);
 }
 
-static inline void update_block_indices(lsbd_t *l, uint32_t offset,
+static inline void update_block_indices(scubed3_t *l, uint32_t offset,
 		uint32_t id, uint16_t  no) {
 	l->block_indices[offset] = (id<<l->mesobits) + no;
 }
@@ -59,7 +59,7 @@ struct hash_seqnos_s {
 	blockio_info_t *last;
 };
 
-char *hash_seqnos(lsbd_t *l, char *md5sum_res, blockio_info_t *last) {
+char *hash_seqnos(scubed3_t *l, char *md5sum_res, blockio_info_t *last) {
 	struct hash_seqnos_s priv = {
 		.last = last
 	};
@@ -80,18 +80,18 @@ char *hash_seqnos(lsbd_t *l, char *md5sum_res, blockio_info_t *last) {
 	return md5sum_res;
 }
 
-static void add_blockref(lsbd_t *l, uint32_t offset) {
+static void add_blockref(scubed3_t *l, uint32_t offset) {
 	l->cur->indices[l->cur->no_indices] = offset;
 	update_block_indices(l, offset, id(l->cur), l->cur->no_indices);
 	l->cur->no_indices++;
 }
 
-static inline char *mesoblk(lsbd_t *l, uint16_t no) {
+static inline char *mesoblk(scubed3_t *l, uint16_t no) {
 	assert(no < l->cur->max_indices);
 	return l->data + (no<<l->dev->mesoblk_log);
 }
 
-void select_new_macroblock(lsbd_t *l) {
+void select_new_macroblock(scubed3_t *l) {
 	blockio_info_t *head;
 	uint32_t new, k, index;
 
@@ -129,7 +129,7 @@ void select_new_macroblock(lsbd_t *l) {
 			l->cur->no_indices, id(head));
 }
 
-int replay(blockio_info_t *bi, lsbd_t *l) {
+int replay(blockio_info_t *bi, scubed3_t *l) {
 	uint32_t k, index;
 	char md5_calc[16];
 
@@ -155,7 +155,7 @@ int replay(blockio_info_t *bi, lsbd_t *l) {
 	return 1;
 }
 
-void debug_stuff(lsbd_t *l) {
+void debug_stuff(scubed3_t *l) {
 	int que(blockio_info_t *b) {
 		VERBOSE("block %u owned by \"%s\" (seqno %llu) has %u used "
 				"mesoblocks", id(b), b->dev->name,
@@ -166,7 +166,7 @@ void debug_stuff(lsbd_t *l) {
 			(int (*)(dllist_elt_t*, void*))que, NULL);
 }
 
-void commit_current_macroblock(lsbd_t *l) {
+void commit_current_macroblock(scubed3_t *l) {
 	l->cur->no_nonobsolete = l->cur->no_indices;
 	dllist_append(&l->dev->used_blocks, &l->cur->elt);
 
@@ -175,7 +175,7 @@ void commit_current_macroblock(lsbd_t *l) {
 	blockio_dev_write_macroblock(l->dev, l->data, l->cur);
 }
 
-void lsbd_free(lsbd_t *l) {
+void scubed3_free(scubed3_t *l) {
 	if (l->updated) {
 		DEBUG("committing current macroblock to disk and exit");
 		commit_current_macroblock(l);
@@ -187,7 +187,7 @@ void lsbd_free(lsbd_t *l) {
 	free(l->data);
 }
 
-void lsbd_init(lsbd_t *l, blockio_dev_t *dev) {
+void scubed3_init(scubed3_t *l, blockio_dev_t *dev) {
 	int i;
 	uint32_t no_block_indices;
 	assert(l && dev);
@@ -247,7 +247,7 @@ void blockio_dev_fake_mesoblk_part(blockio_dev_t *dev, void *addr,
 	memset(addr, 0, size);
 }
 
-void do_cow(lsbd_t *l, uint32_t index, uint32_t muoff,
+void do_cow(scubed3_t *l, uint32_t index, uint32_t muoff,
 		uint32_t size, void *addr) {
 	void (*readorfake)(blockio_dev_t*, void*, uint32_t, uint32_t,
 			uint32_t, uint32_t) = blockio_dev_fake_mesoblk_part;
@@ -262,7 +262,7 @@ void do_cow(lsbd_t *l, uint32_t index, uint32_t muoff,
 				l->dev->mesoblk_size - size - muoff);
 }
 
-int do_write(lsbd_t *l, uint32_t mesoff, uint32_t muoff, uint32_t size,
+int do_write(scubed3_t *l, uint32_t mesoff, uint32_t muoff, uint32_t size,
 		char *in) {
 	uint32_t index = l->block_indices[mesoff];
 	assert(muoff + size <= l->dev->mesoblk_size);
@@ -304,7 +304,7 @@ int do_write(lsbd_t *l, uint32_t mesoff, uint32_t muoff, uint32_t size,
 	return 0;
 }
 
-int do_read(lsbd_t *l, uint32_t mesoff, uint32_t muoff, uint32_t size,
+int do_read(scubed3_t *l, uint32_t mesoff, uint32_t muoff, uint32_t size,
 		char *out) {
 	uint32_t index = l->block_indices[mesoff];
 	/* three possibilities:
@@ -321,13 +321,13 @@ int do_read(lsbd_t *l, uint32_t mesoff, uint32_t muoff, uint32_t size,
 	return 0;
 }
 
-int do_req(lsbd_t *l, lsbd_io_t cmd, uint64_t r_offset, size_t size,
+int do_req(scubed3_t *l, scubed3_io_t cmd, uint64_t r_offset, size_t size,
 		char *buf) {
 	assert(cmd == SCUBED3_READ || cmd == SCUBED3_WRITE);
 	uint32_t meso = r_offset>>l->dev->mesoblk_log;
 	uint32_t inmeso = r_offset%l->dev->mesoblk_size;
 	uint32_t ooff = 0, reqsz;
-	int (*action)(lsbd_t*, uint32_t, uint32_t, uint32_t, char*) =
+	int (*action)(scubed3_t*, uint32_t, uint32_t, uint32_t, char*) =
 		(cmd == SCUBED3_READ) ? do_read : do_write;
 
 	if (inmeso) {
@@ -367,7 +367,7 @@ int main(int argc, char **argv) {
 		.reserved = 2,
 		.macroblock_log = 22
 	};
-	struct fuse_opt lsbd_opts[] = {
+	struct fuse_opt scubed3_opts[] = {
 		SCUBED3_OPT_KEY("-b %s", base, 0),
 		SCUBED3_OPT_KEY("-r %d", reserved, 0),
 		SCUBED3_OPT_KEY("-m %d", mesoblock_log, 0),
@@ -377,11 +377,11 @@ int main(int argc, char **argv) {
 	int ret, i, j = 0;
 	struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
 	blockio_t b;
-	lsbd_t l;
+	scubed3_t l;
 
 	verbose_init(argv[0]);
 
-	if (fuse_opt_parse(&args, &options, lsbd_opts, NULL) == -1)
+	if (fuse_opt_parse(&args, &options, scubed3_opts, NULL) == -1)
 		FATAL("error parsing options");
 
 	if (!options.base) FATAL("argument -b FILE is required");
@@ -419,10 +419,10 @@ int main(int argc, char **argv) {
 		}
 	}
 
-	lsbd_init(&l, &dev);
+	scubed3_init(&l, &dev);
 	ret = fuse_io_start(args.argc, args.argv, &l);
 
-	lsbd_free(&l);
+	scubed3_free(&l);
 	blockio_dev_free(&dev);
 	cipher_free(&c);
 	blockio_free(&b);

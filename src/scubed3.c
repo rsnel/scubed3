@@ -385,8 +385,8 @@ int main(int argc, char **argv) {
 	if (fuse_opt_parse(&args, &options, scubed3_opts, NULL) == -1)
 		FATAL("error parsing options");
 
-	VERBOSE("%s-%s Copyright (C) 2008, Rik Snel <rik@snel.it>",
-			PACKAGE_NAME, PACKAGE_VERSION);
+	VERBOSE("version %s Copyright (C) 2008, Rik Snel <rik@snel.it>",
+			PACKAGE_VERSION);
 	if (!options.base) FATAL("argument -b FILE is required");
 
 	/* lock me into memory; don't leak info to swap */

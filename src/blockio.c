@@ -339,8 +339,8 @@ void blockio_dev_read_header(blockio_dev_t *dev, uint32_t no) {
 	bi->indices = ecalloc(dev->mmpm, sizeof(uint32_t));
 	bit_unpack(bi->indices, INDICES, bi->no_indices, dev->strip_bits);
 
-	//VERBOSE("block %u (seqno=%llu) belongs to \"%s\" and has %d indices",
-	//		no, bi->seqno, dev->name, bi->no_indices);
+	VERBOSE("block %u (seqno=%llu) belongs to \"%s\" and has %d indices",
+			no, bi->seqno, dev->name, bi->no_indices);
 
 	/* put block in the 'in use' list */
 	if (bi->no_indices) {
@@ -395,7 +395,7 @@ void blockio_dev_write_macroblock(blockio_dev_t *dev, const void *data,
 	int i;
 	assert(bi && id < dev->b->no_macroblocks);
 
-	//DEBUG("write block %u (seqno=%llu)", id, head->seqno);
+	DEBUG("write block %u (seqno=%llu)", id, bi->seqno);
 	bi->no_nonobsolete = bi->no_indices;
 
 	/* write magic */

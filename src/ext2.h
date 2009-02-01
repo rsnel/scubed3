@@ -15,6 +15,6 @@ typedef struct ext2_s {
 
 ext2_t *ext2_init(struct scubed3_s*);
 
-//void ext2_handler(ext2_t*, const void*, uint32_t, uint32_t, uint32_t);
+void ext2_handler(ext2_t*, uint64_t, size_t, const void*);
 
 #endif /* INCLUDE_SCUBED3_EXT2_H */

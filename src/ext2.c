@@ -28,7 +28,8 @@
 #define EXT2_MAGIC 0xef53
 
 #define S_MAGIC			(super+56)
-#define S_STATE			(super+58)
+#define S_STATE_OFFSET		58
+#define S_STATE			(super+S_STATE_OFFSET)
 
 #define EXT2_FS_DIRTY		0
 #define EXT2_FS_CLEAN		1
@@ -61,9 +62,21 @@ ext2_t *ext2_init(scubed3_t *s) {
 	return e;
 }
 
+void ext2_handler(ext2_t *e, uint64_t offset, size_t size, const void *data) {
+	uint16_t state;
+	if (offset <= S_STATE_OFFSET + 1024 &&
+			offset + size > S_STATE_OFFSET + 1024) {
+		state = binio_read_uint16_le(data + 1024 +
+				S_STATE_OFFSET - offset);
+		if (state == EXT2_FS_CLEAN && e->mounted) {
+			VERBOSE("ext2: filesystem umounted");
+			e->mounted = 0;
+		} else if (state == EXT2_FS_DIRTY && !e->mounted) {
+			VERBOSE("ext2: filesystem mounted");
+			e->mounted = 1;
+		}
+	}
 #if 0
-void ext2_handler(ext2_t *e, const void *data, uint32_t mesoblk,
-		uint32_t muoff, uint32_t size) {
 	const char *idx = data + 1024;
 	uint32_t toff = muoff%(1<<e->log);
 	uint32_t tstart = muoff/(1<<e->log);
@@ -84,5 +97,5 @@ void ext2_handler(ext2_t *e, const void *data, uint32_t mesoblk,
 		}
 	}
 
-}
 #endif
+}

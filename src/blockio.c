@@ -447,6 +447,6 @@ void blockio_dev_write_macroblock(blockio_dev_t *dev, const void *data,
 				BASE + (i<<dev->mesoblk_log), bi->seqno, i);
 
 	dev->b->write(dev->b->priv, BASE, id<<dev->b->macroblock_log,
-			(dev->no_indexblocks + dev->mmpm)<<dev->mesoblk_log);
+			1<<dev->b->macroblock_log);
 }
 

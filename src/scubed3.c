@@ -249,10 +249,14 @@ void scubed3_init(scubed3_t *l, blockio_dev_t *dev) {
 						dev->no_macroblocks)]);
 	}
 
+	l->next_seqno++;
+
 	/* prepare ext[234] mount/umount detection */
 	DEBUG("next free macroblock is %d", dev->next_free_macroblock);
 
 	select_new_macroblock(l);
+
+	if (l->cur->seqno == 1) l->updated = 1;
 
 	DEBUG("next block is %u (seqno=%llu)", id(l->cur), l->cur->seqno);
 
@@ -345,7 +349,12 @@ int do_req(scubed3_t *l, scubed3_io_t cmd, uint64_t r_offset, size_t size,
 	uint32_t inmeso = r_offset%l->dev->mesoblk_size;
 	uint32_t ooff = 0, reqsz;
 	int (*action)(scubed3_t*, uint32_t, uint32_t, uint32_t, char*) =
-		(cmd == SCUBED3_READ) ? do_read : do_write;
+		do_read;
+
+	if (cmd == SCUBED3_WRITE) {
+		action = do_write;
+		if (l->e2) ext2_handler(l->e2, r_offset, size, buf);
+	}
 
 	if (inmeso) {
 		if (inmeso + size <= l->dev->mesoblk_size) reqsz = size;
@@ -446,7 +455,7 @@ int main(int argc, char **argv) {
 	blockio_init_file(&b, options.base, options.macroblock_log);
 
 	uint8_t key[32] = {
-		0x03, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
+		0x0A, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
 		0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
 		0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
 		0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77
@@ -457,8 +466,8 @@ int main(int argc, char **argv) {
 			2<<(options.mesoblock_log - 4 - 1), key, sizeof(key));
 	blockio_dev_init(&dev, &b, &c, options.mesoblock_log, "test");
 	if (dev.no_macroblocks == 0) {
-		//FATAL("device \"%s\" is empty, %u/%u, aborting", dev.name, dev.used.no_set, dev.used.no_bits);
-		WARNING("device \"%s\" is empty, %u/%u, making it full", dev.name, dev.used.no_set, dev.used.no_bits);
+		WARNING("device \"%s\" is empty, %u/%u, making it full",
+				dev.name, dev.used.no_set, dev.used.no_bits);
 		bitmap_setbits(&dev.used, dev.b->no_macroblocks);
 		dev.reserved = options.reserved;
 		for (i = 0; i < dev.b->no_macroblocks; i++) {

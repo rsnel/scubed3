@@ -77,25 +77,11 @@ void ext2_handler(ext2_t *e, uint64_t offset, size_t size, const void *data) {
 		}
 	}
 #if 0
-	const char *idx = data + 1024;
-	uint32_t toff = muoff%(1<<e->log);
-	uint32_t tstart = muoff/(1<<e->log);
-	assert(e->l->b->mesoblk_log > 10);
-	if (mesoblk == 0 && muoff <= 1024 && muoff + size >= 2048) {
-		if (binio_read_uint16_le(S_STATE) == EXT2_FS_CLEAN &&
-				e->mounted) {
 			VERBOSE("ext2: filesystem umounted");
 			if (e->l->updated) do {
 				commit_current_macroblock(e->l);
 				select_new_macroblock(e->l);
 			} while (e->l->cur->no_indices == e->l->b->mmpm);
 			e->mounted = 0;
-		} else if (binio_read_uint16_le(S_STATE) == EXT2_FS_DIRTY &&
-				!e->mounted) {
-			VERBOSE("ext2: filesystem mounted");
-			e->mounted = 1;
-		}
-	}
-
 #endif
 }

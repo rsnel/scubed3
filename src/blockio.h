@@ -76,7 +76,7 @@ struct blockio_s {
 	void *priv;
 };
 
-void blockio_init(blockio_t*, const char*, uint8_t);
+void blockio_init_file(blockio_t*, const char*, uint8_t);
 
 void blockio_dev_init(blockio_dev_t*, blockio_t*, cipher_t*, uint8_t,
 		const char*);

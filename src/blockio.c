@@ -87,8 +87,8 @@ void blockio_free(blockio_t *b) {
 	free(b->blockio_infos);
 }
 
-/* open backing device and set macroblock size */
-void blockio_init(blockio_t *b, const char *path, uint8_t macroblock_log) {
+/* open backing file and set macroblock size */
+void blockio_init_file(blockio_t *b, const char *path, uint8_t macroblock_log) {
 	struct stat stat_info;
 	struct flock lock;
 	uint64_t tmp;
@@ -146,7 +146,7 @@ void blockio_init(blockio_t *b, const char *path, uint8_t macroblock_log) {
 }
 
 static const char magic0[8] = "SSS3v0.1";
-static const uint64_t magic1 = 0x1123456789ABCDEFLL;
+static const uint64_t magic1 = 0x1124456789ABCDEFLL;
 
 void blockio_dev_free(blockio_dev_t *dev) {
 	assert(dev);
@@ -254,26 +254,40 @@ int compare_seqno(blockio_info_t *bi, uint64_t *seqno) {
 
 void blockio_dev_read_header(blockio_dev_t *dev, uint32_t no) {
 	char md5[16];
+	int i = dev->no_indexblocks - 1;
 	assert(no < dev->b->no_macroblocks);
 	blockio_info_t *tmp, *bi = &dev->b->blockio_infos[no];
 
 	if (bi->dev) {
-		//VERBOSE("macroblock %d already taken", no);
+		VERBOSE("macroblock %d already taken", no);
 		return;
 	}
 
 	dev->b->read(dev->b->priv, BASE, no<<dev->b->macroblock_log,
 			dev->no_indexblocks<<dev->mesoblk_log);
 
+	// decrypt first mesoblock with seqno 0, and mesoblock number 0
+	// ciphertext is unique due to first block being a hash of the
+	// whole index and the index containing a unique seqno
+	// the seqno is used as IV for all the other mesoblocks
+	// in the datablock
+	cipher_dec(dev->c, BASE, BASE, 0, 0);
+
+	bi->seqno = binio_read_uint64_be(SEQNO); // read seqno, needed as iv
+	for (i = 1; i < dev->no_indexblocks; i++)
+		cipher_dec(dev->c, BASE + (i<<dev->mesoblk_log),
+				BASE + (i<<dev->mesoblk_log), bi->seqno, i);
+
 	/* check magic0 = "SSS3v0.1" */
 	if (memcmp(magic0, MAGIC0, sizeof(magic0))) {
-		//DEBUG("magic \"%.*s\" not found", sizeof(magic0), magic0);
+		//DEBUG("magic \"%.*s\" not found in mesoblock %u",
+		//		sizeof(magic0), magic0, no);
 		return;
 	}
 
 	/* check magic1 */
 	if (binio_read_uint64_be(MAGIC1) != magic1) {
-		//DEBUG("magic %016llx not found", magic1);
+		//DEBUG("magic %016llx not found in mesoblock %u", magic1, no);
 		return;
 	}
 
@@ -307,7 +321,6 @@ void blockio_dev_read_header(blockio_dev_t *dev, uint32_t no) {
 
 	memcpy(bi->seqnos_hash, SEQNOS_HASH, 16);
 	memcpy(bi->data_hash, DATABLOCKS_HASH, 16);
-	bi->seqno = binio_read_uint64_be(SEQNO);
 	bi->no_nonobsolete = bi->max_indices = bi->no_indices =
 		binio_read_uint16_be(NO_INDICES);
 	bi->max_indices = bi->no_indices;
@@ -343,22 +356,29 @@ void blockio_dev_read_header(blockio_dev_t *dev, uint32_t no) {
 
 void blockio_dev_read_mesoblk_part(blockio_dev_t *dev, void *buf, uint32_t id,
 		uint32_t no, uint32_t offset, uint32_t len) {
-	assert(dev->b && dev->b->read &&
-			id < dev->b->no_macroblocks && no < dev->mmpm);
-	dev->b->read(dev->b->priv, buf, (id<<dev->b->macroblock_log) +
-			((no + dev->no_indexblocks)<<dev->mesoblk_log) +
-			offset, len);
+	assert(dev->b && dev->b->read && id < dev->b->no_macroblocks &&
+			no < dev->mmpm);
+	unsigned char mesoblk[1<<dev->mesoblk_log];
+
+	/* FIXME: do some caching */
+	blockio_dev_read_mesoblk(dev, mesoblk, id, no);
+	memcpy(buf, mesoblk + offset, len);
 }
 
 void blockio_dev_read_mesoblk(blockio_dev_t *dev,
 		void *buf, uint32_t id, uint32_t no) {
-	blockio_dev_read_mesoblk_part(dev, buf, id, no, 0, dev->mesoblk_size);
+	dev->b->read(dev->b->priv, buf, (id<<dev->b->macroblock_log) +
+			((no + dev->no_indexblocks)<<dev->mesoblk_log) +
+			0, dev->mesoblk_size);
+	cipher_dec(dev->c, buf, buf, dev->b->blockio_infos[id].seqno,
+			no + dev->no_indexblocks);
 }
 
 int blockio_check_data_hash(blockio_info_t *bi, void *data) {
 	uint32_t id = bi - bi->dev->b->blockio_infos;
 	char md5[16];
-	bi->dev->b->read(bi->dev->b->priv, data, (id<<bi->dev->b->macroblock_log) +
+	bi->dev->b->read(bi->dev->b->priv, data,
+			(id<<bi->dev->b->macroblock_log) +
 			(bi->dev->no_indexblocks<<bi->dev->mesoblk_log),
 			bi->dev->mmpm<<bi->dev->mesoblk_log);
 
@@ -372,6 +392,7 @@ int blockio_check_data_hash(blockio_info_t *bi, void *data) {
 void blockio_dev_write_macroblock(blockio_dev_t *dev, const void *data,
 		blockio_info_t *bi) {
 	uint32_t id = bi - dev->b->blockio_infos;
+	int i;
 	assert(bi && id < dev->b->no_macroblocks);
 
 	//DEBUG("write block %u (seqno=%llu)", id, head->seqno);
@@ -397,7 +418,13 @@ void blockio_dev_write_macroblock(blockio_dev_t *dev, const void *data,
 	binio_write_uint32_be(INDICES + 4*bit_get_size(dev->mmpm, dev->strip_bits), dev->used.no_bits);
 	bitmap_write(INDICES + 4*bit_get_size(dev->mmpm, dev->strip_bits) + 4, &dev->used);
 
-	/* calculate md5sum of data */
+	/* encrypt data, notice *data is const! satisfy caller by ugly hack */
+	for (i = 0; i < dev->mmpm; i++)
+		cipher_enc(dev->c, (void*)data + (i<<dev->mesoblk_log),
+				data + (i<<dev->mesoblk_log), bi->seqno,
+				i + dev->no_indexblocks);
+
+	/* calculate md5sum of data, store in index */
 	gcry_md_hash_buffer(GCRY_MD_MD5, DATABLOCKS_HASH,
 			data, dev->mmpm<<dev->mesoblk_log);
 
@@ -406,10 +433,25 @@ void blockio_dev_write_macroblock(blockio_dev_t *dev, const void *data,
 			(dev->no_indexblocks<<dev->mesoblk_log) -
 			MAGIC0_OFFSET);
 
+	/* encrypt index, first block with IV 0, we never encrypt
+	 * the same first block twice, since the first block depends
+	 * (through a cryptographic hash) on the sequence number */
+	cipher_enc(dev->c, BASE, BASE, 0, 0);
+
+	for (i = 1; i < dev->no_indexblocks; i++)
+		cipher_dec(dev->c, BASE + (i<<dev->mesoblk_log),
+				BASE + (i<<dev->mesoblk_log), bi->seqno, i);
+
 	dev->b->write(dev->b->priv, BASE, id<<dev->b->macroblock_log,
 			dev->no_indexblocks<<dev->mesoblk_log);
 	dev->b->write(dev->b->priv, data, (id<<dev->b->macroblock_log) +
 			(dev->no_indexblocks<<dev->mesoblk_log),
 			dev->mmpm<<dev->mesoblk_log);
+
+	/* decrypt data again, caller needs unmodified data for now */
+	for (i = 0; i < dev->mmpm; i++)
+		cipher_dec(dev->c, (void*)data + (i<<dev->mesoblk_log),
+				data + (i<<dev->mesoblk_log), bi->seqno,
+				i + dev->no_indexblocks);
 }
 

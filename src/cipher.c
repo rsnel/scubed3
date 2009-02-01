@@ -18,9 +18,12 @@
 #include <assert.h>
 #include "cipher.h"
 #include "verbose.h"
+#include "binio.h"
 
 const cipher_spec_t *cipher_specs[] = {
-	&cipher_abl4
+	&cipher_abl4,
+	&cipher_null,
+	&cipher_cbc_large
 };
 
 #define NO_CIPHERS (sizeof(cipher_specs)/sizeof(cipher_specs[0]))
@@ -32,7 +35,7 @@ void cipher_init(cipher_t *w, const char *name, size_t size,
 	const cipher_spec_t *mode_spec = NULL;
 	assert(w && name && size > 0);
 
-	/* parse name of the form MODE(PRIM) */
+	/* parse name of the form MODE(PRIMITIVE) */
 	char mode[strlen(name) + 1], *prim;
 	strcpy(mode, name);
 	prim = strchr(mode, ')');
@@ -76,15 +79,39 @@ void cipher_init(cipher_t *w, const char *name, size_t size,
 	w->ctx = w->spec->init(w->hd, size);
 }
 
-void cipher_enc(cipher_t *w, uint8_t *out,
+static void set_iv(unsigned char *iv, uint64_t iv0, uint32_t iv1) {
+	binio_write_uint64_be(iv, iv0);
+	binio_write_uint32_be(iv + 8, iv1);
+	memset(iv + 12, 0, 4);
+}
+
+void cipher_enc_iv(cipher_t *w, uint8_t *out,
 		const uint8_t *in, const uint8_t *iv) {
 	assert(w && w->spec && w->spec->enc && w->ctx);
 	w->spec->enc(w->ctx, out, in, iv);
 }
 
-void cipher_dec(cipher_t *w, uint8_t *out,
+void cipher_enc(cipher_t *w, uint8_t *out,
+		const uint8_t *in, uint64_t iv0, uint32_t iv1) {
+	unsigned char iv[16];
+
+	assert(w && w->spec && w->spec->enc && w->ctx);
+	set_iv(iv, iv0, iv1);
+	w->spec->enc(w->ctx, out, in, iv);
+}
+
+void cipher_dec_iv(cipher_t *w, uint8_t *out,
 		const uint8_t *in, const uint8_t *iv) {
 	assert(w && w->spec && w->spec->dec && w->ctx);
+	w->spec->dec(w->ctx, out, in, iv);
+}
+
+void cipher_dec(cipher_t *w, uint8_t *out,
+		const uint8_t *in, uint64_t iv0, uint32_t iv1) {
+	unsigned char iv[16];
+
+	assert(w && w->spec && w->spec->dec && w->ctx);
+	set_iv(iv, iv0, iv1);
 	w->spec->dec(w->ctx, out, in, iv);
 }
 

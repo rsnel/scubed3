@@ -1,0 +1,73 @@
+Terminoloy
+~~~~~~~~~~
+
+base device: this file/device/database holds all macroblocks, our worst case
+threat-model assumes an adversary can make snapshots of it at will
+
+scubed3 partition: a block device whose contents are managed by a scubed3
+deamon, writing to a scubed3 partition causes changes to the macroblocks in the base device
+
+macroblocks: the smallest bit of information to someone who doesn't have the
+cryptographic key corresponding to it, a macroblock will either change randomly
+(each bit changes with a probability of .5) or not at all
+
+mesoblock: in a macroblock a series of mesoblocks are stored, along with
+information on where the mesoblock belongs on the scubed3 partition.
+
+indexblock: the first mesoblock in each macroblock contains information
+about the other mesoblocks in said macroblock
+
+
+Threat model
+~~~~~~~~~~~~
+
+The adversary has full knowledge about the macroblocks (including history) and
+may even have write access to them. This adversary may have keys to some
+scubed3 partitions. The goal is to be able to plausibly deny the existance of
+partitions to which the adversary has no keys.  Only paranoia level 3 protects
+completely against this. We assume the adversary cannot detect read access.
+
+
+Paranoia levels
+~~~~~~~~~~~~~~~
+
+When a new macroblock needs to be selected: 
+
+Level 0: not paranoid
+
+it is selected from all allocated blocks based on it's emptyness, the most
+empty block gets selected.
+
+Level 1: moderately paranoid
+
+it is randomly selected from all allocated blocks. This hurts write
+performance.
+
+Level 2: just paranoid
+
+a random block of the device is selected. If it happens to be allocated to the
+current device, it is used. If it happens to be allocated to another device, it
+is updated with a new seqno (therefore every bit will change with a probalility
+of .5). If the block is unallocated, it will be added to the device, another
+block will be deleted. (this level of paranoia is required for flash media,
+this kind of media keeps an internal record about the order in whichs blocks
+are written to it) It is only safe if all scubed3 devices are known to and
+(if active) managed by the scubed3 deamon managing the current device.
+
+Level 3: extremely paranoid
+
+while active, the daemon writes blocks to random locations at regular intervals
+to hide any real activity, this severely hurts performance. Considerations
+of level 2 apply. It will wear out your flash very efficiently.
+
+
+How to start
+~~~~~~~~~~~~
+
+You need to provide a set of macroblocks to scubed3, to which it has read/write
+access. Normally this is either a file or a block device, but it may be
+anything. (you would, however, need to write a custom blockio_init_* function
+and provide read, write and close methods to it)
+
+
+

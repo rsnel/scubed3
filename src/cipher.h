@@ -30,7 +30,8 @@
 #include "gcry.h"
 
 /* wide block cipher modes, blockcipher must have blocksize
- * of 16 bytes, amount of cipherblocks in wide blocks must be fixed */
+ * of 16 bytes, amount of cipherblocks in wide blocks must be fixed
+ * the iv is assumed to be one cipherblock */
 
 typedef struct cipher_spec_s {
 	void *(*init)(gcry_cipher_hd_t, size_t);
@@ -41,6 +42,8 @@ typedef struct cipher_spec_s {
 } cipher_spec_t;
 
 extern const cipher_spec_t cipher_abl4;
+extern const cipher_spec_t cipher_null;
+extern const cipher_spec_t cipher_cbc_large;
 
 typedef struct cipher_s {
 	const cipher_spec_t *spec;
@@ -50,9 +53,13 @@ typedef struct cipher_s {
 
 void cipher_init(cipher_t*, const char*, size_t, const uint8_t*, size_t);
 
-void cipher_enc(cipher_t*, uint8_t*, const uint8_t*, const uint8_t*);
+void cipher_enc(cipher_t*, uint8_t*, const uint8_t*, uint64_t, uint32_t);
 
-void cipher_dec(cipher_t*, uint8_t*, const uint8_t*, const uint8_t*);
+void cipher_enc_iv(cipher_t*, uint8_t*, const uint8_t*, const uint8_t*);
+
+void cipher_dec(cipher_t*, uint8_t*, const uint8_t*, uint64_t, uint32_t);
+
+void cipher_dec_iv(cipher_t*, uint8_t*, const uint8_t*, const uint8_t*);
 
 void cipher_free(cipher_t*);
 

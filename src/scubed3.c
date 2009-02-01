@@ -112,7 +112,7 @@ void select_new_macroblock(scubed3_t *l) {
 	uint32_t new, k, index;
 
 	l->cur = blockio_dev_get_new_macroblock(l->dev);
-	l->cur->seqno = ++l->next_seqno;
+	l->cur->seqno = l->next_seqno++;
 	l->cur->no_indices = 0;
 	l->updated = 0;
 
@@ -252,9 +252,10 @@ void scubed3_init(scubed3_t *l, blockio_dev_t *dev) {
 	DEBUG("next free macroblock is %d", dev->next_free_macroblock);
 	select_new_macroblock(l);
 
-	if (l->next_seqno == 1/*dllist_is_empty(&l->used_blocks)*/) {
-		l->updated = 1;
-	}
+	DEBUG("l->next_seqno = %llu", l->next_seqno);
+	//if (l->next_seqno == 0/*dllist_is_empty(&l->used_blocks)*/) {
+	//	l->updated = 1;
+	//}
 	//DEBUG("next block is %u (seqno=%llu)", id(l->cur), l->cur->seqno);
 }
 
@@ -369,6 +370,35 @@ int do_req(scubed3_t *l, scubed3_io_t cmd, uint64_t r_offset, size_t size,
 	return 1;
 }
 
+#if 0
+void test_func(void) {
+	uint8_t key[16] = {
+		0xc2, 0x86, 0x69, 0x6d, 0x88, 0x7c, 0x9a, 0xa0,
+		0x61, 0x1b, 0xbb, 0x3e, 0x20, 0x25, 0xa4, 0x5a
+	};
+	uint8_t Z[16] = {
+		0x56, 0x2e, 0x17, 0x99, 0x6d, 0x09, 0x3d, 0x28,
+		0xdd, 0xb3, 0xba, 0x69, 0x5a, 0x2e, 0x6f, 0x58
+	};
+	uint8_t data[32] = {
+		0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+		0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+		0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
+		0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f
+	};
+	cipher_t w;
+
+	cipher_init(&w, "CBC_LARGE(AES)", 2, key, 16);
+	cipher_enc_iv(&w, data, data, Z);
+	verbose_md5((char*)data);
+	verbose_md5((char*)data+16);
+	cipher_dec_iv(&w, data, data, Z);
+	verbose_md5((char*)data);
+	verbose_md5((char*)data+16);
+	cipher_free(&w);
+}
+#endif
+
 #define SCUBED3_OPT_KEY(a,b,c) { a, offsetof(struct options, b), c }
 
 int main(int argc, char **argv) {
@@ -404,6 +434,8 @@ int main(int argc, char **argv) {
 			PACKAGE_VERSION);
 	if (!options.base) FATAL("argument -b FILE is required");
 
+	if (options.mesoblock_log < 12) FATAL("mesoblock log is too small");
+
 	/* lock me into memory; don't leak info to swap */
 	if (mlockall(MCL_CURRENT|MCL_FUTURE)<0)
 		WARNING("failed locking process in RAM (not root?): %s",
@@ -411,14 +443,21 @@ int main(int argc, char **argv) {
 
 	gcry_global_init();
 
-	blockio_init(&b, options.base, options.macroblock_log);
+	blockio_init_file(&b, options.base, options.macroblock_log);
 
-	uint8_t key[32] = { 0, };
+	uint8_t key[32] = {
+		0x02, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
+		0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
+		0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
+		0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77
+	};
 	cipher_t c;
 	blockio_dev_t dev;
-	cipher_init(&c, "ABL4(SERPENT256)", 32, key, 32);
+	cipher_init(&c, "CBC_LARGE(SERPENT256)",
+			2<<(options.mesoblock_log - 4 - 1), key, sizeof(key));
 	blockio_dev_init(&dev, &b, &c, options.mesoblock_log, "test");
 	if (dev.no_macroblocks == 0) {
+		//FATAL("device \"%s\" is empty, %u/%u, aborting", dev.name, dev.used.no_set, dev.used.no_bits);
 		WARNING("device \"%s\" is empty, %u/%u, making it full", dev.name, dev.used.no_set, dev.used.no_bits);
 		bitmap_setbits(&dev.used, dev.b->no_macroblocks);
 		dev.reserved = options.reserved;
@@ -436,6 +475,8 @@ int main(int argc, char **argv) {
 				dev.macroblocks[j++] = &dev.b->blockio_infos[i];
 			}
 		}
+	} else {
+		VERBOSE("device \"%s\" has %u/%u macroblocks", dev.name, dev.used.no_set, dev.used.no_bits);
 	}
 
 	scubed3_init(&l, &dev);
@@ -451,17 +492,3 @@ int main(int argc, char **argv) {
 
 	exit(ret);
 }
-
-#if 0
-	uint8_t key[32] = { 0, };
-	uint8_t Z[16] = { 0, };
-	uint8_t data[512] = { 0, };
-	cipher_t w;
-	Z[15] = 1;
-
-	cipher_init(&w, "ABL4(SERPENT256)", 32, key, 32);
-	cipher_enc(&w, data, data, Z);
-	cipher_dec(&w, data, data, Z);
-	cipher_free(&w);
-	FATAL("stop");
-#endif

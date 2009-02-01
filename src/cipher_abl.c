@@ -1,4 +1,4 @@
-/* abl.c - Arbitrary Block Length, wide blockcipher mode
+/* cipher_abl.c - Arbitrary Block Length, wide blockcipher mode
  *
  * Copyright (C) 2008  Rik Snel <rik@snel.it>
  *
@@ -55,8 +55,10 @@ static void print_block(char *name, const block_t block) {
 #endif
 
 static void xor_block(block_t out, const block_t in1, const block_t in2) {
-	int i;
-	for (i = 0; i < 16; i++) out[i] = in1[i] ^ in2[i];
+	//int i;
+	//for (i = 0; i < 16; i++) out[i] = in1[i] ^ in2[i];
+	*((uint64_t*)out) = *((uint64_t*)in1) ^ *((uint64_t*)in2);
+	*((uint64_t*)out + 1) = *((uint64_t*)in1 + 1) ^ *((uint64_t*)in2 + 1);
 }
 
 /* multiplication in GF(2^128), it uses 16-byte buffers. The msb in the
@@ -87,7 +89,7 @@ static void mult(block_t Z, const block_t Y, const block_t X) {
 	memcpy(V, X, 16);
 	memset(Z, 0, 16);
 	for (n = 0; n < 128; n++) {
-	if (coeff_xn(Y, n)) xor_block(Z, Z, V);
+		if (coeff_xn(Y, n)) xor_block(Z, Z, V);
 		mul_by_x(V);
         }
 }

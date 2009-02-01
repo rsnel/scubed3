@@ -1,6 +1,6 @@
 /* blockio.c - handles block input/output
  *
- * Copyright (C) 2008  Rik Snel <rik@snel.it>
+ * Copyright (C) 2009  Rik Snel <rik@snel.it>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -64,7 +64,7 @@ static void stream_close(void *fp) {
 
 /* end stream stuff */
 
-#define BASE			(dev->tmp_idx)
+#define BASE			(dev->tmp_macroblock)
 #define INDEXBLOCK_HASH		(BASE + 0)
 #define MAGIC0			(BASE + 16)
 #define MAGIC1			(BASE + 24)
@@ -158,7 +158,7 @@ void blockio_dev_free(blockio_dev_t *dev) {
 	}
 
 	bitmap_free(&dev->used);
-	free(dev->tmp_idx);
+	free(dev->tmp_macroblock);
 	free(dev->macroblocks);
 }
 
@@ -193,7 +193,7 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 
 	assert(index_len <= dev->no_indexblocks<<mesoblk_log);
 
-	dev->tmp_idx = ecalloc(1, dev->no_indexblocks<<dev->mesoblk_log);
+	dev->tmp_macroblock = ecalloc(1, 1<<b->macroblock_log);
 
 	dllist_init(&dev->used_blocks);
 
@@ -415,18 +415,22 @@ void blockio_dev_write_macroblock(blockio_dev_t *dev, const void *data,
 	binio_write_uint32_be(NEXT_MACROBLOCK, dev->next_free_macroblock);
 
 	bit_pack(INDICES, bi->indices, bi->no_indices, dev->strip_bits);
-	binio_write_uint32_be(INDICES + 4*bit_get_size(dev->mmpm, dev->strip_bits), dev->used.no_bits);
-	bitmap_write(INDICES + 4*bit_get_size(dev->mmpm, dev->strip_bits) + 4, &dev->used);
+	binio_write_uint32_be(INDICES + 4*bit_get_size(dev->mmpm,
+				dev->strip_bits), dev->used.no_bits);
+	bitmap_write(INDICES + 4*bit_get_size(dev->mmpm,
+				dev->strip_bits) + 4, &dev->used);
 
-	/* encrypt data, notice *data is const! satisfy caller by ugly hack */
+	/* encrypt data */
 	for (i = 0; i < dev->mmpm; i++)
-		cipher_enc(dev->c, (void*)data + (i<<dev->mesoblk_log),
+		cipher_enc(dev->c, BASE +
+				((dev->no_indexblocks + i)<<dev->mesoblk_log),
 				data + (i<<dev->mesoblk_log), bi->seqno,
 				i + dev->no_indexblocks);
 
 	/* calculate md5sum of data, store in index */
 	gcry_md_hash_buffer(GCRY_MD_MD5, DATABLOCKS_HASH,
-			data, dev->mmpm<<dev->mesoblk_log);
+			BASE + (dev->no_indexblocks<<dev->mesoblk_log),
+			dev->mmpm<<dev->mesoblk_log);
 
 	/* calculate md5sum of indexblock */
 	gcry_md_hash_buffer(GCRY_MD_MD5, INDEXBLOCK_HASH, MAGIC0,
@@ -443,15 +447,6 @@ void blockio_dev_write_macroblock(blockio_dev_t *dev, const void *data,
 				BASE + (i<<dev->mesoblk_log), bi->seqno, i);
 
 	dev->b->write(dev->b->priv, BASE, id<<dev->b->macroblock_log,
-			dev->no_indexblocks<<dev->mesoblk_log);
-	dev->b->write(dev->b->priv, data, (id<<dev->b->macroblock_log) +
-			(dev->no_indexblocks<<dev->mesoblk_log),
-			dev->mmpm<<dev->mesoblk_log);
-
-	/* decrypt data again, caller needs unmodified data for now */
-	for (i = 0; i < dev->mmpm; i++)
-		cipher_dec(dev->c, (void*)data + (i<<dev->mesoblk_log),
-				data + (i<<dev->mesoblk_log), bi->seqno,
-				i + dev->no_indexblocks);
+			(dev->no_indexblocks + dev->mmpm)<<dev->mesoblk_log);
 }
 

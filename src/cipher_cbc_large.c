@@ -1,6 +1,6 @@
 /* cipher_cbc_large.c - Cipher Block Chaining mode (chain up to mesoblock size)
  *
- * Copyright (C) 2008  Rik Snel <rik@snel.it>
+ * Copyright (C) 2009  Rik Snel <rik@snel.it>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -79,6 +79,9 @@ static void cbc_large_dec(void *priv, uint8_t *out,
 		out += 16;
 		in += 16;
 	}
+
+	wipememory(tmp, 16);
+	wipememory(tmp2, 16);
 }
 
 static void cbc_large_free(void *priv) {

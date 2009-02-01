@@ -1,6 +1,6 @@
 /* scubed3.h - deniable encryption resistant to surface analysis
  *
- * Copyright (C) 2008  Rik Snel <rik@snel.it>
+ * Copyright (C) 2009  Rik Snel <rik@snel.it>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,6 +21,7 @@
 #include <stdint.h>
 #include "bit.h"
 #include "dllist.h"
+#include "ext2.h"
 
 typedef enum scubed3_io_e {
 	SCUBED3_READ,
@@ -49,6 +50,8 @@ typedef struct scubed3_s {
 	 * bits encode the index of the mesoblock in the specified
 	 * macroblock, see the definitions of ID and NO below */
 	uint32_t *block_indices;
+
+	ext2_t *e2;
 } scubed3_t;
 
 int do_req(scubed3_t*, scubed3_io_t, uint64_t, size_t, char*);

@@ -1,6 +1,6 @@
 /* util.h - some utility functions
  *
- * Copyright (C) 2008  Rik Snel <rik@snel.it>
+ * Copyright (C) 2009  Rik Snel <rik@snel.it>
  *
  * Parts Copyright (C) 1999-2006 Monty <monty@xiph.org>
  *

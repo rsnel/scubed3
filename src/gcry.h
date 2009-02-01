@@ -1,6 +1,6 @@
 /* gcry.h - some error checking versions of libgcrypt functions
  *
- * Copyright (C) 2008  Rik Snel <rik@snel.it>
+ * Copyright (C) 2009  Rik Snel <rik@snel.it>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by

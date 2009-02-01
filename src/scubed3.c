@@ -1,6 +1,6 @@
 /* scubed3.c - deniable encryption resistant to surface analysis
  *
- * Copyright (C) 2008  Rik Snel <rik@snel.it>
+ * Copyright (C) 2009  Rik Snel <rik@snel.it>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -249,14 +249,14 @@ void scubed3_init(scubed3_t *l, blockio_dev_t *dev) {
 						dev->no_macroblocks)]);
 	}
 
+	/* prepare ext[234] mount/umount detection */
 	DEBUG("next free macroblock is %d", dev->next_free_macroblock);
+
 	select_new_macroblock(l);
 
-	DEBUG("l->next_seqno = %llu", l->next_seqno);
-	//if (l->next_seqno == 0/*dllist_is_empty(&l->used_blocks)*/) {
-	//	l->updated = 1;
-	//}
-	//DEBUG("next block is %u (seqno=%llu)", id(l->cur), l->cur->seqno);
+	DEBUG("next block is %u (seqno=%llu)", id(l->cur), l->cur->seqno);
+
+	l->e2 = ext2_init(l);
 }
 
 void blockio_dev_fake_mesoblk_part(blockio_dev_t *dev, void *addr,
@@ -430,7 +430,7 @@ int main(int argc, char **argv) {
 	if (fuse_opt_parse(&args, &options, scubed3_opts, NULL) == -1)
 		FATAL("error parsing options");
 
-	VERBOSE("version %s Copyright (C) 2008, Rik Snel <rik@snel.it>",
+	VERBOSE("version %s Copyright (C) 2009, Rik Snel <rik@snel.it>",
 			PACKAGE_VERSION);
 	if (!options.base) FATAL("argument -b FILE is required");
 
@@ -446,7 +446,7 @@ int main(int argc, char **argv) {
 	blockio_init_file(&b, options.base, options.macroblock_log);
 
 	uint8_t key[32] = {
-		0x02, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
+		0x03, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
 		0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
 		0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
 		0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77

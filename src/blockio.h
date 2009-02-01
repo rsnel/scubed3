@@ -1,6 +1,6 @@
 /* blockio.h - handles block input/output
  *
- * Copyright (C) 2008  Rik Snel <rik@snel.it>
+ * Copyright (C) 2009  Rik Snel <rik@snel.it>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -45,7 +45,7 @@ typedef struct blockio_dev_s {
 	cipher_t *c;
 	bitmap_t used;
 	uint32_t next_free_macroblock;
-	void *tmp_idx;
+	void *tmp_macroblock;
 	uint32_t no_macroblocks; /* assigned to this device */
 	uint32_t scanning_at;
 	uint64_t highest_seqno_seen;

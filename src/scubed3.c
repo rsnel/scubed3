@@ -234,7 +234,7 @@ void scubed3_init(scubed3_t *l, blockio_dev_t *dev) {
 			FATAL("last revision (%llu) borked",
 					l->cur->seqno);
 
-		if(!blockio_check_data_hash(l->cur, l->data)) {
+		if(!blockio_check_data_hash(l->cur)) {
 			FATAL("newest block has invalid data");
 		} else DEBUG("data in newest block is OK");
 	}

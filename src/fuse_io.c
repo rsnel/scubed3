@@ -27,6 +27,8 @@
 #include "util.h"
 #include "blockio.h"
 
+#define FUSE_IO_CONTROL ".control"
+
 typedef struct fuse_io_entry_s {
 	hashtbl_elt_t head;
 	char *name;
@@ -39,6 +41,7 @@ typedef struct fuse_io_entry_s {
 /* in Debian Etch fuse 26 is not yet available, we are not yet
  * able to pass a pointer to this struct as private data */
 static hashtbl_t fuse_io_entries;
+static int control_inuse = 0;
 
 static int fuse_io_getattr(const char *path, struct stat *stbuf) {
 	fuse_io_entry_t *entry;
@@ -49,6 +52,13 @@ static int fuse_io_getattr(const char *path, struct stat *stbuf) {
 	if (!strcmp(path, "/")) {
 		stbuf->st_mode = S_IFDIR|0755;
 		stbuf->st_nlink = 2;
+		return 0;
+	}
+
+	if (!strcmp(path, "/" FUSE_IO_CONTROL)) {
+		stbuf->st_mode = S_IFREG|0600;
+		stbuf->st_nlink = 1;
+		stbuf->st_size = 0;
 		return 0;
 	}
 
@@ -81,6 +91,7 @@ static int fuse_io_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 	if (strcmp(path, "/") != 0) return -ENOENT;
 
 	filler(buf, ".", NULL, 0); filler(buf, "..", NULL, 0);
+	filler(buf, FUSE_IO_CONTROL, NULL, 0);
 
 	hashtbl_ts_traverse(&fuse_io_entries,
 			(void (*)(void*, hashtbl_elt_t*))rep, &priv);
@@ -91,7 +102,14 @@ static int fuse_io_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 static int fuse_io_open(const char *path, struct fuse_file_info *fi) {
 	fuse_io_entry_t *entry =
 		hashtbl_find_element_bykey(&fuse_io_entries, path + 1);
-	if (!entry) return -ENOENT;
+	if (!entry) {
+		if (!strcmp(path, "/" FUSE_IO_CONTROL)) {
+			if (control_inuse) return -EBUSY;
+			control_inuse++;
+			VERBOSE(".control open");
+			return 0;
+		} else return -ENOENT;
+	}
 	if (entry->inuse) {
 		hashtbl_unlock_element_byptr(entry);
 		return -EBUSY;
@@ -104,7 +122,14 @@ static int fuse_io_open(const char *path, struct fuse_file_info *fi) {
 static int fuse_io_release(const char *path, struct fuse_file_info *fi) {
 	fuse_io_entry_t *entry =
 		hashtbl_find_element_bykey(&fuse_io_entries, path + 1);
-	if (!entry) return -ENOENT;
+	if (!entry) {
+		if (!strcmp(path, "/" FUSE_IO_CONTROL)) {
+			assert(control_inuse);
+			control_inuse--;
+			VERBOSE(".control released");
+			return 0;
+		} else return -ENOENT;
+	}
 	assert(entry->inuse);
 	/* we should do some kind of cleanup here */
 	entry->inuse--;
@@ -117,7 +142,12 @@ static int fuse_io_read(const char *path, char *buf, size_t size, off_t offset,
 		struct fuse_file_info *fi) {
 	fuse_io_entry_t *entry =
 		hashtbl_find_element_bykey(&fuse_io_entries, path + 1);
-	if (!entry) return -ENOENT;
+	if (!entry) {
+		if (!strcmp(path, "/" FUSE_IO_CONTROL)) {
+			VERBOSE(".control read from");
+			return 0;
+		} else return -ENOENT;
+	}
 
 	do_req(entry->l, SCUBED3_READ, offset, size, (char*)buf);
 
@@ -130,7 +160,12 @@ static int fuse_io_write(const char *path, const char *buf, size_t size,
 		off_t offset, struct fuse_file_info *fi) {
 	fuse_io_entry_t *entry =
 		hashtbl_find_element_bykey(&fuse_io_entries, path + 1);
-	if (!entry) return -ENOENT;
+	if (!entry) {
+		if (!strcmp(path, "/" FUSE_IO_CONTROL)) {
+			VERBOSE(".control wrote to %d", size);
+			return size;
+		} else return -ENOENT;
+	}
 
 	do_req(entry->l, SCUBED3_WRITE, offset, size, (char*)buf);
 

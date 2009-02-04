@@ -94,7 +94,7 @@ void blockio_dev_read_mesoblk(blockio_dev_t*, void*, uint32_t, uint32_t);
 void blockio_dev_read_mesoblk_part(blockio_dev_t*, void*, uint32_t,
 		uint32_t, uint32_t, uint32_t);
 
-int blockio_check_data_hash(blockio_info_t*, void*);
+int blockio_check_data_hash(blockio_info_t*);
 
 void blockio_dev_write_macroblock(blockio_dev_t*, const void*, blockio_info_t*);
 

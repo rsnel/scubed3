@@ -374,16 +374,19 @@ void blockio_dev_read_mesoblk(blockio_dev_t *dev,
 			no + dev->no_indexblocks);
 }
 
-int blockio_check_data_hash(blockio_info_t *bi, void *data) {
+int blockio_check_data_hash(blockio_info_t *bi) {
 	uint32_t id = bi - bi->dev->b->blockio_infos;
 	char md5[16];
-	bi->dev->b->read(bi->dev->b->priv, data,
+	bi->dev->b->read(bi->dev->b->priv, bi->dev->tmp_macroblock +
+			(bi->dev->no_indexblocks<<bi->dev->mesoblk_log),
 			(id<<bi->dev->b->macroblock_log) +
 			(bi->dev->no_indexblocks<<bi->dev->mesoblk_log),
 			bi->dev->mmpm<<bi->dev->mesoblk_log);
 
-	gcry_md_hash_buffer(GCRY_MD_MD5, md5, data,
+	gcry_md_hash_buffer(GCRY_MD_MD5, md5, bi->dev->tmp_macroblock +
+			(bi->dev->no_indexblocks<<bi->dev->mesoblk_log),
 			bi->dev->mmpm<<bi->dev->mesoblk_log);
+
 	if (memcmp(bi->data_hash, md5, sizeof(md5))) return 0;
 
 	return 1;

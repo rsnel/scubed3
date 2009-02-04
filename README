@@ -70,4 +70,38 @@ anything. (you would, however, need to write a custom blockio_init_* function
 and provide read, write and close methods to it)
 
 
+Control protocol
+~~~~~~~~~~~~~~~~
+
+/MOUNTPOINT/.control is a file to which commands can be written, and
+scubed3's response can be read. A command is a line of text terminated
+with a linefeed '\n'. A response possibly has multiple lines and is terminated
+with ".\n" on a line by itself. The file can only be opened once, it can
+not be opened without being closed.
+
+Commands:
+
+- status
+
+shows the status
+
+- open NAME MODE KEY
+
+opens a scubed partition
+
+* NAME is the name, like root or swap, whatever, the name has no real meaning,
+you can open any partition under any name
+
+* MODE is the ciphermode, eg CBC_LARGE(AES), ABL4(SERPENT256).
+
+* KEY is the cipher key bas16 encoded (hex).
+
+- resize NAME MACROBLOCKS
+
+resizes a scubed partition
+
+* NAME ....
+
+* MACROBLOCKS, the amount of macroblocks owned by the partition
+
 

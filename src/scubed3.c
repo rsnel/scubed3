@@ -150,6 +150,7 @@ int replay(blockio_info_t *bi, scubed3_t *l) {
 	char md5_calc[16];
 
 	for (k = 0; k < bi->no_indices; k++) {
+		//VERBOSE("k=%u, bi->indices[k]=%u", k, bi->indices[k]);
 		index = l->block_indices[bi->indices[k]];
 		assert(id(bi) != ID);
 		obsolete_mesoblk_byidx(l, index);
@@ -462,7 +463,7 @@ int main(int argc, char **argv) {
 	};
 	cipher_t c;
 	blockio_dev_t dev;
-	cipher_init(&c, "CBC_LARGE(SERPENT256)",
+	cipher_init(&c, "CBC_LARGE(AES256)", // "CBC_LARGE(SERPENT256)",
 			2<<(options.mesoblock_log - 4 - 1), key, sizeof(key));
 	blockio_dev_init(&dev, &b, &c, options.mesoblock_log, "test");
 	if (dev.no_macroblocks == 0) {

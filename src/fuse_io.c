@@ -28,6 +28,8 @@
 #include "blockio.h"
 
 #define FUSE_IO_CONTROL ".control"
+#define FUSE_IO_WRITE_BUF_SIZE 256
+#define FUSE_IO_READ_BUF_SIZE 8192
 
 typedef struct fuse_io_entry_s {
 	hashtbl_elt_t head;
@@ -42,6 +44,9 @@ typedef struct fuse_io_entry_s {
  * able to pass a pointer to this struct as private data */
 static hashtbl_t fuse_io_entries;
 static int control_inuse = 0;
+static char control_write_buf[FUSE_IO_WRITE_BUF_SIZE];
+//static char control_read_buf[FUSE_IO_READ_BUF_SIZE];
+static size_t control_read_buf_len = 0, control_write_buf_len = 0;
 
 static int fuse_io_getattr(const char *path, struct stat *stbuf) {
 	fuse_io_entry_t *entry;
@@ -106,6 +111,8 @@ static int fuse_io_open(const char *path, struct fuse_file_info *fi) {
 		if (!strcmp(path, "/" FUSE_IO_CONTROL)) {
 			if (control_inuse) return -EBUSY;
 			control_inuse++;
+			control_write_buf_len = 0;
+			control_read_buf_len = 0;
 			VERBOSE(".control open");
 			return 0;
 		} else return -ENOENT;
@@ -162,7 +169,14 @@ static int fuse_io_write(const char *path, const char *buf, size_t size,
 		hashtbl_find_element_bykey(&fuse_io_entries, path + 1);
 	if (!entry) {
 		if (!strcmp(path, "/" FUSE_IO_CONTROL)) {
-			VERBOSE(".control wrote to %d", size);
+			if (size > FUSE_IO_WRITE_BUF_SIZE -
+					control_write_buf_len) return -ENOSPC;
+			memcpy(control_write_buf + control_write_buf_len,
+					buf, size);
+			control_write_buf_len += size;
+
+			VERBOSE(".control wrote to, len is %d",
+					control_write_buf_len);
 			return size;
 		} else return -ENOENT;
 	}

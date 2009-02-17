@@ -15,7 +15,7 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
-#define FUSE_USE_VERSION 25
+#define FUSE_USE_VERSION 26
 
 #include <fuse.h>
 #include <string.h>
@@ -26,10 +26,8 @@
 #include "hashtbl.h"
 #include "util.h"
 #include "blockio.h"
-
-#define FUSE_IO_CONTROL ".control"
-#define FUSE_IO_WRITE_BUF_SIZE 256
-#define FUSE_IO_READ_BUF_SIZE 8192
+#include "pthd.h"
+#include "control.h"
 
 typedef struct fuse_io_entry_s {
 	hashtbl_elt_t head;
@@ -40,13 +38,10 @@ typedef struct fuse_io_entry_s {
 	scubed3_t *l;
 } fuse_io_entry_t;
 
-/* in Debian Etch fuse 26 is not yet available, we are not yet
- * able to pass a pointer to this struct as private data */
-static hashtbl_t fuse_io_entries;
-static int control_inuse = 0;
-static char control_write_buf[FUSE_IO_WRITE_BUF_SIZE];
-//static char control_read_buf[FUSE_IO_READ_BUF_SIZE];
-static size_t control_read_buf_len = 0, control_write_buf_len = 0;
+typedef struct fuse_io_priv_s {
+	hashtbl_t entries;
+	pthread_t control_thread;
+} fuse_io_priv_t;
 
 static int fuse_io_getattr(const char *path, struct stat *stbuf) {
 	fuse_io_entry_t *entry;
@@ -60,14 +55,9 @@ static int fuse_io_getattr(const char *path, struct stat *stbuf) {
 		return 0;
 	}
 
-	if (!strcmp(path, "/" FUSE_IO_CONTROL)) {
-		stbuf->st_mode = S_IFREG|0600;
-		stbuf->st_nlink = 1;
-		stbuf->st_size = 0;
-		return 0;
-	}
-
-	entry = hashtbl_find_element_bykey(&fuse_io_entries, path + 1);
+	entry = hashtbl_find_element_bykey(
+			&((fuse_io_priv_t*)fuse_get_context()->private_data)->
+			entries, path + 1);
 	if (!entry) return -ENOENT;
 
 	stbuf->st_mode = S_IFREG|0600;
@@ -95,28 +85,22 @@ static int fuse_io_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 	}
 	if (strcmp(path, "/") != 0) return -ENOENT;
 
-	filler(buf, ".", NULL, 0); filler(buf, "..", NULL, 0);
-	filler(buf, FUSE_IO_CONTROL, NULL, 0);
+	filler(buf, ".", NULL, 0);
+	filler(buf, "..", NULL, 0);
 
-	hashtbl_ts_traverse(&fuse_io_entries,
-			(void (*)(void*, hashtbl_elt_t*))rep, &priv);
+	hashtbl_ts_traverse(
+			&((fuse_io_priv_t*)fuse_get_context()->private_data)->
+			entries, (void (*)(void*, hashtbl_elt_t*))rep, &priv);
 
 	return 0;
 }
 
 static int fuse_io_open(const char *path, struct fuse_file_info *fi) {
-	fuse_io_entry_t *entry =
-		hashtbl_find_element_bykey(&fuse_io_entries, path + 1);
-	if (!entry) {
-		if (!strcmp(path, "/" FUSE_IO_CONTROL)) {
-			if (control_inuse) return -EBUSY;
-			control_inuse++;
-			control_write_buf_len = 0;
-			control_read_buf_len = 0;
-			VERBOSE(".control open");
-			return 0;
-		} else return -ENOENT;
-	}
+	fuse_io_entry_t *entry = hashtbl_find_element_bykey(
+			&((fuse_io_priv_t*)fuse_get_context()->private_data)->
+			entries, path + 1);
+	if (!entry) return -ENOENT;
+
 	if (entry->inuse) {
 		hashtbl_unlock_element_byptr(entry);
 		return -EBUSY;
@@ -127,16 +111,11 @@ static int fuse_io_open(const char *path, struct fuse_file_info *fi) {
 }
 
 static int fuse_io_release(const char *path, struct fuse_file_info *fi) {
-	fuse_io_entry_t *entry =
-		hashtbl_find_element_bykey(&fuse_io_entries, path + 1);
-	if (!entry) {
-		if (!strcmp(path, "/" FUSE_IO_CONTROL)) {
-			assert(control_inuse);
-			control_inuse--;
-			VERBOSE(".control released");
-			return 0;
-		} else return -ENOENT;
-	}
+	fuse_io_entry_t *entry = hashtbl_find_element_bykey(
+			&((fuse_io_priv_t*)fuse_get_context()->private_data)->
+			entries, path + 1);
+	if (!entry) return -ENOENT;
+
 	assert(entry->inuse);
 	/* we should do some kind of cleanup here */
 	entry->inuse--;
@@ -147,14 +126,11 @@ static int fuse_io_release(const char *path, struct fuse_file_info *fi) {
 
 static int fuse_io_read(const char *path, char *buf, size_t size, off_t offset,
 		struct fuse_file_info *fi) {
-	fuse_io_entry_t *entry =
-		hashtbl_find_element_bykey(&fuse_io_entries, path + 1);
-	if (!entry) {
-		if (!strcmp(path, "/" FUSE_IO_CONTROL)) {
-			VERBOSE(".control read from");
-			return 0;
-		} else return -ENOENT;
-	}
+	fuse_io_entry_t *entry = hashtbl_find_element_bykey(
+			&((fuse_io_priv_t*)fuse_get_context()->private_data)->
+			entries, path + 1);
+
+	if (!entry) return -ENOENT;
 
 	do_req(entry->l, SCUBED3_READ, offset, size, (char*)buf);
 
@@ -165,27 +141,44 @@ static int fuse_io_read(const char *path, char *buf, size_t size, off_t offset,
 
 static int fuse_io_write(const char *path, const char *buf, size_t size,
 		off_t offset, struct fuse_file_info *fi) {
-	fuse_io_entry_t *entry =
-		hashtbl_find_element_bykey(&fuse_io_entries, path + 1);
-	if (!entry) {
-		if (!strcmp(path, "/" FUSE_IO_CONTROL)) {
-			if (size > FUSE_IO_WRITE_BUF_SIZE -
-					control_write_buf_len) return -ENOSPC;
-			memcpy(control_write_buf + control_write_buf_len,
-					buf, size);
-			control_write_buf_len += size;
-
-			VERBOSE(".control wrote to, len is %d",
-					control_write_buf_len);
-			return size;
-		} else return -ENOENT;
-	}
+	fuse_io_entry_t *entry = hashtbl_find_element_bykey(
+			&((fuse_io_priv_t*)fuse_get_context()->private_data)->
+			entries, path + 1);
+	if (!entry) return -ENOENT;
 
 	do_req(entry->l, SCUBED3_WRITE, offset, size, (char*)buf);
 
 	hashtbl_unlock_element_byptr(entry);
 
 	return size;
+}
+
+void *fuse_io_init(struct fuse_conn_info *conn) {
+	fuse_io_priv_t *priv = fuse_get_context()->private_data;
+	pthread_create(&priv->control_thread, NULL, control_thread,
+			&priv->entries);
+	//fuse_exit(fuse_get_context()->fuse);
+	return fuse_get_context()->private_data;
+}
+
+#if 0
+static int fuse_io_fsync(const char *path, int datasync,
+		struct fuse_file_info *fi) {
+	VERBOSE("fsync on %s", path);
+	return 0;
+}
+
+static int fuse_io_flush(const char *path, struct fuse_file_info *fi) {
+	VERBOSE("flush on %s", path);
+	return 0;
+}
+#endif
+
+void fuse_io_destroy(void *arg) {
+	fuse_io_priv_t *priv = fuse_get_context()->private_data;
+	VERBOSE("destroy called");
+	pthread_cancel(priv->control_thread);
+	pthread_join(priv->control_thread, NULL);
 }
 
 static struct fuse_operations fuse_io_operations = {
@@ -195,6 +188,10 @@ static struct fuse_operations fuse_io_operations = {
 	.read = fuse_io_read,
 	.write = fuse_io_write,
 	.release = fuse_io_release,
+	.init = fuse_io_init,
+	.destroy = fuse_io_destroy,
+//	.fsync = fuse_io_fsync,
+//	.flush = fuse_io_flush
 };
 
 static void freer(fuse_io_entry_t *entry) {
@@ -204,12 +201,13 @@ static void freer(fuse_io_entry_t *entry) {
 
 int fuse_io_start(int argc, char **argv, scubed3_t *l) {
 	int ret;
+	fuse_io_priv_t priv;
 	fuse_io_entry_t *entry;
-	hashtbl_init_default(&fuse_io_entries, 4, -1, 1, 1,
+	hashtbl_init_default(&priv.entries, 4, -1, 1, 1,
 			(void (*)(void*))freer);
 
 	/* /test */
-	entry = hashtbl_allocate_and_add_element(&fuse_io_entries,
+	entry = hashtbl_allocate_and_add_element(&priv.entries,
 			"test", sizeof(*entry));
 	entry->name = estrdup("test");
 	entry->size = ((l->dev->no_macroblocks-l->dev->reserved)*l->dev->mmpm)
@@ -218,9 +216,9 @@ int fuse_io_start(int argc, char **argv, scubed3_t *l) {
 	entry->l = l;
 	hashtbl_unlock_element_byptr(entry);
 
-	ret = fuse_main(argc, argv, &fuse_io_operations);
+	ret = fuse_main(argc, argv, &fuse_io_operations, &priv);
 
-	hashtbl_free(&fuse_io_entries);
+	hashtbl_free(&priv.entries);
 
 	return ret;
 }

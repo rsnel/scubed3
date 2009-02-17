@@ -116,7 +116,9 @@ void select_new_macroblock(scubed3_t *l) {
 	l->cur->no_indices = 0;
 	l->updated = 0;
 
+	//FIXME we use a deterministic 'random' number generator for testing
 	while (l->dev->next_free_macroblock == (new = id(l->dev->macroblocks[gcry_fastranduint32(l->dev->no_macroblocks)]))) {
+		VERBOSE("duplicator rex!");
 		blockio_dev_write_macroblock(l->dev, l->data, l->cur);
 		l->cur->seqno = l->next_seqno++;
 	}
@@ -244,6 +246,7 @@ void scubed3_init(scubed3_t *l, blockio_dev_t *dev) {
 
 	l->next_seqno = dev->highest_seqno_seen;
 
+	//FIXME we use a deterministic 'random' number generator for testing
 	if (!l->next_seqno) {
 		dev->next_free_macroblock =
 			id(dev->macroblocks[gcry_fastranduint32(
@@ -456,7 +459,7 @@ int main(int argc, char **argv) {
 	blockio_init_file(&b, options.base, options.macroblock_log);
 
 	uint8_t key[32] = {
-		0x0C, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
+		0x12, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
 		0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
 		0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
 		0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77

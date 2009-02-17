@@ -146,7 +146,7 @@ void blockio_init_file(blockio_t *b, const char *path, uint8_t macroblock_log) {
 }
 
 static const char magic0[8] = "SSS3v0.1";
-static const uint64_t magic1 = 0x1124456789ABCDEFLL;
+static const uint64_t magic1 = 0x1224456789ABCDEFLL;
 
 void blockio_dev_free(blockio_dev_t *dev) {
 	assert(dev);

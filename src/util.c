@@ -21,6 +21,7 @@
 #include <assert.h>
 
 #include "verbose.h"
+#include "util.h"
 
 void *ecalloc(size_t nmemb, size_t size) {
 	void *res = calloc(nmemb, size);
@@ -37,4 +38,18 @@ char *estrdup(const char *str) {
 	if (!out) FATAL("not enough memory to copy string");
 
 	return out;
+}
+/* for an explanation of simple deterministic pseudo random number
+ * generators, search google for simple PRNG, the constants in this
+ * particular one are deduced from Microsoft's "Visual Basic 6.0" */
+static int random_state = 0x00A09E86;
+static const int cst1 = 0x80FD43FD;
+static const int cst2 = 0x00C39EC3;
+static const int cst3 = 0x00FFFFFF;
+
+uint32_t deterministic(uint32_t max) {
+	uint32_t ret;
+	random_state = (random_state*cst1 + cst2)&cst3;
+	ret  = ((double)max)*((double)random_state)/((double)(cst3 + 1));
+	return ret;
 }

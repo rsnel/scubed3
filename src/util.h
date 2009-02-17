@@ -21,10 +21,13 @@
 #define INCLUDE_SCUBED3_UTIL_H 1
 
 #include <stdlib.h>
+#include <stdint.h>
 
 void *ecalloc(size_t, size_t);
 
 char *estrdup(const char*);
+
+uint32_t deterministic(uint32_t);
 
 /* the stuff below is stolen from /usr/include/utils.h
  * (in Debian) which is not a standard include, but part

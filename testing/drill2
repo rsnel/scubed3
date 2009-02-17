@@ -1,0 +1,4 @@
+#!/bin/sh
+mount /mnt/test/
+for in in `seq 0 0`; do  cp /mnt/p2p/clips/Alizee\ -\ La\ Isla\ Bonita.avi /mnt/test/; done
+umount /mnt/test/

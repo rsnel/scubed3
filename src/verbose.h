@@ -29,8 +29,10 @@ extern char *exec_name;
 extern int debug;
 extern int verbose;
 #define WARNING(a,...) WHINE("warning:" a, ## __VA_ARGS__)
-#define DEBUG(a,...) if (debug) WHINE("debug:" a, ## __VA_ARGS__)
-#define VERBOSE(a,...) if (verbose) WHINE(a, ## __VA_ARGS__)
+#define ERROR(a,...) WHINE("error:" a, ## __VA_ARGS__)
+#define DEBUG(a,...) do { \
+	if (debug) WHINE("debug:" a, ## __VA_ARGS__); } while (0)
+#define VERBOSE(a,...) do { if (verbose) WHINE(a, ## __VA_ARGS__); } while (0)
 #define FATAL(a,...) do { \
 	WHINE("fatal:" a, ## __VA_ARGS__); exit(1); } while (0)
 

@@ -75,9 +75,10 @@ Control protocol
 
 /MOUNTPOINT/.control is a file to which commands can be written, and
 scubed3's response can be read. A command is a line of text terminated
-with a linefeed '\n'. A response possibly has multiple lines and is terminated
-with ".\n" on a line by itself. The file can only be opened once, it can
-not be opened without being closed.
+with a linefeed '\n'. 
+
+A response starts with "OK\n", or "ERR\n". One or more lines follow.
+The last line must be ".\n". This terminates the message.
 
 Commands:
 

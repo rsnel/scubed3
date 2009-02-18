@@ -33,10 +33,12 @@ extern int verbose;
 #define DEBUG(a,...) do { \
 	if (debug) WHINE("debug:" a, ## __VA_ARGS__); } while (0)
 #define VERBOSE(a,...) do { if (verbose) WHINE(a, ## __VA_ARGS__); } while (0)
-#define FATAL(a,...) do { \
-	WHINE("fatal:" a, ## __VA_ARGS__); exit(1); } while (0)
-
-
+#define ABORT(msg,...)	do { \
+	WHINE(msg, ## __VA_ARGS__); \
+	abort(); \
+} while (0)
+#define BUG(msg,...)            ABORT("fatal:BUG:" msg, ## __VA_ARGS__)
+#define FATAL(msg,...)            ABORT("fatal:" msg, ## __VA_ARGS__)
 void verbose_init(char*);
 
 void verbose_md5(char*);

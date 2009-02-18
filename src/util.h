@@ -29,6 +29,8 @@ char *estrdup(const char*);
 
 uint32_t deterministic(uint32_t);
 
+int unbase16(char *buf, size_t len);
+
 /* the stuff below is stolen from /usr/include/utils.h
  * (in Debian) which is not a standard include, but part
  * of libcdparanoia (which is under GPL v2 or later and is

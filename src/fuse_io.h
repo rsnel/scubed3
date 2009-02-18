@@ -20,7 +20,22 @@
 
 #include <fcntl.h>
 #include "scubed3.h"
+#include "hashtbl.h"
+#include "cipher.h"
+#include "blockio.h"
 
-int fuse_io_start(int, char**, scubed3_t*);
+typedef struct fuse_io_entry_s {
+        hashtbl_elt_t head;
+        char *name;
+
+        uint64_t size;
+        int inuse;
+	int to_be_deleted;
+	cipher_t c;
+	blockio_dev_t d;
+        scubed3_t l;
+} fuse_io_entry_t;
+
+int fuse_io_start(int, char**, blockio_t*);
 
 #endif /* INCLUDE_SCUBED3_FUSE_IO_H */

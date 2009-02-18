@@ -81,7 +81,7 @@ int hashtbl_get_count(hashtbl_t*);
 
 void hashtbl_verbose(hashtbl_t*);
 
-void hashtbl_ts_traverse(hashtbl_t*, void (*)(void*, hashtbl_elt_t*), void*);
+void hashtbl_ts_traverse(hashtbl_t*, int (*)(void*, hashtbl_elt_t*), void*);
 
 void hashtbl_elementp_free(hashtbl_elt_t**);
 

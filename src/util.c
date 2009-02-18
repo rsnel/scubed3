@@ -53,3 +53,28 @@ uint32_t deterministic(uint32_t max) {
 	ret  = ((double)max)*((double)random_state)/((double)(cst3 + 1));
 	return ret;
 }
+
+int unbase16(char *buf, size_t len) {
+	int i;
+	assert(!(len%2));
+
+	for (i = 0; i < len; i += 2) {
+		if (buf[i] >= '0' && buf[i] <= '9')
+			buf[i/2] = 16*(buf[i] - '0');
+		else if (buf[i] >= 'A' && buf[i] <= 'F')
+			buf[i/2] = 16*(buf[i] - 'A' + 10);
+		else if (buf[i] >= 'a' && buf[i] <= 'f')
+			buf[i/2] = 16*(buf[i] - 'a' + 10);
+		else return -1;
+		if (buf[i+1] >= '0' && buf[i+1] <= '9')
+			buf[i/2] += buf[i+1] - '0';
+		else if (buf[i+1] >= 'A' && buf[i+1] <= 'F')
+			buf[i/2] += buf[i+1] - 'A' + 10;
+		else if (buf[i+1] >= 'a' && buf[i+1] <= 'f')
+			buf[i/2] += buf[i+1] - 'a' + 10;
+		else return -1;
+	}
+	return 0;
+}
+
+

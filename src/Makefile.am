@@ -5,8 +5,9 @@ scubed3_SOURCES = scubed3.c scubed3.h cipher_abl.c binio.c binio.h bit.c bit.h \
 		  dllist.c dllist.h fuse_io.c fuse_io.h gcry.c gcry.h \
 		  hashtbl.c hashtbl.h pthd.c pthd.h util.c util.h \
 		  verbose.c verbose.h cipher_null.c cipher_cbc_large.c \
-		  ext2.c ext2.h control.c control.h
-scubed3ctl_SOURCES = scubed3ctl.c verbose.c verbose.h
+		  ext2.c ext2.h control.c control.h ecch.c ecch.h
+scubed3ctl_SOURCES = scubed3ctl.c verbose.c verbose.h gcry.c gcry.h \
+		     ecch.h ecch.c
 AM_CFLAGS = -D_GNU_SOURCE -O2 -g -Wall -Werror -D_FILE_OFFSET_BITS=64
 AM_LDFLAGS = -lpthread -lfuse -lgcrypt
-scubed3ctl_LDFLAGS = -lreadline
+scubed3ctl_LDFLAGS = -lreadline -lgcrypt -lpthread

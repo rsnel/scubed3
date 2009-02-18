@@ -19,6 +19,7 @@
 #include "cipher.h"
 #include "verbose.h"
 #include "binio.h"
+#include "ecch.h"
 
 const cipher_spec_t *cipher_specs[] = {
 	&cipher_abl4,
@@ -39,18 +40,19 @@ void cipher_init(cipher_t *w, const char *name, size_t size,
 	char mode[strlen(name) + 1], *prim;
 	strcpy(mode, name);
 	prim = strchr(mode, ')');
-	if (!prim) FATAL("no closing paren found in cipher name");
+	if (!prim) ecch_throw(ECCH_DEFAULT,
+			"no closing paren found in cipher name");
 	if (*(prim + 1) != '\0')
-		FATAL("data after closing paren in cipher name");
+		ecch_throw(ECCH_DEFAULT, "data after closing paren in cipher name");
 	*prim = '\0';
 	prim = strchr(mode, '(');
-	if (!prim) FATAL("no closing paren found in cipher name");
+	if (!prim) ecch_throw(ECCH_DEFAULT, "no closing paren found in cipher name");
 	*prim = '\0';
 	prim++;
 
 	while (!mode_spec) {
 		if (i >= NO_CIPHERS)
-			FATAL("ciphermode %s not supported", mode);
+			ecch_throw(ECCH_DEFAULT, "ciphermode %s not supported", mode);
 
 		if (!strcmp(mode, cipher_specs[i]->name))
 			mode_spec = cipher_specs[i];
@@ -59,15 +61,15 @@ void cipher_init(cipher_t *w, const char *name, size_t size,
 	}
 
 	algo = gcry_cipher_map_name(prim);
-	if (!algo) FATAL("blockcipher %s not supported", prim);
+	if (!algo) ecch_throw(ECCH_DEFAULT, "blockcipher %s not supported", prim);
 
 	gcry_call(cipher_algo_info, algo,
 			GCRYCTL_GET_BLKLEN, NULL, &block_size);
-	if (block_size != 16) FATAL("cipher has wrong block size");
+	if (block_size != 16) ecch_throw(ECCH_DEFAULT, "cipher has wrong block size");
 
 	gcry_call(cipher_algo_info, algo,
 			GCRYCTL_GET_KEYLEN, NULL, &bkey_len);
-	if (key_len != bkey_len) FATAL("supplied key has wrong lenght");
+	if (key_len != bkey_len) ecch_throw(ECCH_DEFAULT, "supplied key has wrong length");
 
 	VERBOSE("opening %s(%s), with %d cipherblocks per mesoblock",
 			mode, prim, size);

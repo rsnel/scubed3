@@ -21,6 +21,7 @@
 #include <errno.h>
 #include <string.h>
 #include <sys/user.h>
+#include <sys/mman.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -32,6 +33,7 @@
 #include "config.h"
 #include "verbose.h"
 #include "control.h"
+#include "gcry.h"
 
 #define BUF_SIZE 1024
 
@@ -91,6 +93,13 @@ int main(int argc, char **argv) {
 	struct sockaddr_un remote;
 
 	verbose_init(argv[0]);
+
+	/* lock me into memory; don't leak info to swap */
+	if (mlockall(MCL_CURRENT|MCL_FUTURE)<0)
+		WARNING("failed locking process in RAM (not root?): %s",
+				strerror(errno));
+
+	gcry_global_init();
 
 	if ((s = socket(AF_UNIX, SOCK_STREAM, 0)) == -1)
 		FATAL("socket: %s", strerror(errno));

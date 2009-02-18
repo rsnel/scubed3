@@ -28,19 +28,12 @@
 #include "blockio.h"
 #include "pthd.h"
 #include "control.h"
-
-typedef struct fuse_io_entry_s {
-	hashtbl_elt_t head;
-	char *name;
-
-	uint64_t size;
-	int inuse;
-	scubed3_t *l;
-} fuse_io_entry_t;
+#include "fuse_io.h"
 
 typedef struct fuse_io_priv_s {
 	hashtbl_t entries;
 	pthread_t control_thread;
+	control_thread_priv_t control_thread_priv;
 } fuse_io_priv_t;
 
 static int fuse_io_getattr(const char *path, struct stat *stbuf) {
@@ -80,8 +73,9 @@ static int fuse_io_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 		.filler = filler,
 		.buf = buf
 	};
-	void rep(fuse_io_readdir_priv_t *priv, fuse_io_entry_t *entry) {
+	int rep(fuse_io_readdir_priv_t *priv, fuse_io_entry_t *entry) {
 		priv->filler(priv->buf, entry->name, NULL, 0);
+		return 0;
 	}
 	if (strcmp(path, "/") != 0) return -ENOENT;
 
@@ -90,7 +84,7 @@ static int fuse_io_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 
 	hashtbl_ts_traverse(
 			&((fuse_io_priv_t*)fuse_get_context()->private_data)->
-			entries, (void (*)(void*, hashtbl_elt_t*))rep, &priv);
+			entries, (int (*)(void*, hashtbl_elt_t*))rep, &priv);
 
 	return 0;
 }
@@ -101,7 +95,7 @@ static int fuse_io_open(const char *path, struct fuse_file_info *fi) {
 			entries, path + 1);
 	if (!entry) return -ENOENT;
 
-	if (entry->inuse) {
+	if (entry->inuse || entry->to_be_deleted) {
 		hashtbl_unlock_element_byptr(entry);
 		return -EBUSY;
 	}
@@ -132,7 +126,7 @@ static int fuse_io_read(const char *path, char *buf, size_t size, off_t offset,
 
 	if (!entry) return -ENOENT;
 
-	do_req(entry->l, SCUBED3_READ, offset, size, (char*)buf);
+	do_req(&entry->l, SCUBED3_READ, offset, size, (char*)buf);
 
 	hashtbl_unlock_element_byptr(entry);
 
@@ -146,7 +140,7 @@ static int fuse_io_write(const char *path, const char *buf, size_t size,
 			entries, path + 1);
 	if (!entry) return -ENOENT;
 
-	do_req(entry->l, SCUBED3_WRITE, offset, size, (char*)buf);
+	do_req(&entry->l, SCUBED3_WRITE, offset, size, (char*)buf);
 
 	hashtbl_unlock_element_byptr(entry);
 
@@ -155,8 +149,10 @@ static int fuse_io_write(const char *path, const char *buf, size_t size,
 
 void *fuse_io_init(struct fuse_conn_info *conn) {
 	fuse_io_priv_t *priv = fuse_get_context()->private_data;
+	priv->control_thread_priv.h = &priv->entries;
+	priv->control_thread_priv.bla = (void*)3;
 	pthread_create(&priv->control_thread, NULL, control_thread,
-			&priv->entries);
+			&priv->control_thread_priv);
 	//fuse_exit(fuse_get_context()->fuse);
 	return fuse_get_context()->private_data;
 }
@@ -199,22 +195,25 @@ static void freer(fuse_io_entry_t *entry) {
 	free(entry);
 }
 
-int fuse_io_start(int argc, char **argv, scubed3_t *l) {
+int fuse_io_start(int argc, char **argv, blockio_t *b) {
 	int ret;
 	fuse_io_priv_t priv;
-	fuse_io_entry_t *entry;
+	//fuse_io_entry_t *entry;
 	hashtbl_init_default(&priv.entries, 4, -1, 1, 1,
 			(void (*)(void*))freer);
 
+	priv.control_thread_priv.b = b;
+#if 0
 	/* /test */
 	entry = hashtbl_allocate_and_add_element(&priv.entries,
-			"test", sizeof(*entry));
-	entry->name = estrdup("test");
+			estrdup("test"), sizeof(*entry));
 	entry->size = ((l->dev->no_macroblocks-l->dev->reserved)*l->dev->mmpm)
 		<<l->dev->mesoblk_log;
+	entry->to_be_deleted = 0;
 	entry->inuse = 0;
 	entry->l = l;
 	hashtbl_unlock_element_byptr(entry);
+#endif
 
 	ret = fuse_main(argc, argv, &fuse_io_operations, &priv);
 

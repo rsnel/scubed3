@@ -271,8 +271,12 @@ static void hashtbl_delete_element_from_bucket(hashtbl_t *h,
 	hashtbl_elt_t **eltp;
 	pthread_mutex_t *last;
 
+	//VERBOSE("delete from bucket: h=%p, target=%p, bucket=%u",
+	//		h, target, bucket);
 	eltp = hashtbl_find_elementp_in_bucket(h, target,
 			&last, bucket, compare);
+
+	if (!eltp) return; /* element has already been deleted */
 
 	if (TS) pthd_mutex_lock(&h->count_mutex);
 	h->count--;
@@ -369,20 +373,25 @@ void *hashtbl_find_element_bykey(hashtbl_t *h, const void *key) {
 			compare_key);
 }
 
+#if 0
 void hashtbl_delete_element_bykey(hashtbl_t *h, void *key) {
 	hashtbl_delete_element_from_bucket(h, key, get_bucket(h, key),
 			compare_key);
 }
+#endif
 
 void hashtbl_delete_element_byptr(hashtbl_t *h, void *elt) {
 	hashtbl_elt_t **eltp;
 	pthread_mutex_t *last;
 
 	if (h->key_size != 0) {
-		hashtbl_delete_element_bykey(h, ((hashtbl_elt_t*)elt)->data);
+		hashtbl_delete_element_from_bucket(h, elt,
+				get_bucket(h, *(char**)(((hashtbl_elt_t*)elt)
+						->data)), compare_ptr);
 		return;
 	}
 
+	VERBOSE("err! %d", h->key_size);
 	//DEBUG("looking for %p", elt);
 	eltp = hashtbl_find_elementp_from_bucket(h, elt,
 			&last, 0, compare_ptr);
@@ -467,7 +476,7 @@ void hashtbl_verbose(hashtbl_t *h) {
 	//VERBOSE("%p %d %d %d", h->buckets, h->key_bits, h->key_size, h->count);
 }
 
-void hashtbl_ts_traverse(hashtbl_t *ht, void (*rep)(void*, hashtbl_elt_t*),
+void hashtbl_ts_traverse(hashtbl_t *ht, int (*rep)(void*, hashtbl_elt_t*),
 		void *arg) {
 	hashtbl_elt_t *elt = NULL;
 
@@ -475,7 +484,10 @@ void hashtbl_ts_traverse(hashtbl_t *ht, void (*rep)(void*, hashtbl_elt_t*),
 
 	elt = hashtbl_first_element(ht);
 	while (elt) {
-		(*rep)(arg, elt);
+		if (rep(arg, elt) == -1) {
+			hashtbl_unlock_element_byptr(elt);
+			return;
+		}
 		elt = hashtbl_next_element_byptr(ht, elt);
 	}
 

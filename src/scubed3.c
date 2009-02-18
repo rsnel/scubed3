@@ -234,8 +234,7 @@ void scubed3_init(scubed3_t *l, blockio_dev_t *dev) {
 
 	if (l->cur) {
 		if (l->next_seqno != l->cur->seqno + 1)
-			FATAL("last revision (%llu) borked",
-					l->cur->seqno);
+			FATAL("last revision (%llu) borked", l->cur->seqno);
 
 		if(!blockio_check_data_hash(l->cur)) {
 			FATAL("newest block has invalid data");
@@ -433,10 +432,10 @@ int main(int argc, char **argv) {
 		SCUBED3_OPT_KEY("-M %d", macroblock_log, 0),
 		FUSE_OPT_END
 	};
-	int ret, i, j = 0;
+	int ret;//, i, j = 0;
 	struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
 	blockio_t b;
-	scubed3_t l;
+	//scubed3_t l;
 
 	verbose_init(argv[0]);
 
@@ -457,7 +456,7 @@ int main(int argc, char **argv) {
 	gcry_global_init();
 
 	blockio_init_file(&b, options.base, options.macroblock_log);
-
+#if 0
 	uint8_t key[32] = {
 		0x12, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
 		0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
@@ -492,12 +491,15 @@ int main(int argc, char **argv) {
 		VERBOSE("device \"%s\" has %u/%u macroblocks", dev.name, dev.used.no_set, dev.used.no_bits);
 	}
 
-	scubed3_init(&l, &dev);
-	ret = fuse_io_start(args.argc, args.argv, &l);
+	//scubed3_init(&l, &dev);
+#endif
 
-	scubed3_free(&l);
-	blockio_dev_free(&dev);
-	cipher_free(&c);
+	ret = fuse_io_start(args.argc, args.argv, &b);
+
+	//scubed3_free(&l);
+	//blockio_dev_free(&dev);
+	//cipher_free(&c);
+
 	blockio_free(&b);
 
 	free(options.base);

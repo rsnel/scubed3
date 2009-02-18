@@ -21,10 +21,12 @@
 #include <pthread.h>
 #include "verbose.h"
 #include "gcry.h"
+#include "ecch.h"
 
 static int gcry_outofcore_handler(void *arg, size_t size,
 		unsigned int que) {
-	FATAL("libgcrypt out of memory allocating %d bytes", size);
+	ecch_throw(ECCH_DEFAULT,
+			"libgcrypt out of memory allocating %d bytes", size);
 }
 
 /* needed to make libgcrypt thread safe */
@@ -51,7 +53,7 @@ void gcry_fatal(int err, const char *postfix) {
 	char msg[GCRY_MSG_LEN];
 	gpg_strerror_r(err, msg, GCRY_MSG_LEN - 1);
 	msg[GCRY_MSG_LEN - 1] = '\0';
-	FATAL("gcry_%s: %s", postfix, msg);
+	ecch_throw(ECCH_DEFAULT, "gcry_%s: %s", postfix, msg);
 }
 
 uint32_t gcry_fastranduint32(uint32_t max) {

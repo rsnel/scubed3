@@ -20,8 +20,15 @@
 
 #include <fcntl.h>
 #include "scubed3.h"
+#include "hashtbl.h"
 
 #define CONTROL_SOCKET "/tmp/scubed3"
+
+typedef struct control_thread_priv_s {
+	hashtbl_t *h;
+	blockio_t *b;
+	void *bla;
+} control_thread_priv_t;
 
 void *control_thread(void *arg);
 

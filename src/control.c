@@ -23,27 +23,20 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <signal.h>
+#include <fuse.h>
 #include "verbose.h"
 #include "util.h"
 #include "pthd.h"
 #include "hashtbl.h"
 #include "control.h"
+#include "fuse_io.h"
+#include "ecch.h"
 
 #define BUF_SIZE 8192
 #define MAX_ARGC 10
 
-int control_write(int s, const char *format, ...) {
-	char *string;
-	ssize_t sent = 0, len, n;
-	va_list ap;
-
-	va_start(ap, format);
-	if ((len = vasprintf(&string, format, ap)) == -1) {
-		ERROR("vasprintf: %s", strerror(errno));
-		return -1;
-	}
-	va_end(ap);
-
+int control_write_string(int s, const char *string, ssize_t len) {
+	ssize_t sent = 0, n;
 	do {
 		n = send(s, string + sent, len - sent, 0);
 		if (n == 0) {
@@ -57,28 +50,127 @@ int control_write(int s, const char *format, ...) {
 		sent += n;
 	} while (sent < len);
 
-	free(string);
-
 	return 0;
 }
 
-int control_status(int s) {
-	return control_write(s, "OK\nno info available\n.\n");
+int control_write_complete(int s, int err, const char *format, ...) {
+	char *string;
+	//ssize_t sent = 0, len, n;
+	ssize_t len;
+	va_list ap;
+
+	if (!err) {
+		if (control_write_string(s, "OK\n", 3)) return -1;
+	} else {
+		if (control_write_string(s, "ERR\n", 4)) return -1;
+	}
+
+	va_start(ap, format);
+	if ((len = vasprintf(&string, format, ap)) == -1) {
+		ERROR("vasprintf: %s", strerror(errno));
+		return -1;
+	}
+	va_end(ap);
+
+	if (control_write_string(s, string, len)) {
+		free(string);
+		return -1;
+	}
+
+	free(string);
+
+	return control_write_string(s, "\n.\n", 3);
 }
 
-int control_call(int s, char *command) {
-	int argc = 0;
+int control_status(int s, control_thread_priv_t *priv) {
+	return control_write_complete(s, 0, "no info available");
+}
+
+void some_bullshit() {
+	ecch_throw(ECCH_DEFAULT, "some error");
+}
+
+int control_open(int s, control_thread_priv_t *priv, char *name,
+		char *cipher_spec, char *key) {
+	fuse_io_entry_t *entry;
+	char *allocname;
+	int key_len;
+	VERBOSE("got request to open \"%s\", %s, %s", name,
+			cipher_spec, key);
+
+	allocname = estrdup(name);
+	entry = hashtbl_allocate_and_add_element(priv->h,
+			allocname, sizeof(*entry));
+
+	key_len = strlen(key);
+	if (key_len%2) return control_write_complete(s, 1,
+			"cipher key not valid base16 (uneven number of chars)");
+
+	if (unbase16(key, key_len))
+		return control_write_complete(s, 1,
+				"cipher key not valid base16 (invalid chars)");
+
+	VERBOSE("got key");
+	verbose_md5(key);
+
+	ecch_try cipher_init(&entry->c, cipher_spec, 1024, (unsigned char*)key, key_len/2);
+	ecch_catch_all {
+		entry->to_be_deleted = 1;
+		hashtbl_unlock_element_byptr(entry);
+		hashtbl_delete_element_byptr(priv->h, entry);
+		return control_write_complete(s, 1, "%s", ecch_context.ecch.msg);
+	}
+	ecch_endtry;
+
+	if (!entry) {
+		free(allocname);
+		return control_write_complete(s, 1,
+				"unable to add partition \"%s\"", name);
+	}
+
+	entry->size = 0;
+	entry->to_be_deleted = 0;
+	entry->inuse = 0;
+	hashtbl_unlock_element_byptr(entry);
+
+	return control_write_complete(s, 0, "partition \"%s\" added", name);
+}
+
+int control_close(int s, control_thread_priv_t *priv, char *name) {
+	fuse_io_entry_t *entry = hashtbl_find_element_bykey(priv->h, name);
+	if (!entry) return control_write_complete(s, 1,
+			"partition \"%s\" not found", name);
+
+	if (entry->inuse) {
+		hashtbl_unlock_element_byptr(entry);
+		return control_write_complete(s, 1,
+				"partition \"%s\" is busy", name);
+	}
+
+	entry->to_be_deleted = 1;
+	hashtbl_unlock_element_byptr(entry);
+
+	hashtbl_delete_element_byptr(priv->h, entry);
+
+	return control_write_complete(s, 0, "partition \"%s\" closed", name);
+}
+
+int control_call(int s, control_thread_priv_t *priv, char *command) {
+	int argc = 0, len;
 	char *argv[MAX_ARGC+1];
 
 	argv[argc] = command;
+	len = strlen(command);
+
+	//VERBOSE("recv: %s", command);
 
 	do {
 		while (*argv[argc] == ' ') argv[argc]++;
 
 		argc++;
 
-		if (argc > MAX_ARGC)
-			return control_write(s, "ERR\ntoo many arguments\n.\n");
+		if (argc > MAX_ARGC) return control_write_complete(s, 1,
+				"too many arguments");
 
 		argv[argc] = argv[argc-1];
 
@@ -88,14 +180,20 @@ int control_call(int s, char *command) {
 
 	} while (*argv[argc] != '\0');
 
-	VERBOSE("control_call: command ->%s<- %d arguments", argv[0], argc);
+	if (!strcmp(argv[0],"status") && argc == 1)
+		return control_status(s, priv);
+	if (!strcmp(argv[0], "close") && argc == 2)
+		return control_close(s, priv, argv[1]);
+	if (!strcmp(argv[0], "open") && argc == 4)
+		return control_open(s, priv, argv[1], argv[2], argv[3]);
+	else return control_write_complete(s, 1, "unknown command \"%s\" or "
+			"wrong number of arguments", argv[0]);
 
-	if (!strcmp(argv[0], "status") && argc == 1) return control_status(s);
-	else return
-		control_write(s, "ERR\nunknown command ->%s<-\n.\n", argv[0]);
+	memset(command, 0, len);
 }
 
 void *control_thread(void *arg) {
+	control_thread_priv_t *priv = arg;
 	int s, s2;
 	socklen_t t, len;
 	char buf[BUF_SIZE];
@@ -104,7 +202,6 @@ void *control_thread(void *arg) {
 
 	if ((s = socket(AF_UNIX, SOCK_STREAM, 0)) == -1)
 		FATAL("socket: %s", strerror(errno));
-
 
 	local.sun_family = AF_UNIX;
 	strcpy(local.sun_path, CONTROL_SOCKET);
@@ -142,7 +239,8 @@ void *control_thread(void *arg) {
 			for (i = buf_len; i < buf_len + n; i++) {
 				if (buf[i] == '\n') {
 					buf[i] = '\0';
-					if (control_call(s2, start + buf)) {
+					if (control_call(s2, priv, start + buf))
+					{
 						done = 1;
 						break;
 					}
@@ -168,82 +266,3 @@ void *control_thread(void *arg) {
 	pthread_exit(NULL);
 }
 
-#if 0
-#define CONTROL_MAXARGS 10
-
-static char *control_argv[FUSE_IO_MAXARGS];
-static int control_argc;
-
-
-static void control_response(const char *fmt, ...) {
-	int bla;
-	va_list ap;
-	va_start(ap, fmt);
-
-	bla = vsnprintf(control_read_buf + control_read_buf_len,
-			FUSE_IO_READ_BUF_SIZE - control_read_buf_len,
-			fmt, ap);
-	if (bla >= FUSE_IO_READ_BUF_SIZE - control_read_buf_len)
-		control_read_buf_len = FUSE_IO_READ_BUF_SIZE;
-	else control_read_buf_len += bla;
-
-	va_end(ap);
-}
-
-static void control_call(void) {
-	if (control_argc == 0) return;
-
-	if (!strcmp(control_argv[0], "status") && control_argc == 1)
-		control_status();
-	else if (!strcmp(control_argv[0], "open") && control_argc == 4)
-		control_open(control_argv[1], control_argv[2], control_argv[3]);
-	else control_response("ERR\nunknown command %s or wrong number"
-			" of arguments\n.\n", control_argv[0]);
-
-	VERBOSE("handled command %s", control_argv[0]);
-}
-
-static int control_write(const char *buf, size_t size, off_t offset) {
-	pthd_mutex_lock(&control_mutex);
-	while (size--) {
-		if (control_write_buf_len >= FUSE_IO_WRITE_BUF_SIZE)
-			return -ENOSPC;
-
-		control_write_buf[control_write_buf_len] = *buf;
-		if (*buf++ == '\n') {
-			control_argc = 0;
-			control_write_buf[control_write_buf_len] = '\0';
-			control_argv[control_argc] = control_write_buf;
-
-			do {
-				while (*control_argv[control_argc] == ' ')
-					control_argv[control_argc]++;
-
-				control_argc++;
-
-				if (control_argc > FUSE_IO_MAXARGS)
-					return -ENOSPC;
-
-				control_argv[control_argc] =
-					control_argv[control_argc - 1];
-
-				while (*control_argv[control_argc] != '\0' &&
-						*control_argv[control_argc]
-						!= ' ')
-					control_argv[control_argc]++;
-
-				if (*control_argv[control_argc] == ' ')
-					*control_argv[control_argc]++ = '\0';
-
-			} while (*control_argv[control_argc] != '\0');
-
-			control_call();
-
-			control_write_buf_len = 0;
-		} else control_write_buf_len++;
-	}
-	pthd_mutex_unlock(&control_mutex);
-
-	return size;
-}
-#endif

@@ -101,7 +101,6 @@ void dllist_append(dllist_t *d, dllist_elt_t *e) {
 #endif
 
 void dllist_remove(dllist_elt_t *e) {
-	VERBOSE("dllist remove %p", e);
 	assert(e);
 	assert(e->next);
 	assert(e->prev);

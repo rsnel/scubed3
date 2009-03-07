@@ -193,7 +193,7 @@ static struct fuse_operations fuse_io_operations = {
 
 static void freer(fuse_io_entry_t *entry) {
 	free(entry->name);
-	//scubed3_free(&entry->l);
+	scubed3_free(&entry->l);
 	blockio_dev_free(&entry->d);
 	cipher_free(&entry->c);
 	free(entry);

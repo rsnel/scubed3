@@ -112,6 +112,7 @@ static int fuse_io_release(const char *path, struct fuse_file_info *fi) {
 
 	assert(entry->inuse);
 	/* we should do some kind of cleanup here */
+	VERBOSE("release called on %s", path);
 	entry->inuse--;
 	hashtbl_unlock_element_byptr(entry);
 	return 0;
@@ -192,6 +193,9 @@ static struct fuse_operations fuse_io_operations = {
 
 static void freer(fuse_io_entry_t *entry) {
 	free(entry->name);
+	//scubed3_free(&entry->l);
+	blockio_dev_free(&entry->d);
+	cipher_free(&entry->c);
 	free(entry);
 }
 

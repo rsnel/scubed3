@@ -56,6 +56,12 @@ typedef struct scubed3_s {
 
 int do_req(scubed3_t*, scubed3_io_t, uint64_t, size_t, char*);
 
+struct blockio_dev_s;
+
+void scubed3_init(scubed3_t*, struct blockio_dev_s*);
+
+void scubed3_free(scubed3_t*);
+
 #define id(a)   ((a) - l->dev->b->blockio_infos)
 
 #endif /* INCLUDE_SCUBED3_H */

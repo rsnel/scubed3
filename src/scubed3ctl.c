@@ -29,6 +29,7 @@
 #include <assert.h>
 #include <readline/readline.h>
 #include <readline/history.h>
+#include <termios.h>
 
 #include "config.h"
 #include "verbose.h"
@@ -39,7 +40,7 @@
 
 int do_command(int s, const char *format, ...) {
 	char buf[BUF_SIZE];
-	int ret = 0, buf_len = 0, start, i, done = 0;
+	int ret = 0, buf_len = 0, start = 0, i, done = 0;
 	char *string;
 	ssize_t sent = 0, len, n;
 	va_list ap;
@@ -58,11 +59,10 @@ int do_command(int s, const char *format, ...) {
 	free(string);
 
 	do {
+		if (buf_len == BUF_SIZE) FATAL("response too long");
 		n = recv(s, buf + buf_len, BUF_SIZE - buf_len, 0);
 		if (n == 0) FATAL("recv: connection reset by peer");
 		if (n < 0) FATAL("recv: %s", strerror(errno));
-
-		start = 0;
 
 		for (i = buf_len; i < buf_len + n; i++) {
 			if (buf[i] == '\n') {
@@ -80,16 +80,41 @@ int do_command(int s, const char *format, ...) {
 				start = i + 1;
 			}
 		}
+
+		buf_len += n;
 	} while (!done);
 
 	return ret;
 }
 
+int my_getpass(char **lineptr, size_t *n, FILE *stream) {
+	struct termios old, new;
+
+	/* Turn echoing off and fail if we can't. */
+	if (tcgetattr (fileno(stream), &old) != 0) return -1;
+
+	new = old;
+	new.c_lflag &= ~ECHO;
+	if (tcsetattr(fileno(stream), TCSAFLUSH, &new) != 0)
+		return -1;
+
+	/* Read the password. */
+	*n = getline (lineptr, n, stream);
+
+	/* Restore terminal. */
+	(void) tcsetattr (fileno (stream), TCSAFLUSH, &old);
+
+	return 0;
+}
 
 int main(int argc, char **argv) {
 	int s;
 	socklen_t len;
+	int i;
 	char *line;
+	unsigned char key[32];
+	char *pw = NULL;
+	size_t pw_len;
 	struct sockaddr_un remote;
 
 	verbose_init(argv[0]);
@@ -98,6 +123,14 @@ int main(int argc, char **argv) {
 	if (mlockall(MCL_CURRENT|MCL_FUTURE)<0)
 		WARNING("failed locking process in RAM (not root?): %s",
 				strerror(errno));
+
+	printf("Password: ");
+	if (my_getpass(&pw, &pw_len, stdin) == -1)
+		FATAL("unable to get password");
+	VERBOSE("password is \"%.*s\" with %u bytes", pw_len -1, pw, pw_len - 1);
+	gcry_md_hash_buffer(GCRY_MD_SHA256, key, pw, pw_len - 1);
+	for (i = 0; i < 32; i++) printf("%02x", key[i]);
+	printf("\n");
 
 	gcry_global_init();
 
@@ -119,6 +152,8 @@ int main(int argc, char **argv) {
 
 		if (!strcmp(line, "exit")) break;
 		if (!strcmp(line, "quit")) break;
+
+		if (line && *line) add_history(line);
 
 		do_command(s, "%s\n", line);
 

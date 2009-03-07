@@ -72,6 +72,8 @@ int control_write_complete(int s, int err, const char *format, ...) {
 	}
 	va_end(ap);
 
+	//VERBOSE("->%s<-", string);
+
 	if (control_write_string(s, string, len)) {
 		free(string);
 		return -1;
@@ -94,7 +96,6 @@ int control_open(int s, control_thread_priv_t *priv, char *name,
 		char *cipher_spec, char *key) {
 	fuse_io_entry_t *entry;
 	char *allocname;
-	int key_len;
 	VERBOSE("got request to open \"%s\", %s, %s", name,
 			cipher_spec, key);
 
@@ -102,35 +103,42 @@ int control_open(int s, control_thread_priv_t *priv, char *name,
 	entry = hashtbl_allocate_and_add_element(priv->h,
 			allocname, sizeof(*entry));
 
-	key_len = strlen(key);
-	if (key_len%2) return control_write_complete(s, 1,
-			"cipher key not valid base16 (uneven number of chars)");
-
-	if (unbase16(key, key_len))
-		return control_write_complete(s, 1,
-				"cipher key not valid base16 (invalid chars)");
-
-	VERBOSE("got key");
-	verbose_md5(key);
-
-	ecch_try cipher_init(&entry->c, cipher_spec, 1024, (unsigned char*)key, key_len/2);
-	ecch_catch_all {
-		entry->to_be_deleted = 1;
-		hashtbl_unlock_element_byptr(entry);
-		hashtbl_delete_element_byptr(priv->h, entry);
-		return control_write_complete(s, 1, "%s", ecch_context.ecch.msg);
-	}
-	ecch_endtry;
-
 	if (!entry) {
 		free(allocname);
 		return control_write_complete(s, 1,
 				"unable to add partition \"%s\"", name);
 	}
 
-	entry->size = 0;
 	entry->to_be_deleted = 0;
 	entry->inuse = 0;
+
+	ecch_try {
+		/* if any of this fails, we cannot add the partition */
+		size_t key_len;
+		key_len = strlen(key);
+		if (key_len%2) ecch_throw(ECCH_DEFAULT, "cipher key not valid "
+				"base16 (uneven number of chars)");
+
+		if (unbase16(key, key_len)) ecch_throw(ECCH_DEFAULT, "cipher "
+				"key not valid base16 (invalid chars)");
+
+		cipher_init(&entry->c, cipher_spec, 1024,
+				(unsigned char*)key, key_len/2);
+		blockio_dev_init(&entry->d, priv->b, &entry->c, name);
+		scubed3_init(&entry->l, &entry->d);
+		entry->size = ((entry->l.dev->no_macroblocks-entry->
+					l.dev->reserved)*entry->l.dev->mmpm)
+			<<entry->l.dev->b->mesoblk_log;
+	}
+	ecch_catch_all {
+		entry->to_be_deleted = 1;
+		hashtbl_unlock_element_byptr(entry);
+		hashtbl_delete_element_byptr(priv->h, entry);
+		return control_write_complete(s, 1, "%s",
+				ecch_context.ecch.msg);
+	}
+	ecch_endtry;
+
 	hashtbl_unlock_element_byptr(entry);
 
 	return control_write_complete(s, 0, "partition \"%s\" added", name);

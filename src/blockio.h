@@ -53,7 +53,6 @@ typedef struct blockio_dev_s {
 	uint32_t reserved;
 
 	uint32_t no_indexblocks;
-	uint8_t mesoblk_log;
 	uint32_t mesoblk_size;
 	uint16_t mmpm; /* max mesoblocks per macroblock */
 	uint8_t strip_bits;
@@ -68,6 +67,8 @@ struct blockio_s {
 	uint8_t macroblock_log;
 	uint32_t no_macroblocks; /* amount of raw macroblocks */
 
+	uint8_t mesoblk_log;
+
 	blockio_info_t *blockio_infos;
 
 	void (*read)(void*, void*, uint64_t, uint32_t);
@@ -76,10 +77,9 @@ struct blockio_s {
 	void *priv;
 };
 
-void blockio_init_file(blockio_t*, const char*, uint8_t);
+void blockio_init_file(blockio_t*, const char*, uint8_t, uint8_t);
 
-void blockio_dev_init(blockio_dev_t*, blockio_t*, cipher_t*, uint8_t,
-		const char*);
+void blockio_dev_init(blockio_dev_t*, blockio_t*, cipher_t*, const char*);
 
 void blockio_dev_free(blockio_dev_t*);
 

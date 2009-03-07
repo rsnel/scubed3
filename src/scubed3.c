@@ -104,7 +104,7 @@ static void add_blockref(scubed3_t *l, uint32_t offset) {
 
 static inline char *mesoblk(scubed3_t *l, uint16_t no) {
 	assert(no < l->cur->max_indices);
-	return l->data + (no<<l->dev->mesoblk_log);
+	return l->data + (no<<l->dev->b->mesoblk_log);
 }
 
 void select_new_macroblock(scubed3_t *l) {
@@ -195,6 +195,7 @@ void commit_current_macroblock(scubed3_t *l) {
 }
 
 void scubed3_free(scubed3_t *l) {
+	VERBOSE("freeing scubed3 partition");
 	if (l->updated) {
 		DEBUG("committing current macroblock to disk and exit");
 		commit_current_macroblock(l);
@@ -216,7 +217,7 @@ void scubed3_init(scubed3_t *l, blockio_dev_t *dev) {
 	l->dev = dev;
 	l->cur = NULL;
 
-	l->mesobits = (dev->b->macroblock_log - dev->mesoblk_log);
+	l->mesobits = (dev->b->macroblock_log - dev->b->mesoblk_log);
 	l->mesomask = 0xFFFFFFFF>>(32 - l->mesobits);
 	DEBUG("mesobits=%u, mesomask=%08x", l->mesobits, l->mesomask);
 
@@ -230,7 +231,7 @@ void scubed3_init(scubed3_t *l, blockio_dev_t *dev) {
 	l->next_seqno = 0;
 	assert(!l->cur); /* l->cur should still be NULL */
 	dllist_iterate(&dev->used_blocks,
-			(int (*)(dllist_elt_t*, void*))replay, l);
+		(int (*)(dllist_elt_t*, void*))replay, l);
 
 	if (l->cur) {
 		if (l->next_seqno != l->cur->seqno + 1)
@@ -348,7 +349,7 @@ int do_read(scubed3_t *l, uint32_t mesoff, uint32_t muoff, uint32_t size,
 int do_req(scubed3_t *l, scubed3_io_t cmd, uint64_t r_offset, size_t size,
 		char *buf) {
 	assert(cmd == SCUBED3_READ || cmd == SCUBED3_WRITE);
-	uint32_t meso = r_offset>>l->dev->mesoblk_log;
+	uint32_t meso = r_offset>>l->dev->b->mesoblk_log;
 	uint32_t inmeso = r_offset%l->dev->mesoblk_size;
 	uint32_t ooff = 0, reqsz;
 	int (*action)(scubed3_t*, uint32_t, uint32_t, uint32_t, char*) =
@@ -455,7 +456,8 @@ int main(int argc, char **argv) {
 
 	gcry_global_init();
 
-	blockio_init_file(&b, options.base, options.macroblock_log);
+	blockio_init_file(&b, options.base,
+			options.macroblock_log, options.mesoblock_log);
 #if 0
 	uint8_t key[32] = {
 		0x12, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,

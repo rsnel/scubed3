@@ -88,7 +88,8 @@ void blockio_free(blockio_t *b) {
 }
 
 /* open backing file and set macroblock size */
-void blockio_init_file(blockio_t *b, const char *path, uint8_t macroblock_log) {
+void blockio_init_file(blockio_t *b, const char *path, uint8_t macroblock_log,
+		uint8_t mesoblk_log) {
 	struct stat stat_info;
 	struct flock lock;
 	uint64_t tmp;
@@ -98,6 +99,7 @@ void blockio_init_file(blockio_t *b, const char *path, uint8_t macroblock_log) {
 
 	b->macroblock_log = macroblock_log;
 	b->macroblock_size = 1<<macroblock_log;
+	b->mesoblk_log = mesoblk_log;
 
 	b->read = stream_read;
 	b->write = stream_write;
@@ -153,6 +155,8 @@ void blockio_dev_free(blockio_dev_t *dev) {
 	int i;
 
 	for (i = 0; i < dev->no_macroblocks; i++) {
+		dev->macroblocks[i]->elt.prev = NULL;
+		dev->macroblocks[i]->elt.next = NULL;
 		dev->macroblocks[i]->dev = NULL;
 		free(dev->macroblocks[i]->indices);
 	}
@@ -163,11 +167,11 @@ void blockio_dev_free(blockio_dev_t *dev) {
 }
 
 void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
-		uint8_t mesoblk_log, const char *name) {
+		const char *name) {
 	int i, j = 0;
 	assert(b && c);
-	assert(mesoblk_log < b->macroblock_log);
-	assert(b->macroblock_log - mesoblk_log < 8*sizeof(uint16_t));
+	assert(b->mesoblk_log < b->macroblock_log);
+	assert(b->macroblock_log - b->mesoblk_log < 8*sizeof(uint16_t));
 	uint32_t index_len;
 	bitmap_init(&dev->used, b->no_macroblocks);
 	dev->name = name;
@@ -177,11 +181,10 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 	dev->highest_seqno_seen = 0;
 
 	dev->no_macroblocks = 0;
-	dev->mesoblk_log = mesoblk_log;
-	dev->strip_bits = mesoblk_log - DM_SECTOR_LOG;
+	dev->strip_bits = b->mesoblk_log - DM_SECTOR_LOG;
 	dev->no_indexblocks = 1;
-	dev->mesoblk_size = 1<<mesoblk_log;
-	dev->mmpm = (1<<(b->macroblock_log - mesoblk_log)) -
+	dev->mesoblk_size = 1<<b->mesoblk_log;
+	dev->mmpm = (1<<(b->macroblock_log - b->mesoblk_log)) -
 		dev->no_indexblocks;
 
 	index_len = INDICES_OFFSET + 4*bit_get_size(dev->mmpm, dev->strip_bits)
@@ -189,9 +192,9 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 
 	DEBUG("strip_bits=%u, mmpm=%u, used headerspace=%u/%u",
 			dev->strip_bits, dev->mmpm, index_len,
-			dev->no_indexblocks<<dev->mesoblk_log);
+			dev->no_indexblocks<<dev->b->mesoblk_log);
 
-	assert(index_len <= dev->no_indexblocks<<mesoblk_log);
+	assert(index_len <= dev->no_indexblocks<<b->mesoblk_log);
 
 	dev->tmp_macroblock = ecalloc(1, 1<<b->macroblock_log);
 
@@ -264,7 +267,7 @@ void blockio_dev_read_header(blockio_dev_t *dev, uint32_t no) {
 	}
 
 	dev->b->read(dev->b->priv, BASE, no<<dev->b->macroblock_log,
-			dev->no_indexblocks<<dev->mesoblk_log);
+			dev->no_indexblocks<<dev->b->mesoblk_log);
 
 	// decrypt first mesoblock with seqno 0, and mesoblock number 0
 	// ciphertext is unique due to first block being a hash of the
@@ -275,8 +278,8 @@ void blockio_dev_read_header(blockio_dev_t *dev, uint32_t no) {
 
 	bi->seqno = binio_read_uint64_be(SEQNO); // read seqno, needed as iv
 	for (i = 1; i < dev->no_indexblocks; i++)
-		cipher_dec(dev->c, BASE + (i<<dev->mesoblk_log),
-				BASE + (i<<dev->mesoblk_log), bi->seqno, i);
+		cipher_dec(dev->c, BASE + (i<<dev->b->mesoblk_log),
+				BASE + (i<<dev->b->mesoblk_log), bi->seqno, i);
 
 	/* check magic0 = "SSS3v0.1" */
 	if (memcmp(magic0, MAGIC0, sizeof(magic0))) {
@@ -298,10 +301,10 @@ void blockio_dev_read_header(blockio_dev_t *dev, uint32_t no) {
 				dev->b->macroblock_log);
 
 	/* check the mesoblock log */
-	if (dev->mesoblk_log != binio_read_uint8(MESOBLOCK_LOG))
+	if (dev->b->mesoblk_log != binio_read_uint8(MESOBLOCK_LOG))
 		FATAL("mesoblock log doesn't agree (on disk %d, should be %d)",
 				binio_read_uint8(MESOBLOCK_LOG),
-				dev->mesoblk_log);
+				dev->b->mesoblk_log);
 
 	/* check the number of indexblocks */
 	if (dev->no_indexblocks != binio_read_uint32_be(NO_INDEXBLOCKS))
@@ -311,7 +314,7 @@ void blockio_dev_read_header(blockio_dev_t *dev, uint32_t no) {
 
 	/* check md5sum of index */
 	gcry_md_hash_buffer(GCRY_MD_MD5, md5, MAGIC0,
-			(dev->no_indexblocks<<dev->mesoblk_log) -
+			(dev->no_indexblocks<<dev->b->mesoblk_log) -
 			MAGIC0_OFFSET);
 	if (memcmp(INDEXBLOCK_HASH, md5, sizeof(md5))) {
 		DEBUG("md5sum of index block %d failed", no);
@@ -358,7 +361,7 @@ void blockio_dev_read_mesoblk_part(blockio_dev_t *dev, void *buf, uint32_t id,
 		uint32_t no, uint32_t offset, uint32_t len) {
 	assert(dev->b && dev->b->read && id < dev->b->no_macroblocks &&
 			no < dev->mmpm);
-	unsigned char mesoblk[1<<dev->mesoblk_log];
+	unsigned char mesoblk[1<<dev->b->mesoblk_log];
 
 	/* FIXME: do some caching */
 	blockio_dev_read_mesoblk(dev, mesoblk, id, no);
@@ -368,7 +371,7 @@ void blockio_dev_read_mesoblk_part(blockio_dev_t *dev, void *buf, uint32_t id,
 void blockio_dev_read_mesoblk(blockio_dev_t *dev,
 		void *buf, uint32_t id, uint32_t no) {
 	dev->b->read(dev->b->priv, buf, (id<<dev->b->macroblock_log) +
-			((no + dev->no_indexblocks)<<dev->mesoblk_log) +
+			((no + dev->no_indexblocks)<<dev->b->mesoblk_log) +
 			0, dev->mesoblk_size);
 	cipher_dec(dev->c, buf, buf, dev->b->blockio_infos[id].seqno,
 			no + dev->no_indexblocks);
@@ -378,14 +381,14 @@ int blockio_check_data_hash(blockio_info_t *bi) {
 	uint32_t id = bi - bi->dev->b->blockio_infos;
 	char md5[16];
 	bi->dev->b->read(bi->dev->b->priv, bi->dev->tmp_macroblock +
-			(bi->dev->no_indexblocks<<bi->dev->mesoblk_log),
+			(bi->dev->no_indexblocks<<bi->dev->b->mesoblk_log),
 			(id<<bi->dev->b->macroblock_log) +
-			(bi->dev->no_indexblocks<<bi->dev->mesoblk_log),
-			bi->dev->mmpm<<bi->dev->mesoblk_log);
+			(bi->dev->no_indexblocks<<bi->dev->b->mesoblk_log),
+			bi->dev->mmpm<<bi->dev->b->mesoblk_log);
 
 	gcry_md_hash_buffer(GCRY_MD_MD5, md5, bi->dev->tmp_macroblock +
-			(bi->dev->no_indexblocks<<bi->dev->mesoblk_log),
-			bi->dev->mmpm<<bi->dev->mesoblk_log);
+			(bi->dev->no_indexblocks<<bi->dev->b->mesoblk_log),
+			bi->dev->mmpm<<bi->dev->b->mesoblk_log);
 
 	if (memcmp(bi->data_hash, md5, sizeof(md5))) return 0;
 
@@ -406,7 +409,7 @@ void blockio_dev_write_macroblock(blockio_dev_t *dev, const void *data,
 	binio_write_uint64_be(MAGIC1, magic1);
 
 	/* write static data */
-	binio_write_uint8(MESOBLOCK_LOG, dev->mesoblk_log);
+	binio_write_uint8(MESOBLOCK_LOG, dev->b->mesoblk_log);
 	binio_write_uint8(MACROBLOCK_LOG, dev->b->macroblock_log);
 	binio_write_uint32_be(RESERVED, dev->reserved);
 	binio_write_uint32_be(NO_INDEXBLOCKS, dev->no_indexblocks);
@@ -426,18 +429,19 @@ void blockio_dev_write_macroblock(blockio_dev_t *dev, const void *data,
 	/* encrypt data */
 	for (i = 0; i < dev->mmpm; i++)
 		cipher_enc(dev->c, BASE +
-				((dev->no_indexblocks + i)<<dev->mesoblk_log),
-				data + (i<<dev->mesoblk_log), bi->seqno,
+				((dev->no_indexblocks + i)<<
+				 dev->b->mesoblk_log),
+				data + (i<<dev->b->mesoblk_log), bi->seqno,
 				i + dev->no_indexblocks);
 
 	/* calculate md5sum of data, store in index */
 	gcry_md_hash_buffer(GCRY_MD_MD5, DATABLOCKS_HASH,
-			BASE + (dev->no_indexblocks<<dev->mesoblk_log),
-			dev->mmpm<<dev->mesoblk_log);
+			BASE + (dev->no_indexblocks<<dev->b->mesoblk_log),
+			dev->mmpm<<dev->b->mesoblk_log);
 
 	/* calculate md5sum of indexblock */
 	gcry_md_hash_buffer(GCRY_MD_MD5, INDEXBLOCK_HASH, MAGIC0,
-			(dev->no_indexblocks<<dev->mesoblk_log) -
+			(dev->no_indexblocks<<dev->b->mesoblk_log) -
 			MAGIC0_OFFSET);
 
 	/* encrypt index, first block with IV 0, we never encrypt
@@ -446,8 +450,8 @@ void blockio_dev_write_macroblock(blockio_dev_t *dev, const void *data,
 	cipher_enc(dev->c, BASE, BASE, 0, 0);
 
 	for (i = 1; i < dev->no_indexblocks; i++)
-		cipher_dec(dev->c, BASE + (i<<dev->mesoblk_log),
-				BASE + (i<<dev->mesoblk_log), bi->seqno, i);
+		cipher_dec(dev->c, BASE + (i<<dev->b->mesoblk_log),
+				BASE + (i<<dev->b->mesoblk_log), bi->seqno, i);
 
 	dev->b->write(dev->b->priv, BASE, id<<dev->b->macroblock_log,
 			1<<dev->b->macroblock_log);

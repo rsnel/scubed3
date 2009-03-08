@@ -21,7 +21,6 @@
 #include <stdint.h>
 #include "bit.h"
 #include "dllist.h"
-#include "ext2.h"
 
 typedef enum scubed3_io_e {
 	SCUBED3_READ,
@@ -50,8 +49,6 @@ typedef struct scubed3_s {
 	 * bits encode the index of the mesoblock in the specified
 	 * macroblock, see the definitions of ID and NO below */
 	uint32_t *block_indices;
-
-	ext2_t *e2;
 } scubed3_t;
 
 int do_req(scubed3_t*, scubed3_io_t, uint64_t, size_t, char*);

@@ -38,6 +38,9 @@
 
 #define BUF_SIZE 1024
 
+#define PASSPHRASE_HASH GCRY_MD_SHA256
+#define DEFAULT_CIPHER_STRING "CBC_LARGE(AES256)"
+
 int do_command(int s, const char *format, ...) {
 	char buf[BUF_SIZE];
 	int ret = 0, buf_len = 0, start = 0, i, done = 0;
@@ -116,6 +119,8 @@ int main(int argc, char **argv) {
 	char *pw = NULL;
 	size_t pw_len;
 	struct sockaddr_un remote;
+	assert(PASSPHRASE_HASH == GCRY_MD_SHA256);
+	assert(!strcmp("CBC_LARGE(AES256)", DEFAULT_CIPHER_STRING));
 
 	verbose_init(argv[0]);
 
@@ -127,8 +132,9 @@ int main(int argc, char **argv) {
 	printf("Password: ");
 	if (my_getpass(&pw, &pw_len, stdin) == -1)
 		FATAL("unable to get password");
-	VERBOSE("password is \"%.*s\" with %u bytes", pw_len -1, pw, pw_len - 1);
-	gcry_md_hash_buffer(GCRY_MD_SHA256, key, pw, pw_len - 1);
+	VERBOSE("password is \"%.*s\" with %u bytes",
+			pw_len -1, pw, pw_len - 1);
+	gcry_md_hash_buffer(PASSPHRASE_HASH, key, pw, pw_len - 1);
 	for (i = 0; i < 32; i++) printf("%02x", key[i]);
 	printf("\n");
 
@@ -150,12 +156,14 @@ int main(int argc, char **argv) {
 	do {
 		line = readline("> ");
 
+		if (!line) exit(1);
+
 		if (!strcmp(line, "exit")) break;
 		if (!strcmp(line, "quit")) break;
 
-		if (line && *line) add_history(line);
-
 		do_command(s, "%s\n", line);
+
+		memset(line, 0, strlen(line));
 
 		free(line);
 	} while (1);

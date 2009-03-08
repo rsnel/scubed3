@@ -118,7 +118,8 @@ void cipher_dec(cipher_t *w, uint8_t *out,
 }
 
 void cipher_free(cipher_t *w) {
-	assert(w && w->spec && w->spec->free && w->ctx);
-	w->spec->free(w->ctx);
+	assert(w);
+	if (w->spec && w->spec->free && w->ctx)
+		w->spec->free(w->ctx);
 	gcry_cipher_close(w->hd);
 }

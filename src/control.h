@@ -20,6 +20,7 @@
 
 #include <fcntl.h>
 #include "scubed3.h"
+#include "blockio.h"
 #include "hashtbl.h"
 
 #define CONTROL_SOCKET "/tmp/scubed3"

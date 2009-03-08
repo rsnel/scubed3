@@ -263,8 +263,6 @@ void scubed3_init(scubed3_t *l, blockio_dev_t *dev) {
 	if (l->cur->seqno == 1) l->updated = 1;
 
 	DEBUG("next block is %u (seqno=%llu)", id(l->cur), l->cur->seqno);
-
-	l->e2 = ext2_init(l);
 }
 
 void blockio_dev_fake_mesoblk_part(blockio_dev_t *dev, void *addr,
@@ -353,12 +351,7 @@ int do_req(scubed3_t *l, scubed3_io_t cmd, uint64_t r_offset, size_t size,
 	uint32_t inmeso = r_offset%l->dev->mesoblk_size;
 	uint32_t ooff = 0, reqsz;
 	int (*action)(scubed3_t*, uint32_t, uint32_t, uint32_t, char*) =
-		do_read;
-
-	if (cmd == SCUBED3_WRITE) {
-		action = do_write;
-		if (l->e2) ext2_handler(l->e2, r_offset, size, buf);
-	}
+		(cmd == SCUBED3_WRITE)?do_write:do_read;
 
 	if (inmeso) {
 		if (inmeso + size <= l->dev->mesoblk_size) reqsz = size;

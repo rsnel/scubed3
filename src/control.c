@@ -115,15 +115,36 @@ typedef struct control_command {
 	char *usage;
 } control_command_t;
 
+	//if (control_write_line(s, "consists of %u macroblocks of %u bytes\n", priv->b->no_macroblocks, priv->b->macroblock_size)) return -1;
+	//if (control_write_line(s, "each macroblock has %d mesoblocks of %u bytes\n", 1<<(priv->b->macroblock_log - priv->b->mesoblk_log), 1<<priv->b->mesoblk_log)) return -1;
+
+typedef struct control_status_priv_s {
+	int s; /* socket */
+	uint32_t macroblocks_left;
+} control_status_priv_t;
+
 static int control_status(int s, control_thread_priv_t *priv, char *argv[]) {
-	return control_write_complete(s, 0, "no info available");
+	control_status_priv_t status_priv = {
+		.s = s,
+		.macroblocks_left = priv->b->no_macroblocks
+	};
+        int rep(control_status_priv_t *priv, fuse_io_entry_t *entry) {
+		priv->macroblocks_left -= entry->d.no_macroblocks;
+                return control_write_line(priv->s, "%07u blocks in %s\n", entry->d.no_macroblocks, entry->head.key);
+        }
+
+	if (control_write_status(s, 0)) return -1;
+
+	if (hashtbl_ts_traverse(priv->h, (int (*)(void*, hashtbl_elt_t*))rep, &status_priv)) return -1;
+
+	if (control_write_line(s, "%07u blocks unclaimed\n", status_priv.macroblocks_left)) return -1;
+	if (control_write_line(s, "%07u blocks total\n", priv->b->no_macroblocks)) return -1;
+	return control_write_terminate(s);
 }
 
 static int control_open_add_common(int s, control_thread_priv_t *priv, char *argv[]) {
 	fuse_io_entry_t *entry;
 	char *allocname;
-	VERBOSE("got request to open or add \"%s\", %s, %s", argv[0],
-			argv[1], argv[2]);
 
 	allocname = estrdup(argv[0]);
 	entry = hashtbl_allocate_and_add_element(priv->h,
@@ -151,10 +172,11 @@ static int control_open_add_common(int s, control_thread_priv_t *priv, char *arg
 		cipher_init(&entry->c, argv[1], 1024,
 				(unsigned char*)argv[2], key_len/2);
 		blockio_dev_init(&entry->d, priv->b, &entry->c, argv[0]);
-		scubed3_init(&entry->l, &entry->d);
-		entry->size = ((entry->l.dev->no_macroblocks-entry->
-					l.dev->reserved)*entry->l.dev->mmpm)
-			<<entry->l.dev->b->mesoblk_log;
+		entry->size = 0;
+		//scubed3_init(&entry->l, &entry->d);
+		//entry->size = ((entry->l.dev->no_macroblocks-entry->
+		//			l.dev->reserved)*entry->l.dev->mmpm)
+		//	<<entry->l.dev->b->mesoblk_log;
 	}
 	ecch_catch_all {
 		entry->to_be_deleted = 1;
@@ -197,38 +219,13 @@ static int control_close(int s, control_thread_priv_t *priv, char *argv[]) {
 	return control_write_complete(s, 0, "partition \"%s\" closed", argv[0]);
 }
 
-#if 0
-static int control_help(int s, control_thread_priv_t *priv, char *argv[]) {
-	control_command_t *cmnd = hashtbl_first_element(&priv->c);
-
-	if (control_write_status(s, 0)) return -1;
-
-	control_write_line(s, "list of all available commands:\n\n");
-
-	while (cmnd) {
-		if (control_write_line(s, "%s%s\n", cmnd->head.key, cmnd->usage)) return -1;
-		cmnd = hashtbl_next_element_byptr(&priv->c, cmnd);
-	}
-
-	return control_write_terminate(s);
-}
-#endif
-
 static control_command_t control_commands[] = {
 	{
-		.head.key = "status",
+		.head.key = "p",
 		.command = control_status,
 		.argc = 0,
 		.usage = ""
 	},
-#if 0
-	{
-		.head.key = "help",
-		.command = control_help,
-		.argc = 0,
-		.usage = ""
-	},
-#endif
 	{
 		.head.key = "open-internal",
 		.command = control_open,
@@ -291,9 +288,9 @@ void *control_thread(void *arg) {
 	struct sockaddr_un local, remote;
 
 	/* load all command descriptors in hash table */
-	hashtbl_init_default(&priv->c, 4, 0, 1, NULL);
+	hashtbl_init_default(&priv->c, -1, 4, 0, 1, NULL);
 	for (i = 0; i < NO_COMMANDS; i++) {
-		DEBUG("%d %s", i, control_commands[i].head.key);
+		//DEBUG("%d %s", i, control_commands[i].head.key);
 		if (hashtbl_add_element(&priv->c, &control_commands[i]) == NULL)
 			FATAL("duplicate command");
 	}

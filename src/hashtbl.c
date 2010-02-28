@@ -86,13 +86,15 @@ void hashtbl_free(hashtbl_t *h) {
 	free(h->buckets);
 }
 
-void hashtbl_init_default(hashtbl_t *h, int key_bits,
+void hashtbl_init_default(hashtbl_t *h, int key_size, int key_bits,
 		int thread_safe, int unique, void (*freer)(void*)) {
 	int i;
 	assert(h && key_bits >= 0 && key_bits <= 16);
 	assert(thread_safe == 0 || thread_safe == 1);
 	assert(unique == 0 || unique == 1);
+	if (key_size >= 0) assert(8*key_size >= key_bits && key_size < 128);
 
+	h->key_size = key_size;
 	h->key_bits = key_bits;
 	h->buckets = ecalloc(sizeof(hashtbl_bucket_t), NO_BUCKETS);
 
@@ -122,7 +124,9 @@ static uint32_t hash_sdbm(const unsigned char *str) {
 
 /* comparison functions: key, pointer and 'always true' */
 static int compare_key(hashtbl_t *h, const void *key, hashtbl_elt_t *elt) {
-	if (!strcmp(key, elt->key)) return 1;
+	assert(h->key_size != 0);
+	if (h->key_size < 0 && !strcmp(key, elt->key)) return 1;
+	if (h->key_size > 0 && !memcmp(key, elt->key, h->key_size)) return 1;
 	return 0;
 }
 
@@ -137,8 +141,11 @@ static int compare_true(hashtbl_t *h, const void *ptr, hashtbl_elt_t *elt) {
 
 /* calculate bucket number belonging to key */
 static uint32_t get_bucket(hashtbl_t *h, const void *key) {
-	uint32_t bucket;
-	bucket = hash_sdbm(key);
+	uint32_t bucket = 0;
+
+	if (h->key_size < 0) bucket = hash_sdbm(key);
+	else memcpy(&bucket, key, (h->key_size>4)?4:h->key_size);
+
 	bucket &= 0xffffffff>>(32-h->key_bits);
 	//VERBOSE("using bucket %d", bucket);
 
@@ -405,7 +412,7 @@ int hashtbl_get_count(hashtbl_t *h) {
 	return count;
 }
 
-void hashtbl_ts_traverse(hashtbl_t *ht, int (*rep)(void*, hashtbl_elt_t*),
+int hashtbl_ts_traverse(hashtbl_t *ht, int (*rep)(void*, hashtbl_elt_t*),
 		void *arg) {
 	hashtbl_elt_t *elt = NULL;
 
@@ -415,11 +422,12 @@ void hashtbl_ts_traverse(hashtbl_t *ht, int (*rep)(void*, hashtbl_elt_t*),
 	while (elt) {
 		if (rep(arg, elt) == -1) {
 			hashtbl_unlock_element_byptr(elt);
-			return;
+			return -1;
 		}
 		elt = hashtbl_next_element_byptr(ht, elt);
 	}
 
 	pthread_cleanup_pop(0);
+	return 0;
 }
 

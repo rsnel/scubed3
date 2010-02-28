@@ -15,25 +15,14 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
-/* This is an attempt of partially implementing ABL(-32-AES) from
- * http://grouper.ieee.org/groups/1619/email/rtf00000.rtf (October 28, 2004)
- * http://grouper.ieee.org/groups/1619/email/pdf00005.pdf (April 15, 2004).
- * Three remarks about the spec:
- * - the order of the letters A, B, C, D, E and F in the decryption equations
- *   is a bit confusing, this decryption routine is correct (at least it can
- *   decrypt() output from the encrypt()...)
- * - the GHASH definition in the October 28 2004 draft differs from the one
- *   in the GCM revised specification and the April 15 2004 draft of ABL while
- *   the latter two agree on the definition of GHASH. See the comment below.
- * - the two drafts disagree on the order of the data and associated data in
- *   GPRF/GHASH, I chose the former convention for now.
- */
 #include <assert.h>
+#include "verbose.h"
 #include "cipher.h"
 #include "gcry.h"
 
 static void *null_init(gcry_cipher_hd_t hd, size_t no_blocks) {
 	assert(no_blocks > 0);
+	WARNING("the NULL cipher mode should only be used for testing");
 	return (void*)no_blocks;
 }
 

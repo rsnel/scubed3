@@ -26,7 +26,6 @@
 
 typedef struct fuse_io_entry_s {
         hashtbl_elt_t head;
-        char *name;
 
         uint64_t size;
         int inuse;
@@ -35,6 +34,11 @@ typedef struct fuse_io_entry_s {
 	blockio_dev_t d;
         scubed3_t l;
 } fuse_io_entry_t;
+
+typedef struct fuse_io_id_s {
+        hashtbl_elt_t head;
+	char *name;
+} fuse_io_id_t;
 
 int fuse_io_start(int, char**, blockio_t*);
 

@@ -31,7 +31,7 @@
 #include "fuse_io.h"
 
 typedef struct fuse_io_priv_s {
-	hashtbl_t entries;
+	hashtbl_t entries, ids;
 	pthread_t control_thread;
 	control_thread_priv_t control_thread_priv;
 } fuse_io_priv_t;
@@ -74,7 +74,7 @@ static int fuse_io_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 		.buf = buf
 	};
 	int rep(fuse_io_readdir_priv_t *priv, fuse_io_entry_t *entry) {
-		priv->filler(priv->buf, entry->name, NULL, 0);
+		priv->filler(priv->buf, entry->head.key, NULL, 0);
 		return 0;
 	}
 	if (strcmp(path, "/") != 0) return -ENOENT;
@@ -193,19 +193,26 @@ static struct fuse_operations fuse_io_operations = {
 };
 
 static void freer(fuse_io_entry_t *entry) {
-	free(entry->name);
+	free(entry->head.key);
 	scubed3_free(&entry->l);
 	blockio_dev_free(&entry->d);
 	cipher_free(&entry->c);
 	free(entry);
 }
 
+static void freer2(fuse_io_id_t *id) {
+	free(id->head.key);
+	free(id->name);
+}
+
 int fuse_io_start(int argc, char **argv, blockio_t *b) {
 	int ret;
 	fuse_io_priv_t priv;
 	//fuse_io_entry_t *entry;
-	hashtbl_init_default(&priv.entries, 4, 1, 1,
+	hashtbl_init_default(&priv.entries, -1, 4, 1, 1,
 			(void (*)(void*))freer);
+	hashtbl_init_default(&priv.ids, 32, 4, 1, 1,
+			(void (*)(void*))freer2);
 
 	priv.control_thread_priv.b = b;
 #if 0

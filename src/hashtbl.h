@@ -36,6 +36,10 @@ typedef struct hashtbl_bucket_s {
 
 typedef struct hashtbl_s {
 	hashtbl_bucket_t *buckets;
+	signed key_size :8; /* if positive, it represents the size of 
+			       the key in bytes if zero it signifies 
+			       there is no key, if negative it means 
+			       the key is an ASCIIZ string */
 	unsigned key_bits :5; /* number of key bits that are
 				 used for bucket selection */
 	unsigned unique :1;
@@ -53,7 +57,7 @@ void hashtbl_free(hashtbl_t*);
 
 void hashtbl_empty(hashtbl_t*);
 
-void hashtbl_init_default(hashtbl_t*, int, int, int, void (*)(void*));
+void hashtbl_init_default(hashtbl_t*, int, int, int, int, void (*)(void*));
 
 void *hashtbl_add_element(hashtbl_t*, void*);
 
@@ -65,8 +69,6 @@ void hashtbl_delete_element_bykey(hashtbl_t*, void*);
 
 void *hashtbl_first_element(hashtbl_t*);
 
-void *hashtbl_first_element_ge(hashtbl_t*, void*);
-
 void *hashtbl_next_element_byptr(hashtbl_t*, void*);
 
 void hashtbl_unlock_element_byptr(void*);
@@ -77,7 +79,7 @@ int hashtbl_get_count(hashtbl_t*);
 
 void hashtbl_verbose(hashtbl_t*);
 
-void hashtbl_ts_traverse(hashtbl_t*, int (*)(void*, hashtbl_elt_t*), void*);
+int hashtbl_ts_traverse(hashtbl_t*, int (*)(void*, hashtbl_elt_t*), void*);
 
 void hashtbl_elementp_free(hashtbl_elt_t**);
 

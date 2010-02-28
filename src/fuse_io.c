@@ -176,6 +176,7 @@ void fuse_io_destroy(void *arg) {
 	VERBOSE("destroy called");
 	pthread_cancel(priv->control_thread);
 	pthread_join(priv->control_thread, NULL);
+	hashtbl_free(&priv->control_thread_priv.c);
 }
 
 static struct fuse_operations fuse_io_operations = {
@@ -203,7 +204,7 @@ int fuse_io_start(int argc, char **argv, blockio_t *b) {
 	int ret;
 	fuse_io_priv_t priv;
 	//fuse_io_entry_t *entry;
-	hashtbl_init_default(&priv.entries, 4, -1, 1, 1,
+	hashtbl_init_default(&priv.entries, 4, 1, 1,
 			(void (*)(void*))freer);
 
 	priv.control_thread_priv.b = b;

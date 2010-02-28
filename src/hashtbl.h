@@ -25,7 +25,7 @@ typedef struct hashtbl_elt_s {
 	struct hashtbl_elt_s *next;
 	pthread_mutex_t ptr_mutex;
 	pthread_mutex_t data_mutex;
-	char data[];
+	char *key;
 } hashtbl_elt_t;
 
 typedef struct hashtbl_bucket_s {
@@ -36,10 +36,6 @@ typedef struct hashtbl_bucket_s {
 
 typedef struct hashtbl_s {
 	hashtbl_bucket_t *buckets;
-	signed key_size :8; /* if positive, it represents the size of
-			       the key in bytes if zero it signifies
-			       there is no key, if negative it means
-			       the key is an ASCIIZ string */
 	unsigned key_bits :5; /* number of key bits that are
 				 used for bucket selection */
 	unsigned unique :1;
@@ -57,7 +53,7 @@ void hashtbl_free(hashtbl_t*);
 
 void hashtbl_empty(hashtbl_t*);
 
-void hashtbl_init_default(hashtbl_t*, int, int, int, int, void (*)(void*));
+void hashtbl_init_default(hashtbl_t*, int, int, int, void (*)(void*));
 
 void *hashtbl_add_element(hashtbl_t*, void*);
 

@@ -53,60 +53,86 @@ int control_write_string(int s, const char *string, ssize_t len) {
 	return 0;
 }
 
-int control_write_complete(int s, int err, const char *format, ...) {
-	char *string;
-	//ssize_t sent = 0, len, n;
-	ssize_t len;
-	va_list ap;
-
+int control_write_status(int s, int err) {
 	if (!err) {
 		if (control_write_string(s, "OK\n", 3)) return -1;
 	} else {
 		if (control_write_string(s, "ERR\n", 4)) return -1;
 	}
 
-	va_start(ap, format);
+	return 0;
+}
+
+int control_vwrite_line(int s, const char *format, va_list ap) {
+	int ret, len;
+	char *string;
 	if ((len = vasprintf(&string, format, ap)) == -1) {
 		ERROR("vasprintf: %s", strerror(errno));
 		return -1;
 	}
-	va_end(ap);
 
-	//VERBOSE("->%s<-", string);
-
-	if (control_write_string(s, string, len)) {
-		free(string);
-		return -1;
-	}
+	ret = control_write_string(s, string, len);
 
 	free(string);
+
+	return ret;
+}
+
+int control_write_line(int s, const char *format, ...) {
+	int ret;
+	va_list ap;
+
+	va_start(ap, format);
+	ret = control_vwrite_line(s, format, ap);
+	va_end(ap);
+
+	return ret;
+}
+
+int control_write_terminate(s) {
+	return control_write_string(s, ".\n", 2);
+}
+
+int control_write_complete(int s, int err, const char *format, ...) {
+	va_list ap;
+	int ret;
+
+	if (control_write_status(s, err)) return -1;
+
+	va_start(ap, format);
+	ret = control_vwrite_line(s, format, ap);
+	va_end(ap);
+
+	if (ret) return -1;
 
 	return control_write_string(s, "\n.\n", 3);
 }
 
-int control_status(int s, control_thread_priv_t *priv) {
+typedef struct control_command {
+	hashtbl_elt_t head;
+	int (*command)(int, control_thread_priv_t*, char**);
+	int argc;
+	char *usage;
+} control_command_t;
+
+static int control_status(int s, control_thread_priv_t *priv, char *argv[]) {
 	return control_write_complete(s, 0, "no info available");
 }
 
-void some_bullshit() {
-	ecch_throw(ECCH_DEFAULT, "some error");
-}
-
-int control_open(int s, control_thread_priv_t *priv, char *name,
-		char *cipher_spec, char *key) {
+static int control_open_add_common(int s, control_thread_priv_t *priv, char *argv[]) {
 	fuse_io_entry_t *entry;
 	char *allocname;
-	VERBOSE("got request to open \"%s\", %s, %s", name,
-			cipher_spec, key);
+	VERBOSE("got request to open or add \"%s\", %s, %s", argv[0],
+			argv[1], argv[2]);
 
-	allocname = estrdup(name);
+	allocname = estrdup(argv[0]);
 	entry = hashtbl_allocate_and_add_element(priv->h,
 			allocname, sizeof(*entry));
 
 	if (!entry) {
 		free(allocname);
 		return control_write_complete(s, 1,
-				"unable to add partition \"%s\"", name);
+				"unable to add partition \"%s\"", argv[0]);
 	}
 
 	entry->to_be_deleted = 0;
@@ -115,16 +141,16 @@ int control_open(int s, control_thread_priv_t *priv, char *name,
 	ecch_try {
 		/* if any of this fails, we cannot add the partition */
 		size_t key_len;
-		key_len = strlen(key);
+		key_len = strlen(argv[2]);
 		if (key_len%2) ecch_throw(ECCH_DEFAULT, "cipher key not valid "
 				"base16 (uneven number of chars)");
 
-		if (unbase16(key, key_len)) ecch_throw(ECCH_DEFAULT, "cipher "
+		if (unbase16(argv[2], key_len)) ecch_throw(ECCH_DEFAULT, "cipher "
 				"key not valid base16 (invalid chars)");
 
-		cipher_init(&entry->c, cipher_spec, 1024,
-				(unsigned char*)key, key_len/2);
-		blockio_dev_init(&entry->d, priv->b, &entry->c, name);
+		cipher_init(&entry->c, argv[1], 1024,
+				(unsigned char*)argv[2], key_len/2);
+		blockio_dev_init(&entry->d, priv->b, &entry->c, argv[0]);
 		scubed3_init(&entry->l, &entry->d);
 		entry->size = ((entry->l.dev->no_macroblocks-entry->
 					l.dev->reserved)*entry->l.dev->mmpm)
@@ -141,18 +167,26 @@ int control_open(int s, control_thread_priv_t *priv, char *name,
 
 	hashtbl_unlock_element_byptr(entry);
 
-	return control_write_complete(s, 0, "partition \"%s\" added", name);
+	return control_write_complete(s, 0, "partition \"%s\" added", argv[0]);
 }
 
-int control_close(int s, control_thread_priv_t *priv, char *name) {
-	fuse_io_entry_t *entry = hashtbl_find_element_bykey(priv->h, name);
+static int control_open(int s, control_thread_priv_t *priv, char *argv[]) {
+	return control_open_add_common(s, priv, argv);
+}
+
+static int control_add(int s, control_thread_priv_t *priv, char *argv[]) {
+	return control_open_add_common(s, priv, argv);
+}
+
+static int control_close(int s, control_thread_priv_t *priv, char *argv[]) {
+	fuse_io_entry_t *entry = hashtbl_find_element_bykey(priv->h, argv[0]);
 	if (!entry) return control_write_complete(s, 1,
-			"partition \"%s\" not found", name);
+			"partition \"%s\" not found", argv[0]);
 
 	if (entry->inuse) {
 		hashtbl_unlock_element_byptr(entry);
 		return control_write_complete(s, 1,
-				"partition \"%s\" is busy", name);
+				"partition \"%s\" is busy", argv[0]);
 	}
 
 	entry->to_be_deleted = 1;
@@ -160,17 +194,68 @@ int control_close(int s, control_thread_priv_t *priv, char *name) {
 
 	hashtbl_delete_element_byptr(priv->h, entry);
 
-	return control_write_complete(s, 0, "partition \"%s\" closed", name);
+	return control_write_complete(s, 0, "partition \"%s\" closed", argv[0]);
 }
 
+#if 0
+static int control_help(int s, control_thread_priv_t *priv, char *argv[]) {
+	control_command_t *cmnd = hashtbl_first_element(&priv->c);
+
+	if (control_write_status(s, 0)) return -1;
+
+	control_write_line(s, "list of all available commands:\n\n");
+
+	while (cmnd) {
+		if (control_write_line(s, "%s%s\n", cmnd->head.key, cmnd->usage)) return -1;
+		cmnd = hashtbl_next_element_byptr(&priv->c, cmnd);
+	}
+
+	return control_write_terminate(s);
+}
+#endif
+
+static control_command_t control_commands[] = {
+	{
+		.head.key = "status",
+		.command = control_status,
+		.argc = 0,
+		.usage = ""
+	},
+#if 0
+	{
+		.head.key = "help",
+		.command = control_help,
+		.argc = 0,
+		.usage = ""
+	},
+#endif
+	{
+		.head.key = "open-internal",
+		.command = control_open,
+		.argc = 3,
+		.usage = " NAME CIPHER_SPEC KEY"
+	},
+	{
+		.head.key = "add-internal",
+		.command = control_add,
+		.argc = 3,
+		.usage = " NAME CIPHER_SPEC KEY"
+	},
+	{
+		.head.key = "close",
+		.command = control_close,
+		.argc = 1,
+		.usage = " NAME"
+	}
+};
+
+#define NO_COMMANDS (sizeof(control_commands)/sizeof(control_commands[0]))
+
 int control_call(int s, control_thread_priv_t *priv, char *command) {
-	int argc = 0, len;
+	int argc = 0;
 	char *argv[MAX_ARGC+1];
-
+	control_command_t *cmnd;
 	argv[argc] = command;
-	len = strlen(command);
-
-	//VERBOSE("recv: %s", command);
 
 	do {
 		while (*argv[argc] == ' ') argv[argc]++;
@@ -188,25 +273,30 @@ int control_call(int s, control_thread_priv_t *priv, char *command) {
 
 	} while (*argv[argc] != '\0');
 
-	if (!strcmp(argv[0],"status") && argc == 1)
-		return control_status(s, priv);
-	if (!strcmp(argv[0], "close") && argc == 2)
-		return control_close(s, priv, argv[1]);
-	if (!strcmp(argv[0], "open") && argc == 4)
-		return control_open(s, priv, argv[1], argv[2], argv[3]);
-	else return control_write_complete(s, 1, "unknown command \"%s\" or "
-			"wrong number of arguments", argv[0]);
+	if (!(cmnd = hashtbl_find_element_bykey(&priv->c, argv[0])))
+		return control_write_complete(s, 1, "unknown command \"%s\"", argv[0]);
 
-	memset(command, 0, len);
+	if (argc - 1 != cmnd->argc) 
+		return control_write_complete(s, 1, "usage: %s%s", argv[0], cmnd->usage);
+
+	return (*cmnd->command)(s, priv, argv + 1);
 }
 
 void *control_thread(void *arg) {
 	control_thread_priv_t *priv = arg;
-	int s, s2;
+	int s, s2, i;
 	socklen_t t, len;
 	char buf[BUF_SIZE];
 	int buf_len = 0;
 	struct sockaddr_un local, remote;
+
+	/* load all command descriptors in hash table */
+	hashtbl_init_default(&priv->c, 4, 0, 1, NULL);
+	for (i = 0; i < NO_COMMANDS; i++) {
+		DEBUG("%d %s", i, control_commands[i].head.key);
+		if (hashtbl_add_element(&priv->c, &control_commands[i]) == NULL)
+			FATAL("duplicate command");
+	}
 
 	if ((s = socket(AF_UNIX, SOCK_STREAM, 0)) == -1)
 		FATAL("socket: %s", strerror(errno));
@@ -225,7 +315,7 @@ void *control_thread(void *arg) {
 		FATAL("listen: %s", strerror(errno));
 
 	while (1) {
-		int n, i, start, done = 0;
+		int n, i, start, done = 0, ret;
 		VERBOSE("waiting for connection on " CONTROL_SOCKET);
 		t = sizeof(remote);
 		if ((s2 = accept(s, (struct sockaddr*)&remote, &t)) == -1)
@@ -247,11 +337,16 @@ void *control_thread(void *arg) {
 			for (i = buf_len; i < buf_len + n; i++) {
 				if (buf[i] == '\n') {
 					buf[i] = '\0';
-					if (control_call(s2, priv, start + buf))
-					{
+					ret = control_call(s2, priv, buf + start);
+
+					/* clear command from memory */
+					memset(buf + start, 0, i);
+
+					if (ret) {
 						done = 1;
 						break;
 					}
+
 					start = i + 1;
 				}
 			}

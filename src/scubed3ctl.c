@@ -37,17 +37,20 @@
 #include "gcry.h"
 
 #define BUF_SIZE 1024
+#define CONV_SIZE 512
 
 #define PASSPHRASE_HASH GCRY_MD_SHA256
 #define DEFAULT_CIPHER_STRING "CBC_LARGE(AES256)"
+#define KEY_LENGTH	32
 
-int do_command(int s, const char *format, ...) {
+int do_command(int s, char *format, ...) {
 	char buf[BUF_SIZE];
 	int ret = 0, buf_len = 0, start = 0, i, done = 0;
-	char *string;
+	//char *string;
 	ssize_t sent = 0, len, n;
-	va_list ap;
+	//va_list ap;
 
+#if 0
 	va_start(ap, format);
 	if ((len = vasprintf(&string, format, ap)) == -1)
 		FATAL("vasprintf: %s", strerror(errno));
@@ -60,6 +63,21 @@ int do_command(int s, const char *format, ...) {
 	} while (sent < len);
 
 	free(string);
+#endif
+	len = strlen(format);
+	//VERBOSE("->%s<-, len=%d", format, len);
+	format[len] = '\n';
+	len++;
+
+	do {
+		n = send(s, format + sent, len - sent, 0);
+		if (n == 0) FATAL("send: connection reset by peer");
+		if (n < 0) FATAL("send: %s", strerror(errno));
+		sent += n;
+	} while (sent < len);
+
+	len--;
+	format[len] = '\0';
 
 	do {
 		if (buf_len == BUF_SIZE) FATAL("response too long");
@@ -107,17 +125,18 @@ int my_getpass(char **lineptr, size_t *n, FILE *stream) {
 	/* Restore terminal. */
 	(void) tcsetattr (fileno (stream), TCSAFLUSH, &old);
 
+	printf("\n");
+
 	return 0;
 }
+
+#define MAX_ARGC 10
 
 int main(int argc, char **argv) {
 	int s;
 	socklen_t len;
 	int i;
-	char *line;
-	unsigned char key[32];
-	char *pw = NULL;
-	size_t pw_len;
+	char *line = NULL;
 	struct sockaddr_un remote;
 	assert(PASSPHRASE_HASH == GCRY_MD_SHA256);
 	assert(!strcmp("CBC_LARGE(AES256)", DEFAULT_CIPHER_STRING));
@@ -129,6 +148,7 @@ int main(int argc, char **argv) {
 		WARNING("failed locking process in RAM (not root?): %s",
 				strerror(errno));
 
+#if 0
 	printf("Password: ");
 	if (my_getpass(&pw, &pw_len, stdin) == -1)
 		FATAL("unable to get password");
@@ -137,7 +157,7 @@ int main(int argc, char **argv) {
 	gcry_md_hash_buffer(PASSPHRASE_HASH, key, pw, pw_len - 1);
 	for (i = 0; i < 32; i++) printf("%02x", key[i]);
 	printf("\n");
-
+#endif
 	gcry_global_init();
 
 	if ((s = socket(AF_UNIX, SOCK_STREAM, 0)) == -1)
@@ -154,18 +174,97 @@ int main(int argc, char **argv) {
 	printf("scubed3ctl-" VERSION ", connected to scubed3\n");
 
 	do {
+		if (line) free(line);
 		line = readline("> ");
 
-		if (!line) exit(1);
+		if (!line) {
+			printf("\nEOF\n");
+			exit(1);
+		}
 
-		if (!strcmp(line, "exit")) break;
-		if (!strcmp(line, "quit")) break;
+		if (!strcmp(line, "exit") || !strcmp(line, "quit") ||
+				!strcmp(line, "q") || !strcmp(line, "x")) break;
+		else if (!strcmp(line, "help")) {
+			printf("convenience functions:\n\n");
+			printf("exit,x,quit,q\n");
+			printf("add NAME (asks twice for passphrase, expects 0 allocated blocks)\n");
+			printf("open NAME (asks once for passphrase, expects >0 allocated blocks)\n");
+			printf("\n");
+		} else if (!strncmp(line, "add ", 4) || !strncmp(line, "open ", 5)) {
+			/* tokenize, and build custom command */
+			int argc = 0;
+			char *argv[MAX_ARGC+1];
+			char conv[CONV_SIZE], *convp = conv;
+			unsigned char key[KEY_LENGTH];
+			char *pw = NULL, *pw2 = NULL;
+			size_t pw_len, pw2_len;
 
-		do_command(s, "%s\n", line);
+			argv[argc] = line; 
+			
+			do {
+				while (*argv[argc] == ' ') argv[argc]++;
 
-		memset(line, 0, strlen(line));
+				argc++;
 
-		free(line);
+				if (argc > MAX_ARGC) {
+					printf("too many arguments\n");
+					continue;
+				}
+
+                		argv[argc] = argv[argc-1];
+
+                		while (*argv[argc] != '\0' && *argv[argc] != ' ') argv[argc]++;
+
+                		if (*argv[argc] == ' ') *argv[argc]++ = '\0';
+
+			} while (*argv[argc] != '\0');
+
+			if (argc != 2) {
+				printf("wrong number of arguments\n");
+				continue;
+			}
+
+			convp += snprintf(convp, CONV_SIZE, "%s-internal %s " DEFAULT_CIPHER_STRING " ", argv[0], argv[1]);
+			if (convp > conv + CONV_SIZE - 2*KEY_LENGTH - 1) {
+				printf("large buffer not large enough\n");
+				continue;
+			}
+
+			printf("Enter passphrase: ");
+			if (my_getpass(&pw, &pw_len, stdin) == -1)
+				FATAL("unable to get password");
+			if (!strcmp(argv[0], "add")) {
+				printf("Verify passphrase: ");
+				if (my_getpass(&pw2, &pw2_len, stdin) == -1) {
+					memset(pw, 0, pw_len);
+					free(pw);
+					FATAL("unable to get password for verification");
+				}
+				if (pw_len != pw2_len || strcmp(pw, pw2)) {
+					memset(pw, 0, pw_len);
+					memset(pw2, 0, pw2_len);
+					free(pw);
+					free(pw2);
+					printf("passphrases do not match\n");
+					continue;
+				}
+				memset(pw2, 0, pw2_len);
+				free(pw2);
+			}
+			
+			gcry_md_hash_buffer(PASSPHRASE_HASH, key, pw, pw_len - 1);
+			for (i = 0; i < 32; i++) convp += sprintf(convp, "%02x", key[i]);
+			memset(pw, 0, pw_len);
+			free(pw);
+			
+			do_command(s, conv);
+			memset(conv, 0, sizeof(conv));
+
+		} else {
+			do_command(s, line);
+			memset(line, 0, strlen(line));
+		}
+
 	} while (1);
 
 	free(line);

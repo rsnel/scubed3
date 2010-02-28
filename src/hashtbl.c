@@ -86,13 +86,12 @@ void hashtbl_free(hashtbl_t *h) {
 	free(h->buckets);
 }
 
-void hashtbl_init_default(hashtbl_t *h, int key_bits, int key_size,
+void hashtbl_init_default(hashtbl_t *h, int key_bits,
 		int thread_safe, int unique, void (*freer)(void*)) {
 	int i;
 	assert(h && key_bits >= 0 && key_bits <= 16);
 	assert(thread_safe == 0 || thread_safe == 1);
 	assert(unique == 0 || unique == 1);
-	if (key_size >= 0) assert(8*key_size >= key_bits && key_size < 128);
 
 	h->key_bits = key_bits;
 	h->buckets = ecalloc(sizeof(hashtbl_bucket_t), NO_BUCKETS);
@@ -108,7 +107,6 @@ void hashtbl_init_default(hashtbl_t *h, int key_bits, int key_size,
 	}
 
 	h->freer = freer;
-	h->key_size = key_size;
 	h->count = 0;
 }
 
@@ -124,25 +122,8 @@ static uint32_t hash_sdbm(const unsigned char *str) {
 
 /* comparison functions: key, pointer and 'always true' */
 static int compare_key(hashtbl_t *h, const void *key, hashtbl_elt_t *elt) {
-	assert(h->key_size != 0);
-	if (h->key_size < 0 && !strcmp(key, *(char**)elt->data)) return 1;
-	if (!memcmp(key, &elt->data, h->key_size)) return 1;
+	if (!strcmp(key, elt->key)) return 1;
 	return 0;
-}
-
-static int compare_key_ge(hashtbl_t *h, const void *key, hashtbl_elt_t *elt) {
-	assert(h->key_size > 0);
-	const unsigned char *key_ref = key;
-	const unsigned char *key_elt = (unsigned char*)&elt->data;
-	int i = 0;
-
-	while (i < h->key_size) {
-		if (key_ref[i] < key_elt[i]) return 1;
-		if (key_ref[i] > key_elt[i]) return 0;
-		i++;
-	}
-	/* equal */
-	return 1;
 }
 
 static int compare_ptr(hashtbl_t *h, const void *ptr, hashtbl_elt_t *elt) {
@@ -157,9 +138,7 @@ static int compare_true(hashtbl_t *h, const void *ptr, hashtbl_elt_t *elt) {
 /* calculate bucket number belonging to key */
 static uint32_t get_bucket(hashtbl_t *h, const void *key) {
 	uint32_t bucket;
-	if (h->key_size == 0) return 0;
-	if (h->key_size < 0) bucket = hash_sdbm(key);
-	else memcpy(&bucket, key, (h->key_size>4)?4:h->key_size);
+	bucket = hash_sdbm(key);
 	bucket &= 0xffffffff>>(32-h->key_bits);
 	//VERBOSE("using bucket %d", bucket);
 
@@ -287,18 +266,11 @@ static void hashtbl_delete_element_from_bucket(hashtbl_t *h,
 }
 
 static int unique_key(hashtbl_t *h, hashtbl_elt_t *elt, uint32_t bucket) {
-	assert(h->key_size != 0);
 	hashtbl_elt_t *elt2;
 	int ret = 0;
 
-	if (h->key_size < 0)
-		elt2 = hashtbl_find_element_in_bucket(h,
-				*(char**)elt->data,
+	elt2 = hashtbl_find_element_in_bucket(h, elt->key,
 				bucket, compare_key);
-	else if (h->key_size > 0)
-		elt2 = hashtbl_find_element_in_bucket(h, elt->data,
-				bucket, compare_key);
-	else assert(0); /* impossible */
 	if (elt2) {
 		if (TS) hashtbl_unlock_element_byptr(elt2);
 	} else ret = 1;
@@ -315,8 +287,7 @@ void *hashtbl_add_element(hashtbl_t *h, void *raw) {
 	hashtbl_elt_t *elt = raw;
 	assert(elt);
 
-	if (h->key_size < 0) bucket = get_bucket(h, *(char**)elt->data);
-	else bucket = get_bucket(h, elt->data);
+	bucket = get_bucket(h, elt->key);
 
 	if (TS) pthd_mutex_lock(&h->count_mutex);
 	pthread_cleanup_push((void (*)(void*))hashtbl_count_unlock, h);
@@ -324,7 +295,7 @@ void *hashtbl_add_element(hashtbl_t *h, void *raw) {
 	pthread_cleanup_pop(1);
 	if (TS && UNIQ) pthd_mutex_lock(&h->buckets[bucket].uniq_mutex);
 
-	if (h->key_size && UNIQ && !unique_key(h, elt, bucket)) {
+	if (UNIQ && !unique_key(h, elt, bucket)) {
 		if (TS) {
 			if (UNIQ) pthd_mutex_unlock(
 					&h->buckets[bucket].uniq_mutex);
@@ -354,16 +325,9 @@ void *hashtbl_add_element(hashtbl_t *h, void *raw) {
 
 void *hashtbl_allocate_and_add_element(hashtbl_t *h, void *key, int size) {
 	hashtbl_elt_t *elt = NULL;
-	//VERBOSE("h->key_size=%d, sizeof(*elt)=%d, size=%d",
-	//		h->key_size, sizeof(*elt), size);
-	assert((h->key_size == 0 && size >= sizeof(*elt)) || \
-			(h->key_size < 0 && \
-			 size >= sizeof(*elt) + sizeof(char*)) || \
-			(h->key_size > 0 && \
-			 size >= sizeof(*elt) + h->key_size));
+	assert(size >= sizeof(*elt));
 	elt = ecalloc(1, size);
-	if (h->key_size < 0) *(char**)elt->data = key;
-	else if (h->key_size > 0) memcpy(elt->data, key, h->key_size);
+	elt->key = key;
 
 	return hashtbl_add_element(h, elt);
 }
@@ -373,47 +337,18 @@ void *hashtbl_find_element_bykey(hashtbl_t *h, const void *key) {
 			compare_key);
 }
 
-#if 0
 void hashtbl_delete_element_bykey(hashtbl_t *h, void *key) {
 	hashtbl_delete_element_from_bucket(h, key, get_bucket(h, key),
 			compare_key);
 }
-#endif
 
 void hashtbl_delete_element_byptr(hashtbl_t *h, void *elt) {
-	hashtbl_elt_t **eltp;
-	pthread_mutex_t *last;
-
-	if (h->key_size != 0) {
-		hashtbl_delete_element_from_bucket(h, elt,
-				get_bucket(h, *(char**)(((hashtbl_elt_t*)elt)
-						->data)), compare_ptr);
-		return;
-	}
-
-	VERBOSE("err! %d", h->key_size);
-	//DEBUG("looking for %p", elt);
-	eltp = hashtbl_find_elementp_from_bucket(h, elt,
-			&last, 0, compare_ptr);
-	//DEBUG("found %p %p", elt, *eltp);
-	if (!eltp) // element not found?
-		return;
-
-	if (TS) pthd_mutex_lock(&h->count_mutex);
-	h->count--;
-	assert(h->count >= 0);
-	if (TS) pthd_mutex_unlock(&h->count_mutex);
-
-	//DEBUG("now deleting");
-	hashtbl_delete_element(h, eltp, &last);
+	hashtbl_delete_element_from_bucket(h, elt,
+			get_bucket(h, ((hashtbl_elt_t*)elt)->key), compare_ptr);
 }
 
 void *hashtbl_first_element(hashtbl_t *h) {
 	return hashtbl_find_element_from_bucket(h, NULL, 0, compare_true);
-}
-
-void *hashtbl_first_element_ge(hashtbl_t *h, void *key) {
-	return hashtbl_find_element_from_bucket(h, key, get_bucket(h, key), compare_key_ge);
 }
 
 void hashtbl_unlock_element_byptr(void *elt) {
@@ -421,7 +356,7 @@ void hashtbl_unlock_element_byptr(void *elt) {
 	pthd_mutex_unlock(&((hashtbl_elt_t*)elt)->data_mutex);
 }
 
-void hashtbl_unlock_elementp(hashtbl_elt_t** elt) {
+static void hashtbl_unlock_elementp(hashtbl_elt_t** elt) {
 	assert(elt);
 	hashtbl_unlock_element_byptr(*elt);
 }
@@ -449,8 +384,7 @@ void *hashtbl_next_element_byptr(hashtbl_t *h, void *prev) {
 	hashtbl_elt_t *elt = prev;
 	assert(elt);
 
-	if (h->key_size < 0) bucket = get_bucket(h, *(char**)elt->data);
-	else bucket = get_bucket(h, elt->data);
+	bucket = get_bucket(h, elt->key);
 	elt = NULL;
 	//VERBOSE("find elt after %p", prev);
 
@@ -469,11 +403,6 @@ int hashtbl_get_count(hashtbl_t *h) {
 	count = h->count;
 	if (TS) pthd_mutex_unlock(&h->count_mutex);
 	return count;
-}
-
-void hashtbl_verbose(hashtbl_t *h) {
-	assert(h);
-	//VERBOSE("%p %d %d %d", h->buckets, h->key_bits, h->key_size, h->count);
 }
 
 void hashtbl_ts_traverse(hashtbl_t *ht, int (*rep)(void*, hashtbl_elt_t*),

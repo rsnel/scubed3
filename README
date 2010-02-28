@@ -106,3 +106,28 @@ resizes a scubed partition
 * MACROBLOCKS, the amount of macroblocks owned by the partition
 
 
+Example calculation:
+~~~~~~~~~~~~~~~~~~~
+
+Macroblock size 4MB (m). Mesoblock size 16kB (s).
+
+Layout of macroblock:
+
+0x0000 SHA256_HASH_INDEXBLOCK
+0x0020 SHA256_HASH_DATA (ciphertext)
+0x0040 uint64_t seqno
+0x0048 uint32_t next_macroblk
+0x004c uint32_t mesoblk_max
+0x0050 uint32_t reserved
+0x0054 uint32_t no_macroblocks
+0x0058 uint8_t macroblock_log
+0x0059 uint8_t mesoblk_log
+0x005A uint8_t rewrite_count
+0x005B reserved
+0x005C uint32_t idx1
+0x...
+0x0554 uint32_t idx255
+0x0558 uint32_t idx255
+
+
+

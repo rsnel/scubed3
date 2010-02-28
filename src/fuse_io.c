@@ -95,6 +95,10 @@ static int fuse_io_open(const char *path, struct fuse_file_info *fi) {
 			entries, path + 1);
 	if (!entry) return -ENOENT;
 
+	// FIXME: disallow opening
+	hashtbl_unlock_element_byptr(entry);
+	return -EBUSY;
+
 	if (entry->inuse || entry->to_be_deleted) {
 		hashtbl_unlock_element_byptr(entry);
 		return -EBUSY;
@@ -195,10 +199,13 @@ static struct fuse_operations fuse_io_operations = {
 
 static void freer(fuse_io_entry_t *entry) {
 	free(entry->head.key);
-	scubed3_free(&entry->l);
+	//scubed3_free(&entry->l);
 	blockio_dev_free(&entry->d);
 	cipher_free(&entry->c);
-	if (entry->ids) hashtbl_delete_element_byptr(entry->ids, &entry->unique_id);
+	if (entry->ids) {
+		hashtbl_delete_element_byptr(entry->ids, &entry->unique_id);
+		wipememory(entry->unique_id.id, 32);
+	}
 	free(entry);
 }
 

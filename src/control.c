@@ -163,7 +163,6 @@ static int control_open_add_common(int s, control_thread_priv_t *priv, char *arg
 		/* if any of this fails, we cannot add the partition */
 		size_t key_len;
 		char buf[1<<priv->b->mesoblk_log];
-		int bla;
 
 		memset(buf, 0, 1<<priv->b->mesoblk_log);
 
@@ -176,12 +175,11 @@ static int control_open_add_common(int s, control_thread_priv_t *priv, char *arg
 
 		cipher_init(&entry->c, argv[1], 1024,
 				(unsigned char*)argv[2], key_len/2);
-		// encrypt zeroed buffer, hash result
+		
+		// encrypt zeroed buffer and hash the result
 		// the output of the hash is used to ID ciphermode + key
 		cipher_enc(&entry->c, (unsigned char*)buf, (unsigned char*)buf, 0, 0);
 		gcry_md_hash_buffer(GCRY_MD_SHA256, entry->unique_id.id, buf, sizeof(buf));
-		for (bla = 0; bla < 32; bla++) printf("%02x", (unsigned char)entry->unique_id.id[bla]);
-		printf("\n");
 		entry->unique_id.head.key = entry->unique_id.id;
 		entry->unique_id.name = allocname;
 		if (!hashtbl_add_element(priv->ids, &entry->unique_id))

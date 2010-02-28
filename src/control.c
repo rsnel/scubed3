@@ -153,7 +153,7 @@ static int control_open_add_common(int s, control_thread_priv_t *priv, char *arg
 	if (!entry) {
 		free(allocname);
 		return control_write_complete(s, 1,
-				"unable to add partition \"%s\"", argv[0]);
+				"unable to add partition \"%s\", duplicate name?", argv[0]);
 	}
 
 	entry->to_be_deleted = 0;
@@ -162,6 +162,11 @@ static int control_open_add_common(int s, control_thread_priv_t *priv, char *arg
 	ecch_try {
 		/* if any of this fails, we cannot add the partition */
 		size_t key_len;
+		char buf[1<<priv->b->mesoblk_log];
+		int bla;
+
+		memset(buf, 0, 1<<priv->b->mesoblk_log);
+
 		key_len = strlen(argv[2]);
 		if (key_len%2) ecch_throw(ECCH_DEFAULT, "cipher key not valid "
 				"base16 (uneven number of chars)");
@@ -171,8 +176,21 @@ static int control_open_add_common(int s, control_thread_priv_t *priv, char *arg
 
 		cipher_init(&entry->c, argv[1], 1024,
 				(unsigned char*)argv[2], key_len/2);
+		// encrypt zeroed buffer, hash result
+		// the output of the hash is used to ID ciphermode + key
+		cipher_enc(&entry->c, (unsigned char*)buf, (unsigned char*)buf, 0, 0);
+		gcry_md_hash_buffer(GCRY_MD_SHA256, entry->unique_id.id, buf, sizeof(buf));
+		for (bla = 0; bla < 32; bla++) printf("%02x", (unsigned char)entry->unique_id.id[bla]);
+		printf("\n");
+		entry->unique_id.head.key = entry->unique_id.id;
+		entry->unique_id.name = allocname;
+		if (!hashtbl_add_element(priv->ids, &entry->unique_id))
+			ecch_throw(ECCH_DEFAULT, "cipher(mode)/key combination already in use");
+		hashtbl_unlock_element_byptr(&entry->unique_id);	
+
 		blockio_dev_init(&entry->d, priv->b, &entry->c, argv[0]);
 		entry->size = 0;
+		entry->ids = priv->ids;
 		//scubed3_init(&entry->l, &entry->d);
 		//entry->size = ((entry->l.dev->no_macroblocks-entry->
 		//			l.dev->reserved)*entry->l.dev->mmpm)
@@ -337,7 +355,7 @@ void *control_thread(void *arg) {
 					ret = control_call(s2, priv, buf + start);
 
 					/* clear command from memory */
-					memset(buf + start, 0, i);
+					wipememory(buf + start, i);
 
 					if (ret) {
 						done = 1;

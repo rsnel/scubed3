@@ -29,7 +29,7 @@ typedef struct control_thread_priv_s {
 	hashtbl_t *h;
 	hashtbl_t c;
 	blockio_t *b;
-	void *bla;
+	hashtbl_t *ids;
 } control_thread_priv_t;
 
 void *control_thread(void *arg);

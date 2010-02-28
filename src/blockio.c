@@ -450,7 +450,7 @@ void blockio_dev_write_macroblock(blockio_dev_t *dev, const void *data,
 	cipher_enc(dev->c, BASE, BASE, 0, 0);
 
 	for (i = 1; i < dev->no_indexblocks; i++)
-		cipher_dec(dev->c, BASE + (i<<dev->b->mesoblk_log),
+		cipher_enc(dev->c, BASE + (i<<dev->b->mesoblk_log),
 				BASE + (i<<dev->b->mesoblk_log), bi->seqno, i);
 
 	dev->b->write(dev->b->priv, BASE, id<<dev->b->macroblock_log,

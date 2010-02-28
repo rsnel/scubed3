@@ -151,7 +151,8 @@ static int fuse_io_write(const char *path, const char *buf, size_t size,
 void *fuse_io_init(struct fuse_conn_info *conn) {
 	fuse_io_priv_t *priv = fuse_get_context()->private_data;
 	priv->control_thread_priv.h = &priv->entries;
-	priv->control_thread_priv.bla = (void*)3;
+	priv->control_thread_priv.ids = &priv->ids;
+	//priv->control_thread_priv.bla = (void*)3;
 	pthread_create(&priv->control_thread, NULL, control_thread,
 			&priv->control_thread_priv);
 	//fuse_exit(fuse_get_context()->fuse);
@@ -197,12 +198,8 @@ static void freer(fuse_io_entry_t *entry) {
 	scubed3_free(&entry->l);
 	blockio_dev_free(&entry->d);
 	cipher_free(&entry->c);
+	if (entry->ids) hashtbl_delete_element_byptr(entry->ids, &entry->unique_id);
 	free(entry);
-}
-
-static void freer2(fuse_io_id_t *id) {
-	free(id->head.key);
-	free(id->name);
 }
 
 int fuse_io_start(int argc, char **argv, blockio_t *b) {
@@ -211,8 +208,7 @@ int fuse_io_start(int argc, char **argv, blockio_t *b) {
 	//fuse_io_entry_t *entry;
 	hashtbl_init_default(&priv.entries, -1, 4, 1, 1,
 			(void (*)(void*))freer);
-	hashtbl_init_default(&priv.ids, 32, 4, 1, 1,
-			(void (*)(void*))freer2);
+	hashtbl_init_default(&priv.ids, 32, 4, 1, 1, NULL);
 
 	priv.control_thread_priv.b = b;
 #if 0

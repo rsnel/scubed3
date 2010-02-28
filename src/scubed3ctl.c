@@ -35,6 +35,7 @@
 #include "verbose.h"
 #include "control.h"
 #include "gcry.h"
+//#include "cipher.h"
 
 #define BUF_SIZE 1024
 #define CONV_SIZE 512
@@ -46,26 +47,10 @@
 int do_command(int s, char *format, ...) {
 	char buf[BUF_SIZE];
 	int ret = 0, buf_len = 0, start = 0, i, done = 0;
-	//char *string;
 	ssize_t sent = 0, len, n;
-	//va_list ap;
 
-#if 0
-	va_start(ap, format);
-	if ((len = vasprintf(&string, format, ap)) == -1)
-		FATAL("vasprintf: %s", strerror(errno));
-
-	do {
-		n = send(s, string + sent, len - sent, 0);
-		if (n == 0) FATAL("send: connection reset by peer");
-		if (n < 0) FATAL("send: %s", strerror(errno));
-		sent += n;
-	} while (sent < len);
-
-	free(string);
-#endif
 	len = strlen(format);
-	//VERBOSE("->%s<-, len=%d", format, len);
+
 	format[len] = '\n';
 	len++;
 
@@ -148,16 +133,6 @@ int main(int argc, char **argv) {
 		WARNING("failed locking process in RAM (not root?): %s",
 				strerror(errno));
 
-#if 0
-	printf("Password: ");
-	if (my_getpass(&pw, &pw_len, stdin) == -1)
-		FATAL("unable to get password");
-	VERBOSE("password is \"%.*s\" with %u bytes",
-			pw_len -1, pw, pw_len - 1);
-	gcry_md_hash_buffer(PASSPHRASE_HASH, key, pw, pw_len - 1);
-	for (i = 0; i < 32; i++) printf("%02x", key[i]);
-	printf("\n");
-#endif
 	gcry_global_init();
 
 	if ((s = socket(AF_UNIX, SOCK_STREAM, 0)) == -1)
@@ -168,8 +143,6 @@ int main(int argc, char **argv) {
 	len = strlen(remote.sun_path) + sizeof(remote.sun_family);
 	if (connect(s, (struct sockaddr*)&remote, len) == -1)
 		FATAL("connect: %s", strerror(errno));
-
-	//VERBOSE("connected!");
 
 	printf("scubed3ctl-" VERSION ", connected to scubed3\n");
 
@@ -236,33 +209,33 @@ int main(int argc, char **argv) {
 			if (!strcmp(argv[0], "add")) {
 				printf("Verify passphrase: ");
 				if (my_getpass(&pw2, &pw2_len, stdin) == -1) {
-					memset(pw, 0, pw_len);
+					wipememory(pw, pw_len);
 					free(pw);
 					FATAL("unable to get password for verification");
 				}
 				if (pw_len != pw2_len || strcmp(pw, pw2)) {
-					memset(pw, 0, pw_len);
-					memset(pw2, 0, pw2_len);
+					wipememory(pw, pw_len);
+					wipememory(pw2, pw2_len);
 					free(pw);
 					free(pw2);
 					printf("passphrases do not match\n");
 					continue;
 				}
-				memset(pw2, 0, pw2_len);
+				wipememory(pw2, pw2_len);
 				free(pw2);
 			}
 			
 			gcry_md_hash_buffer(PASSPHRASE_HASH, key, pw, pw_len - 1);
 			for (i = 0; i < 32; i++) convp += sprintf(convp, "%02x", key[i]);
-			memset(pw, 0, pw_len);
+			wipememory(pw, pw_len);
 			free(pw);
 			
 			do_command(s, conv);
-			memset(conv, 0, sizeof(conv));
+			wipememory(conv, sizeof(conv));
 
 		} else {
 			do_command(s, line);
-			memset(line, 0, strlen(line));
+			wipememory(line, strlen(line));
 		}
 
 	} while (1);

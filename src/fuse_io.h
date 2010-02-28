@@ -33,6 +33,12 @@ typedef struct fuse_io_entry_s {
 	cipher_t c;
 	blockio_dev_t d;
         scubed3_t l;
+	hashtbl_t *ids;
+	struct unique_id {
+		hashtbl_elt_t head;
+		char id[32];
+		char *name;
+	} unique_id;
 } fuse_io_entry_t;
 
 typedef struct fuse_io_id_s {

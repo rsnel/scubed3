@@ -109,25 +109,41 @@ resizes a scubed partition
 Example calculation:
 ~~~~~~~~~~~~~~~~~~~
 
-Macroblock size 4MB (m). Mesoblock size 16kB (s).
+Macroblock size 4MB (m). Mesoblock size 16kB (s). For the moment: assume 256
+mesoblocks per macroblock. Mesoblock 0 is the indexblock, the other ones are
+datablocks.
 
 Layout of macroblock:
 
 0x0000 SHA256_HASH_INDEXBLOCK
-0x0020 SHA256_HASH_DATA (ciphertext)
-0x0040 uint64_t seqno
-0x0048 uint32_t next_macroblk
-0x004c uint32_t mesoblk_max
-0x0050 uint32_t reserved
-0x0054 uint32_t no_macroblocks
-0x0058 uint8_t macroblock_log
-0x0059 uint8_t mesoblk_log
-0x005A uint8_t rewrite_count
-0x005B reserved
-0x005C uint32_t idx1
-0x...
-0x0554 uint32_t idx255
-0x0558 uint32_t idx255
+0x0020 SHA256_HASH_DATA (hash of ciphertext)
+0x0040 SEQNO_HASH
+0x0060 uint64_t seqno
+0x0068 uint64_t magic0
+0x0070 uint32_t next_macroblk
+0x0074 uint32_t no_macroblocks
+0x0078 uint8_t macroblock_log
+0x0079 uint8_t mesoblk_log
+0x007A uint8_t rewrite_count
+0x007B reserved 8bit
+0x007C reserved 32bit
+0x0080 uint32_t no_active_mesoblocks
+0x0084 uint32_t idx0x01
+0x0088 uint32_t idx0x02
+......
+0x047C uint32_t idx0xFF
+0x1000 bitmap:
+		the nth even bit denotes if the nth macroblock is allocated
+		the nth odd bit denotes if the nth macroblock is in use
+0x3FFF last 8 bits of bitmap
+0x4000 datablock1
+0x8000 datablock2
+0xC000 datablock3
+etc
+
+There is space to index 0x4000 - 0x0500 = 0x3000 = 12288 bytes,
+which corresponds to a base device size of 12288*4*4/1024 = 192GiB.
+
 
 
 

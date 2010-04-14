@@ -63,24 +63,31 @@ typedef struct checker_priv_s {
 
 static int checker(dllist_elt_t *elt, void *p) {
 	checker_priv_t *priv = p;
-	int no = ((blockinfo_t*)elt) - priv->b;
-	if (priv->currseq != ((blockinfo_t*)elt)->seqno) return 0;
-	if (check_valid(priv->b, no)) {
-		VERBOSE("rev %llu valid", priv->currseq);
-		priv->currseq--;
+	blockinfo_t *blk = (blockinfo_t*)elt;
+	int no = blk - priv->b;
+
+	if (priv->currseq == blk->seqno && check_valid(priv->b, no)) {
+		//VERBOSE("rev %llu valid", priv->currseq);
+		//priv->currseq--;
+		priv->currseq = blk->prev_seqno;
 		priv->no_valid++;
 		return 1;
 	} else {
-		VERBOSE("rev %llu invalid", priv->currseq);
+		//VERBOSE("rev %llu invalid", priv->currseq);
 		return 0;
 	}
+}
+
+static int respect_wunsch(random_t *r, int wunsch) {
+	assert(wunsch == 2);
+	return random_peek(r, 0);
 }
 
 int main(int argc, char *argv[]) {
 	dllist_t in_use;
 	random_t r;
 	blockinfo_t blocks[NO_BLOCKS] = { };
-	int i, next, post_next;
+	int i, next, post_next, wunsch = 2;
 	uint64_t seq = 0, prev_seq = 0;
 	checker_priv_t checker_priv = {
 		.b = blocks
@@ -95,7 +102,8 @@ int main(int argc, char *argv[]) {
 	for (;;) {
 		seq++;
 		next = random_pop(&r);
-		while (next == (post_next = random_peek(&r, 0))) random_pop(&r);
+		post_next = respect_wunsch(&r, wunsch);
+		//while (next == (post_next = random_peek(&r, 0))) random_pop(&r);
 		VERBOSE("next=%d, post_next=%d", next, post_next);
 		if (blocks[next].used) {
 			FATAL("impossible");
@@ -105,10 +113,10 @@ int main(int argc, char *argv[]) {
 		}
 		blocks[next].seqno = seq;
 		blocks[next].prev_seqno = prev_seq;
-		prev_seq = seq;
 		blocks[next].used = 1;
 		blocks[next].obsolete = 0;
 		blocks[next].no_needed_blocks = 0;
+		prev_seq = seq;
 		dllist_append(&in_use, &blocks[next].elt);
 		if (blocks[post_next].used) {
 			// free block

@@ -9,7 +9,8 @@
 #include "verbose.h"
 #include "random.h"
 
-#define NO_BLOCKS 8
+//#define NO_BLOCKS 8
+#define NO_BLOCKS 32
 
 typedef struct blockinfo_s {
 	dllist_elt_t elt;
@@ -83,12 +84,23 @@ static int respect_wunsch(random_t *r, int wunsch) {
 	return random_peek(r, 0);
 }
 
+static int last_diff(random_t *r, int last) {
+	int i;
+	assert(last >= 0);
+
+	for (i = 0; i < last; i++)
+		if (random_peek(r, i) == random_peek(r, last)) return 0;
+
+	return 1;
+}
+
 int main(int argc, char *argv[]) {
 	dllist_t in_use;
 	random_t r;
 	blockinfo_t blocks[NO_BLOCKS] = { };
-	int i, next, post_next, wunsch = 2;
+	int i, j, next, tmp, valid, needed, different, post_next, wunsch = 2;
 	uint64_t seq = 0, prev_seq = 0;
+	int history = 10, cleanup;
 	checker_priv_t checker_priv = {
 		.b = blocks
 	};
@@ -99,6 +111,49 @@ int main(int argc, char *argv[]) {
 
 	dllist_init(&in_use);
 
+	for (;;) {
+		int no_used = 0;
+		valid = 1;
+		different = 1;
+		tmp = 0;
+		while (different <= history) {
+			tmp++;
+			if (last_diff(&r, tmp)) different++;
+		}
+		cleanup = random_peek(&r, tmp);
+		needed = blocks[cleanup].used;
+#if 0
+		if (blocks[random_peek(&r, tmp)].used == 0) {
+			//VERBOSE("block %d already clean (diffval %d)", random_peek(&r, tmp), tmp);
+		} else {
+			blocks[random_peek(&r, tmp)].used = 0;
+			//VERBOSE("cleanup %d (diffval %d)", random_peek(&r, tmp), tmp);
+		}
+#endif
+
+		next = random_pop(&r);
+		for (j = 0; j < tmp; j++) {
+			if (next == random_peek(&r, j)) valid = 0;
+		}
+		if (valid) blocks[random_peek(&r, tmp - 1)].used = 0;
+
+		//if (valid) blocks[random_peek(&r, history - 1)].used = 0;
+		if (blocks[next].used) assert(0);
+		if (valid) blocks[next].used = 1;
+		for (i = 0; i < NO_BLOCKS; i++) {
+			no_used += blocks[i].used;
+		}
+		VERBOSE("%2d %s (diffval %2d) (clean %2d %s) no_used=%2d", next, valid?"VALID  ":"INVALID", tmp, valid?cleanup:-1, valid?(needed?"NEEDED":"UNNDED"):"IMPOSS", no_used);
+		//sleep(1);
+	}
+		
+
+#if 0
+	for (i = 0; i < 10; i++) {
+		VERBOSE("%d", random_peek(&r, i));
+	}
+#endif
+#if 0
 	for (;;) {
 		seq++;
 		next = random_pop(&r);
@@ -144,7 +199,7 @@ int main(int argc, char *argv[]) {
 
 		sleep(1);
 	}
-	
+#endif	
 	dllist_free(&in_use);
 	random_free(&r);
 	exit(0);

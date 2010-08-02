@@ -1,6 +1,6 @@
 test: test.c dllist.c verbose.c random.c
 
-#CFLAGS=-Wall -Werror
+CFLAGS=-Wall -Werror
 
 clean:
 	rm test

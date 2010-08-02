@@ -54,6 +54,8 @@ this kind of media keeps an internal record about the order in whichs blocks
 are written to it) It is only safe if all scubed3 devices are known to and
 (if active) managed by the scubed3 deamon managing the current device.
 
+[implemented as: select device (weighted by size), and write a random block]
+
 Level 3: extremely paranoid
 
 while active, the daemon writes blocks to random locations at regular intervals

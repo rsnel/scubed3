@@ -163,7 +163,7 @@ int main(int argc, char **argv) {
 			printf("add NAME (asks twice for passphrase, expects 0 allocated blocks)\n");
 			printf("open NAME (asks once for passphrase, expects >0 allocated blocks)\n");
 			printf("\n");
-		} else if (!strncmp(line, "add ", 4) || !strncmp(line, "open ", 5)) {
+		} else if (!strncmp(line, "add ", 4) || !strncmp(line, "open ", 5) || !strcmp(line, "add") || !strcmp(line,"open")) {
 			/* tokenize, and build custom command */
 			int argc = 0;
 			char *argv[MAX_ARGC+1];
@@ -193,7 +193,7 @@ int main(int argc, char **argv) {
 			} while (*argv[argc] != '\0');
 
 			if (argc != 2) {
-				printf("wrong number of arguments\n");
+				printf("usage: %s NAME\n", argv[0]);
 				continue;
 			}
 

@@ -13,6 +13,11 @@ static uint16_t randint(FILE *fp, uint32_t no) {
         return (uint16_t)(((double)no)*rd/(UINT64_MAX+1.0));
 }
 
+uint16_t random_custom(random_t *r, uint32_t no) {
+	assert(r && no <= 65536 && no > 0);
+	return randint(r->fp, no);
+}
+
 void random_init(random_t *r, uint32_t no) {
 	assert(r && no <= 65536 && no > 0);
 	if (!(r->fp = fopen("/dev/urandom", "r"))) FATAL("opening /dev/urandom: %s", strerror(errno));

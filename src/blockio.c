@@ -142,7 +142,6 @@ void blockio_init_file(blockio_t *b, const char *path, uint8_t macroblock_log,
 
 	/* check if the device or file is not too large */
 	tmp >>= b->macroblock_log;
-	//if (tmp > UINT32_MAX) FATAL("device is too large");
 	if (tmp > MAX_MACROBLOCKS) FATAL("device is too large");
 	b->no_macroblocks = tmp;
 
@@ -150,12 +149,12 @@ void blockio_init_file(blockio_t *b, const char *path, uint8_t macroblock_log,
 }
 
 static const char magic0[8] = "SSS3v0.1";
-static const uint64_t magic1 = 0x1224456789ABCDEFLL;
 
 void blockio_dev_free(blockio_dev_t *dev) {
-	assert(dev);
-#if 0
 	int i;
+	assert(dev);
+	random_free(&dev->r);
+	bitmap_free(&dev->used);
 
 	for (i = 0; i < dev->no_macroblocks; i++) {
 		dev->macroblocks[i]->elt.prev = NULL;
@@ -164,50 +163,25 @@ void blockio_dev_free(blockio_dev_t *dev) {
 		free(dev->macroblocks[i]->indices);
 	}
 
-	bitmap_free(&dev->used);
-	random_free(&dev->r);
+	dllist_free(&dev->used_blocks);
 	free(dev->tmp_macroblock);
 	free(dev->macroblocks);
-#endif
 }
 
 void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 		const char *name) {
-#if 0
-	int i, j = 0;
 	assert(b && c);
 	assert(b->mesoblk_log < b->macroblock_log);
-	assert(b->macroblock_log - b->mesoblk_log < 8*sizeof(uint16_t));
-	uint32_t index_len;
 	bitmap_init(&dev->status, 2*b->no_macroblocks);
-	dev->name = name;
-	dev->b = b;
-	dev->c = c;
-	dev->scanning_at = 0;
-	dev->highest_seqno_seen = 0;
-
-	dev->no_macroblocks = 0;
-	dev->strip_bits = b->mesoblk_log - DM_SECTOR_LOG;
-	dev->no_indexblocks = 1;
-	dev->mesoblk_size = 1<<b->mesoblk_log;
-	dev->mmpm = (1<<(b->macroblock_log - b->mesoblk_log)) -
-		dev->no_indexblocks;
-
-	index_len = INDICES_OFFSET + 4*bit_get_size(dev->mmpm, dev->strip_bits)
-		+ bitmap_size(b->no_macroblocks);
-
-	DEBUG("strip_bits=%u, mmpm=%u, used headerspace=%u/%u",
-			dev->strip_bits, dev->mmpm, index_len,
-			dev->no_indexblocks<<dev->b->mesoblk_log);
-
-	assert(index_len <= dev->no_indexblocks<<b->mesoblk_log);
-
-	dev->tmp_macroblock = ecalloc(1, 1<<b->macroblock_log);
-
 	dllist_init(&dev->used_blocks);
 
+	dev->tmp_macroblock = ecalloc(1, 1<<b->macroblock_log);
+	//dev->mmpm = (1<<(b->macroblock_log - b->mesoblk_log)) - 1;
+
+	/* find macroblock with highest seqno (if any) */
 	for (i = 0; i < b->no_macroblocks; i++)
 		blockio_dev_read_header(dev, i);
+#if 0
 
 	for (i = 0; i < b->no_macroblocks; i++) {
 		if (bitmap_getbit(&dev->used, i)) {

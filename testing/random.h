@@ -30,6 +30,8 @@ typedef struct random_s {
 
 void random_init(random_t*, uint32_t);
 
+uint16_t random_custom(random_t*, uint32_t);
+
 uint16_t random_pop(random_t*);
 
 void random_push(random_t*, uint16_t);

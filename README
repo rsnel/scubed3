@@ -121,10 +121,10 @@ Layout of macroblock:
 0x0020 SHA256_HASH_DATA (hash of ciphertext)
 0x0040 SEQNO_HASH
 0x0060 uint64_t seqno
-0x0068 uint64_t magic0
+0x0068 8byte literal "SSS3v0.1"
 0x0070 uint32_t tail_macroblk
 0x0074 uint32_t no_macroblocks
-0x0078 uint32_t reserved_macroblocks // device size is no_macro-reserverd_macro
+0x0078 uint32_t reserved_macroblocks (device size based on difference of these)
 0x007C uint8_t keep_revisions  // < 16
 0x007D uint8_t random_len
 0x007E uint8_t macroblock_log
@@ -151,7 +151,7 @@ Layout of macroblock:
 0xC000 datablock3
 etc
 
-There is space to index 0x4000 - 0x0500 = 0x3000 = 12288 bytes,
+There is space to index 0x4000 - 0x1000 = 0x3000 = 12288 bytes,
 which corresponds to a base device size of 12288*4*4/1024 = 192GiB.
 
 

@@ -39,9 +39,10 @@ typedef struct blockio_info_s {
 } blockio_info_t;
 
 typedef struct blockio_dev_s {
-	const char *name;
+	char *name;
 	blockio_t *b;
 	cipher_t *c;
+	int updated;
 	bitmap_t status; // record status of all macroblocks with
 			 // respect to this device
 
@@ -55,15 +56,7 @@ typedef struct blockio_dev_s {
 
 	uint8_t keep_revisions;
 	
-	//uint32_t scanning_at;
-	//uint64_t highest_seqno_seen;
-
-	//uint32_t reserved;
-
-	//uint32_t no_indexblocks;
-	//uint32_t mesoblk_size;
 	uint16_t mmpm; /* max mesoblocks per macroblock */
-	//uint8_t strip_bits;
 
 	dllist_t used_blocks;
 
@@ -81,6 +74,8 @@ struct blockio_s {
 	uint8_t mesoblk_log;
 
 	blockio_info_t *blockio_infos;
+
+	random_t r;
 
 	void (*read)(void*, void*, uint64_t, uint32_t);
 	void (*write)(void*, const void*, uint64_t, uint32_t);

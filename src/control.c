@@ -19,6 +19,7 @@
 #include <errno.h>
 #include <assert.h>
 #include <unistd.h>
+#include <limits.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -34,6 +35,8 @@
 
 #define BUF_SIZE 8192
 #define MAX_ARGC 10
+#define DEFAULT_RESERVED_MACROBLOCKS 10
+#define DEFAULT_KEEP_REVISIONS 3
 
 int control_write_string(int s, const char *string, ssize_t len) {
 	ssize_t sent = 0, n;
@@ -182,6 +185,7 @@ static int control_open_add_common(int s, control_thread_priv_t *priv, char *arg
 		gcry_md_hash_buffer(GCRY_MD_SHA256, entry->unique_id.id, buf, sizeof(buf));
 		entry->unique_id.head.key = entry->unique_id.id;
 		entry->unique_id.name = allocname;
+		entry->d.name = estrdup(allocname);
 		if (!hashtbl_add_element(priv->ids, &entry->unique_id))
 			ecch_throw(ECCH_DEFAULT, "cipher(mode)/key combination already in use");
 		hashtbl_unlock_element_byptr(&entry->unique_id);	
@@ -236,7 +240,11 @@ static int control_close(int s, control_thread_priv_t *priv, char *argv[]) {
 }
 
 static int control_resize(int s, control_thread_priv_t *priv, char *argv[]) {
+	long int size;
+	char *end = NULL;
 	fuse_io_entry_t *entry = hashtbl_find_element_bykey(priv->h, argv[0]);
+	blockio_dev_t *dev;
+
 	if (!entry) return control_write_complete(s, 1,
 			"partition \"%s\" not found", argv[0]);
 
@@ -245,11 +253,80 @@ static int control_resize(int s, control_thread_priv_t *priv, char *argv[]) {
 		return control_write_complete(s, 1,
 				"partition \"%s\" is busy", argv[0]);
 	}
+	dev = &entry->d;
+	size = strtol(argv[1], &end, 10);
+	if (errno && (size == LONG_MIN || size == LONG_MAX)) {
+		hashtbl_unlock_element_byptr(entry);
+		return control_write_complete(s, 1, "unable to parse ->%s<- to a number: %s", argv[1], strerror(errno));
+	}
+	if (*end != '\0') {
+		hashtbl_unlock_element_byptr(entry);
+		return control_write_complete(s, 1, "unable to parse ->%s<- to a number", argv[1]);
+	}
+	
+	if (size == 0) {
+		hashtbl_unlock_element_byptr(entry);
+		return control_write_complete(s, 1, "we cannot resize to zero");
+	}
+
+	if (dev->no_macroblocks) {
+		hashtbl_unlock_element_byptr(entry);
+		return control_write_complete(s, 1, "unable to resize a device with allocated blocks");
+	}
+
+	if (size < dev->no_macroblocks) {
+		hashtbl_unlock_element_byptr(entry);
+		return control_write_complete(s, 1, "unable to shrink device");
+	}
+
+	if (size > dev->b->no_macroblocks) {
+		hashtbl_unlock_element_byptr(entry);
+		return control_write_complete(s, 1, "not enough blocks available, base device has only %d blocks", dev->b->no_macroblocks);
+	}
+
+	{ /* build an array of free blocks */
+		int i, no_freeb = 0;
+		uint16_t freeb[dev->b->no_macroblocks];
+		uint16_t no, select = 0;
+		void *tmp;
+		assert(dev->b->no_macroblocks <= 65536);
+		for (i = 0; i < dev->b->no_macroblocks; i++)
+			if (!dev->b->blockio_infos[i].dev) freeb[no_freeb++] = i;
+
+		assert(dev->no_macroblocks == 0);
+		VERBOSE("we have %d free blocks to chose from", no_freeb);
+		tmp = realloc(dev->our_macroblocks, sizeof(dev->our_macroblocks[0])*size);
+		if (!tmp) {
+			hashtbl_unlock_element_byptr(entry);
+			return control_write_complete(s, 1, "out of memory error");
+		}
+		dev->our_macroblocks = tmp;
+
+		while (size) {
+			blockio_info_t *bi;
+			no = random_custom(&dev->b->r, no_freeb);
+			select = freeb[no];
+			VERBOSE("select nr %d, %d", no, select);
+			bi = &dev->b->blockio_infos[select];
+			bi->dev = dev;
+			
+			// mark as allocated but free
+			bitmap_setbit(&dev->status, select<<1); 
+			assert(!bitmap_getbit(&dev->status, (select<<1) + 1));
+
+			dev->our_macroblocks[dev->no_macroblocks++] = bi;
+			no_freeb--;
+			memmove(&freeb[no], &freeb[no+1], sizeof(freeb[0])*(no_freeb - no));
+			size--;
+		}
+		random_init(&dev->r, dev->no_macroblocks);
+		dev->updated = 1;
+	}
+
 
 	hashtbl_unlock_element_byptr(entry);
-
-	VERBOSE("new size %s", argv[1]);
-	return control_write_complete(s, 1, "resize not yet implemented");
+	
+	return control_write_complete(s, 0, "succesful resized");
 }
 
 static control_command_t control_commands[] = {

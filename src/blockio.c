@@ -84,6 +84,7 @@ static void stream_close(void *fp) {
 
 void blockio_free(blockio_t *b) {
 	assert(b);
+	random_free(&b->r);
 	if (b->close) b->close(b->priv);
 	free(b->blockio_infos);
 }
@@ -146,6 +147,7 @@ void blockio_init_file(blockio_t *b, const char *path, uint8_t macroblock_log,
 	b->no_macroblocks = tmp;
 
 	b->blockio_infos = ecalloc(sizeof(blockio_info_t), b->no_macroblocks);
+	random_init(&b->r, b->no_macroblocks);
 }
 
 static const char magic[8] = "SSS3v0.1";
@@ -153,6 +155,7 @@ static const char magic[8] = "SSS3v0.1";
 void blockio_dev_free(blockio_dev_t *dev) {
 	int i;
 	assert(dev);
+	VERBOSE("closing \"%s\", %s", dev->name, dev->updated?"SHOULD BE WRITTEN":"no updates");
 	random_free(&dev->r);
 	bitmap_free(&dev->status);
 
@@ -166,6 +169,7 @@ void blockio_dev_free(blockio_dev_t *dev) {
 	dllist_free(&dev->used_blocks);
 	free(dev->tmp_macroblock);
 	free(dev->our_macroblocks);
+	free(dev->name);
 }
 
 void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
@@ -378,14 +382,16 @@ int blockio_check_data_hash(blockio_info_t *bi) {
 
 	return 1;
 }
+#endif
 
 void blockio_dev_write_macroblock(blockio_dev_t *dev, const void *data,
 		blockio_info_t *bi) {
 	uint32_t id = bi - dev->b->blockio_infos;
-	int i;
+	//int i;
 	assert(bi && id < dev->b->no_macroblocks);
 
 	DEBUG("write block %u (seqno=%llu)", id, bi->seqno);
+#if 0
 	bi->no_nonobsolete = bi->no_indices;
 
 	/* write magic */
@@ -439,5 +445,5 @@ void blockio_dev_write_macroblock(blockio_dev_t *dev, const void *data,
 
 	dev->b->write(dev->b->priv, BASE, id<<dev->b->macroblock_log,
 			1<<dev->b->macroblock_log);
-}
 #endif
+}

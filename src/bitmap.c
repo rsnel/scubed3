@@ -82,7 +82,6 @@ void bitmap_setbit(bitmap_t *b, uint32_t index) {
 	assert(b);
 	assert(index < b->no_bits);
 	assert(!bitmap_getbit(b, index));
-	assert(b->no_set);
 	b->bits[index/(8*sizeof(uint32_t))] |=
 		(1<<(index%(8*sizeof(uint32_t))));
 	b->no_set++;

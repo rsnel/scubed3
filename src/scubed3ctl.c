@@ -162,6 +162,7 @@ int main(int argc, char **argv) {
 			printf("exit,x,quit,q\n");
 			printf("add NAME (asks twice for passphrase, expects 0 allocated blocks)\n");
 			printf("open NAME (asks once for passphrase, expects >0 allocated blocks)\n");
+			printf("resize NAME BLOCKS\n");
 			printf("\n");
 		} else if (!strncmp(line, "add ", 4) || !strncmp(line, "open ", 5) || !strcmp(line, "add") || !strcmp(line,"open")) {
 			/* tokenize, and build custom command */
@@ -233,6 +234,8 @@ int main(int argc, char **argv) {
 			do_command(s, conv);
 			wipememory(conv, sizeof(conv));
 
+		} else if (!strncmp(line, "resize ", 7) || !strcmp(line, "resize")) {
+			printf("unimplemented, use low-level command resize-forceh\n");
 		} else {
 			do_command(s, line);
 			wipememory(line, strlen(line));

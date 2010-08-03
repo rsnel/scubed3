@@ -117,39 +117,37 @@ datablocks.
 
 Layout of macroblock:
 
-0x0000 SHA256_HASH_INDEXBLOCK
-0x0020 SHA256_HASH_DATA (hash of ciphertext)
-0x0040 SEQNO_HASH
-0x0060 uint64_t seqno
-0x0068 8byte literal "SSS3v0.1"
-0x0070 uint32_t tail_macroblk
-0x0074 uint32_t no_macroblocks
-0x0078 uint32_t reserved_macroblocks (device size based on difference of these)
-0x007C uint8_t keep_revisions  // < 16
-0x007D uint8_t random_len
-0x007E uint8_t macroblock_log
-0x007F uint8_t mesoblk_log
-0x0080 reserved
+0x000000 SHA256_HASH_INDEXBLOCK
+0x000020 SHA256_HASH_DATA (hash of ciphertext)
+0x000040 SEQNO_HASH
+0x000060 uint64_t seqno
+0x000068 8byte literal "SSS3v0.1"
+0x000070 uint32_t tail_macroblock
+0x000074 uint32_t no_macroblocks
+0x000078 uint32_t reserved_macroblocks (device size based on difference of these)
+0x00007C uint8_t keep_revisions  // < 16
+0x00007D uint8_t random_len
+0x00007E uint8_t macroblock_log
+0x00007F uint8_t mesoblock_log
+0x000080 - 0x0000FF reserved
+0x000100 uint32_t no_indices
+0x000104 uint32_t idx0x01
+0x000108 uint32_t idx0x02
 ......
-0x00FF reserved
-0x0100 uint32_t no_active_mesoblocks
-0x0104 uint32_t idx0x01
-0x0108 uint32_t idx0x02
-......
-0x04FC uint32_t idx0xFF
-0x0500 reserved
-......
-0x0FFF reserved
-0x1000 bitmap: groups of 2 bits
+0x0004FC uint32_t idx0xFF
+0x000500 - 0x000FFF reserved
+0x001000 bitmap: groups of 2 bits
 		00 this block is not allocated to us
 		01 allocated and in use
 		10 allocated and free
 		11 allocated and free and participated in selection
-0x3FFF last 8 bits of bitmap
-0x4000 datablock1
-0x8000 datablock2
-0xC000 datablock3
-etc
+0x003FFF last 8 bits of bitmap
+0x004000 datablock1
+0x008000 datablock2
+0x00C000 datablock3
+........
+0x3FC000 datablock255
+0x400000 end
 
 There is space to index 0x4000 - 0x1000 = 0x3000 = 12288 bytes,
 which corresponds to a base device size of 12288*4*4/1024 = 192GiB.

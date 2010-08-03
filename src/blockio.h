@@ -31,12 +31,10 @@ typedef struct blockio_s blockio_t;
 typedef struct blockio_info_s {
 	dllist_elt_t elt;
 	uint64_t seqno;
-	char data_hash[16];
-	char seqnos_hash[16];
-	uint16_t no_indices;
+	char data_hash[32];
+	char seqnos_hash[32];
+	uint32_t no_indices;
 	uint32_t *indices;
-	uint16_t max_indices;
-	uint16_t no_nonobsolete;
 	struct blockio_dev_s *dev;
 } blockio_info_t;
 
@@ -64,7 +62,7 @@ typedef struct blockio_dev_s {
 
 	//uint32_t no_indexblocks;
 	//uint32_t mesoblk_size;
-	//uint16_t mmpm; /* max mesoblocks per macroblock */
+	uint16_t mmpm; /* max mesoblocks per macroblock */
 	//uint8_t strip_bits;
 
 	dllist_t used_blocks;
@@ -96,7 +94,7 @@ void blockio_dev_init(blockio_dev_t*, blockio_t*, cipher_t*, const char*);
 
 void blockio_dev_free(blockio_dev_t*);
 
-void blockio_dev_read_header(blockio_dev_t*, uint32_t);
+void blockio_dev_read_header(blockio_dev_t*, uint32_t, uint64_t*);
 
 blockio_info_t *blockio_dev_get_new_macroblock(blockio_dev_t*);
 

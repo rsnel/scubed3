@@ -65,22 +65,22 @@ static void stream_close(void *fp) {
 /* end stream stuff */
 
 #define MAX_MACROBLOCKS		(3*4096*4)
+
 #define BASE			(dev->tmp_macroblock)
 #define INDEXBLOCK_HASH		(BASE + 0)
-#define MAGIC0			(BASE + 16)
-#define MAGIC1			(BASE + 24)
 #define DATABLOCKS_HASH		(BASE + 32)
-#define SEQNOS_HASH		(BASE + 48)
-#define SEQNO			(BASE + 64)
-#define NEXT_MACROBLOCK		(BASE + 72)
-#define MESOBLOCK_LOG		(BASE + 76)
-#define MACROBLOCK_LOG		(BASE + 77)
-#define NO_INDICES		(BASE + 78)
-#define RESERVED		(BASE + 80)
-#define NO_INDEXBLOCKS		(BASE + 84)
-#define INDICES			(BASE + 88)
-#define MAGIC0_OFFSET		16
-#define INDICES_OFFSET		88
+#define SEQNOS_HASH		(BASE + 64)
+#define SEQNO			(BASE + 96)
+#define MAGIC			(BASE + 104)
+#define TAIL_MACROBLOCK		(BASE + 112)
+#define NO_MACROBLOCKS		(BASE + 116)
+#define RESERVED_MACROBLOCKS	(BASE + 120)
+#define KEEP_REVISIONS		(BASE + 124)
+#define RANDOM_LEN		(BASE + 125)
+#define MACROBLOCK_LOG		(BASE + 126)
+#define MESOBLOCK_LOG		(BASE + 127)
+#define NO_INDICES		(BASE + 256)
+#define BITMAP			(BASE + 4096)
 
 void blockio_free(blockio_t *b) {
 	assert(b);
@@ -148,39 +148,49 @@ void blockio_init_file(blockio_t *b, const char *path, uint8_t macroblock_log,
 	b->blockio_infos = ecalloc(sizeof(blockio_info_t), b->no_macroblocks);
 }
 
-static const char magic0[8] = "SSS3v0.1";
+static const char magic[8] = "SSS3v0.1";
 
 void blockio_dev_free(blockio_dev_t *dev) {
 	int i;
 	assert(dev);
 	random_free(&dev->r);
-	bitmap_free(&dev->used);
+	bitmap_free(&dev->status);
 
 	for (i = 0; i < dev->no_macroblocks; i++) {
-		dev->macroblocks[i]->elt.prev = NULL;
-		dev->macroblocks[i]->elt.next = NULL;
-		dev->macroblocks[i]->dev = NULL;
-		free(dev->macroblocks[i]->indices);
+		dev->our_macroblocks[i]->elt.prev = NULL;
+		dev->our_macroblocks[i]->elt.next = NULL;
+		dev->our_macroblocks[i]->dev = NULL;
+		free(dev->our_macroblocks[i]->indices);
 	}
 
 	dllist_free(&dev->used_blocks);
 	free(dev->tmp_macroblock);
-	free(dev->macroblocks);
+	free(dev->our_macroblocks);
 }
 
 void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 		const char *name) {
+	int i;
+	uint64_t highest_seqno = 0;
 	assert(b && c);
 	assert(b->mesoblk_log < b->macroblock_log);
 	bitmap_init(&dev->status, 2*b->no_macroblocks);
 	dllist_init(&dev->used_blocks);
 
 	dev->tmp_macroblock = ecalloc(1, 1<<b->macroblock_log);
-	//dev->mmpm = (1<<(b->macroblock_log - b->mesoblk_log)) - 1;
+	dev->b = b;
+	dev->c = c;
+	dev->mmpm = (1<<(b->macroblock_log - b->mesoblk_log)) - 1;
 
-	/* find macroblock with highest seqno (if any) */
+	/* read macroblock headers */
 	for (i = 0; i < b->no_macroblocks; i++)
-		blockio_dev_read_header(dev, i);
+		blockio_dev_read_header(dev, i, &highest_seqno);
+	if (highest_seqno == 0) {
+		VERBOSE("no data");
+		return;
+	}
+
+	FATAL("we have %d macroblocks, can't handle that yet", dev->no_macroblocks);
 #if 0
 
 	for (i = 0; i < b->no_macroblocks; i++) {
@@ -234,15 +244,20 @@ blockio_info_t *blockio_dev_get_new_macroblock(blockio_dev_t *dev) {
 	return bi;
 }
 
+#endif
+
 int compare_seqno(blockio_info_t *bi, uint64_t *seqno) {
 	return *seqno > bi->seqno;
 }
 
-void blockio_dev_read_header(blockio_dev_t *dev, uint32_t no) {
-	char md5[16];
-	int i = dev->no_indexblocks - 1;
-	assert(no < dev->b->no_macroblocks);
+void blockio_dev_read_header(blockio_dev_t *dev, uint32_t no,
+		uint64_t *highest_seqno) {
+	assert(dev && dev->b && no < dev->b->no_macroblocks);
 	blockio_info_t *tmp, *bi = &dev->b->blockio_infos[no];
+	int i;
+	char sha256[32];
+	//VERBOSE("reading macroblock %d", no);
+	bi = &dev->b->blockio_infos[no];
 
 	if (bi->dev) {
 		VERBOSE("macroblock %d already taken", no);
@@ -250,30 +265,28 @@ void blockio_dev_read_header(blockio_dev_t *dev, uint32_t no) {
 	}
 
 	dev->b->read(dev->b->priv, BASE, no<<dev->b->macroblock_log,
-			dev->no_indexblocks<<dev->b->mesoblk_log);
-
-	// decrypt first mesoblock with seqno 0, and mesoblock number 0
-	// ciphertext is unique due to first block being a hash of the
-	// whole index and the index containing a unique seqno
+			1<<dev->b->mesoblk_log);
+	
+	// decrypt indexblock with IV=0: ciphertext is unique due to
+	// first block being a hash of the whole index and the index
+	// containing a unique seqno (ONLY TRUE FOR CBC(LIKE)!!!!!)
+	//
 	// the seqno is used as IV for all the other mesoblocks
 	// in the datablock
 	cipher_dec(dev->c, BASE, BASE, 0, 0);
 
-	bi->seqno = binio_read_uint64_be(SEQNO); // read seqno, needed as iv
-	for (i = 1; i < dev->no_indexblocks; i++)
-		cipher_dec(dev->c, BASE + (i<<dev->b->mesoblk_log),
-				BASE + (i<<dev->b->mesoblk_log), bi->seqno, i);
-
-	/* check magic0 = "SSS3v0.1" */
-	if (memcmp(magic0, MAGIC0, sizeof(magic0))) {
-		//DEBUG("magic \"%.*s\" not found in mesoblock %u",
-		//		sizeof(magic0), magic0, no);
+	/* check magic */
+	if (memcmp(magic, MAGIC, sizeof(magic))) {
+		DEBUG("magic \"%.*s\" not found in mesoblock %u",
+				sizeof(magic), magic, no);
 		return;
 	}
 
-	/* check magic1 */
-	if (binio_read_uint64_be(MAGIC1) != magic1) {
-		//DEBUG("magic %016llx not found in mesoblock %u", magic1, no);
+	/* check indexblock hash */
+	gcry_md_hash_buffer(GCRY_MD_SHA256, sha256, BASE + sizeof(sha256),
+			(1<<dev->b->mesoblk_log) - sizeof(sha256));
+	if (memcmp(INDEXBLOCK_HASH, sha256, sizeof(sha256))) {
+		DEBUG("md5sum of index block %d failed", no);
 		return;
 	}
 
@@ -289,46 +302,31 @@ void blockio_dev_read_header(blockio_dev_t *dev, uint32_t no) {
 				binio_read_uint8(MESOBLOCK_LOG),
 				dev->b->mesoblk_log);
 
-	/* check the number of indexblocks */
-	if (dev->no_indexblocks != binio_read_uint32_be(NO_INDEXBLOCKS))
-		FATAL("no_indexblocks doesn't agree (on disk %u, should be %u)",
-				binio_read_uint32_be(NO_INDEXBLOCKS),
-				dev->no_indexblocks);
+	/* block seems to belong to us */
+	memcpy(bi->data_hash, DATABLOCKS_HASH, 32);
+	memcpy(bi->seqnos_hash, SEQNOS_HASH, 32);
+	bi->seqno = binio_read_uint64_be(SEQNO);
 
-	/* check md5sum of index */
-	gcry_md_hash_buffer(GCRY_MD_MD5, md5, MAGIC0,
-			(dev->no_indexblocks<<dev->b->mesoblk_log) -
-			MAGIC0_OFFSET);
-	if (memcmp(INDEXBLOCK_HASH, md5, sizeof(md5))) {
-		DEBUG("md5sum of index block %d failed", no);
-		return;
+	if (bi->seqno > *highest_seqno) {
+		*highest_seqno = bi->seqno;
+		dev->tail_macroblock = binio_read_uint32_be(TAIL_MACROBLOCK);
+		dev->no_macroblocks = binio_read_uint32_be(NO_MACROBLOCKS);
+		dev->reserved_macroblocks =
+			binio_read_uint32_be(RESERVED_MACROBLOCKS);
+		dev->keep_revisions = binio_read_uint8(KEEP_REVISIONS);
+		dev->random_len = binio_read_uint8(RANDOM_LEN);
+		bitmap_read(&dev->status, (uint32_t*)BITMAP);
 	}
 
-
-	memcpy(bi->seqnos_hash, SEQNOS_HASH, 16);
-	memcpy(bi->data_hash, DATABLOCKS_HASH, 16);
-	bi->no_nonobsolete = bi->max_indices = bi->no_indices =
-		binio_read_uint16_be(NO_INDICES);
-	bi->max_indices = bi->no_indices;
-	if (bi->seqno >= dev->highest_seqno_seen) {
-		dev->next_free_macroblock =
-			binio_read_uint32_be(NEXT_MACROBLOCK);
-		dev->reserved = binio_read_uint32_be(RESERVED);
-		if (dev->reserved < 2) FATAL("reserved number of macroblocks "
-				"is way too small");
-		dev->used.no_bits = binio_read_uint32_be(INDICES +
-				4*bit_get_size(dev->mmpm, dev->strip_bits));
-		bitmap_read(&dev->used, INDICES + 4*bit_get_size(dev->mmpm,
-					dev->strip_bits) + 4);
-		dev->highest_seqno_seen = bi->seqno;
-	}
+	bi->no_indices = binio_read_uint32_be(NO_INDICES);
 	bi->indices = ecalloc(dev->mmpm, sizeof(uint32_t));
-	bit_unpack(bi->indices, INDICES, bi->no_indices, dev->strip_bits);
-
+	for (i = 1; i <= bi->no_indices; i++)
+		bi->indices[i-1] = *(((uint32_t*)NO_INDICES) + i);
+	
 	VERBOSE("block %u (seqno=%llu) belongs to \"%s\" and has %d indices",
 			no, bi->seqno, dev->name, bi->no_indices);
 
-	/* put block in the 'in use' list */
+	/* put block in the 'in use' list, if it contains data */
 	if (bi->no_indices) {
 		tmp = dllist_iterate(&dev->used_blocks,
 				(int (*)(dllist_elt_t*, void*))compare_seqno,
@@ -338,8 +336,11 @@ void blockio_dev_read_header(blockio_dev_t *dev, uint32_t no) {
 		else dllist_append(&dev->used_blocks, &bi->elt);
 	}
 	bi->dev = dev;
+
+	return;
 }
 
+#if 0
 void blockio_dev_read_mesoblk_part(blockio_dev_t *dev, void *buf, uint32_t id,
 		uint32_t no, uint32_t offset, uint32_t len) {
 	assert(dev->b && dev->b->read && id < dev->b->no_macroblocks &&

@@ -82,5 +82,5 @@ void random_push(random_t *r, uint16_t val) {
 
 void random_free(random_t *r) {
 	free(r->buffer);
-	fclose(r->fp);
+	if (r->fp) fclose(r->fp);
 }

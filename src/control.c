@@ -235,6 +235,23 @@ static int control_close(int s, control_thread_priv_t *priv, char *argv[]) {
 	return control_write_complete(s, 0, "partition \"%s\" closed", argv[0]);
 }
 
+static int control_resize(int s, control_thread_priv_t *priv, char *argv[]) {
+	fuse_io_entry_t *entry = hashtbl_find_element_bykey(priv->h, argv[0]);
+	if (!entry) return control_write_complete(s, 1,
+			"partition \"%s\" not found", argv[0]);
+
+	if (entry->inuse) {
+		hashtbl_unlock_element_byptr(entry);
+		return control_write_complete(s, 1,
+				"partition \"%s\" is busy", argv[0]);
+	}
+
+	hashtbl_unlock_element_byptr(entry);
+
+	VERBOSE("new size %s", argv[1]);
+	return control_write_complete(s, 1, "resize not yet implemented");
+}
+
 static control_command_t control_commands[] = {
 	{
 		.head.key = "p",
@@ -259,6 +276,12 @@ static control_command_t control_commands[] = {
 		.command = control_close,
 		.argc = 1,
 		.usage = " NAME"
+	},
+	{
+		.head.key = "resize-force",
+		.command = control_resize,
+		.argc = 2,
+		.usage = " NAME BLOCKS"
 	}
 };
 

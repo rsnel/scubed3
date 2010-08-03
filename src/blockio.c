@@ -391,16 +391,16 @@ void blockio_dev_write_macroblock(blockio_dev_t *dev, const void *data,
 	assert(bi && id < dev->b->no_macroblocks);
 
 	DEBUG("write block %u (seqno=%llu)", id, bi->seqno);
-#if 0
-	bi->no_nonobsolete = bi->no_indices;
 
 	/* write magic */
-	memcpy(MAGIC0, magic0, sizeof(magic0));
-	binio_write_uint64_be(MAGIC1, magic1);
+	memcpy(MAGIC, magic, sizeof(magic));
 
 	/* write static data */
-	binio_write_uint8(MESOBLOCK_LOG, dev->b->mesoblk_log);
 	binio_write_uint8(MACROBLOCK_LOG, dev->b->macroblock_log);
+	binio_write_uint8(MESOBLOCK_LOG, dev->b->mesoblk_log);
+
+	binio_write_uint64_be(SEQNO, bi->seqno);
+#if 0
 	binio_write_uint32_be(RESERVED, dev->reserved);
 	binio_write_uint32_be(NO_INDEXBLOCKS, dev->no_indexblocks);
 

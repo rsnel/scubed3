@@ -239,6 +239,19 @@ static int control_close(int s, control_thread_priv_t *priv, char *argv[]) {
 	return control_write_complete(s, 0, "partition \"%s\" closed", argv[0]);
 }
 
+static int last_diff(random_t *r, int last, int *first) {
+        int i;
+        assert(last >= 0);
+
+        for (i = 0; i < last; i++)
+                if (random_peek(r, i) == random_peek(r, last)) {
+			if (i == 0) *first = 0;
+			return 0;
+		}
+
+        return 1;
+}
+
 static int control_resize(int s, control_thread_priv_t *priv, char *argv[]) {
 	long int size;
 	char *end = NULL;
@@ -311,16 +324,52 @@ static int control_resize(int s, control_thread_priv_t *priv, char *argv[]) {
 			bi->dev = dev;
 			
 			// mark as allocated but free
-			bitmap_setbit(&dev->status, select<<1); 
-			assert(!bitmap_getbit(&dev->status, (select<<1) + 1));
+			bitmap_setbit(&dev->status, (select<<1) + 1); 
+			assert(!bitmap_getbit(&dev->status, (select<<1)));
 
 			dev->our_macroblocks[dev->no_macroblocks++] = bi;
 			no_freeb--;
 			memmove(&freeb[no], &freeb[no+1], sizeof(freeb[0])*(no_freeb - no));
+			bi->no_indices = 0;
+			bi->indices = ecalloc(dev->mmpm, sizeof(uint32_t));
 			size--;
 		}
+		dev->keep_revisions = DEFAULT_KEEP_REVISIONS;
 		random_init(&dev->r, dev->no_macroblocks);
+		int valid = 1, different = 1, tmp2 = 0;
+
+		dev->bi = dev->our_macroblocks[random_peek(&dev->r, 0)];
+		dev->bi->seqno = 1;
+		assert(bitmap_getbits(&dev->status,
+					(dev->bi - dev->b->blockio_infos)<<1,
+					2) == 2);
+
+		VERBOSE("different=%d, dev->keep_revisions=%d", different, dev->keep_revisions);
+		while (different <= dev->keep_revisions) {
+			tmp2++;
+			if (last_diff(&dev->r, tmp2, &valid)) {
+				different++;
+				if (different != dev->keep_revisions) {
+					assert(bitmap_getbits(&dev->status, (dev->our_macroblocks[random_peek(&dev->r, tmp2)] - dev->b->blockio_infos)<<1, 2) == 2);
+					bitmap_setbit(&dev->status, ((dev->our_macroblocks[random_peek(&dev->r, tmp2)] - dev->b->blockio_infos)<<1));
+				}
+			}
+		}
+		if (!valid) bitmap_setbit(&dev->status, (dev->bi - dev->b->blockio_infos)<<1);
+		dev->tail_macroblock = random_peek(&dev->r, tmp2);
+		dev->random_len = tmp2;
+		VERBOSE("tail_macroblock = %d, random_len = %d, valid = %d", dev->tail_macroblock, tmp2, valid);
+		VERBOSE("guess %d", random_pop(&dev->r));
+		
 		dev->updated = 1;
+
+		for (i = 0; i < dev->b->no_macroblocks; i++) {
+			fprintf(stderr, "%d",
+					bitmap_getbits(&dev->status, i<<1, 2));
+		}
+		fprintf(stderr, "\n");
+
+		//assert(valid);
 	}
 
 

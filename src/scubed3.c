@@ -51,6 +51,7 @@
 #define ID	(index>>l->mesobits)
 #define NO	(index&l->mesomask)
 
+#if 0
 void obsolete_mesoblk(scubed3_t *l, blockio_info_t *bi, uint32_t no) {
 	assert(bi);
 	assert(bi->no_nonobsolete);
@@ -343,9 +344,11 @@ int do_read(scubed3_t *l, uint32_t mesoff, uint32_t muoff, uint32_t size,
 		blockio_dev_read_mesoblk_part(l->dev, out, ID, NO, muoff, size);
 	return 0;
 }
+#endif
 
 int do_req(scubed3_t *l, scubed3_io_t cmd, uint64_t r_offset, size_t size,
 		char *buf) {
+#if 0
 	assert(cmd == SCUBED3_READ || cmd == SCUBED3_WRITE);
 	uint32_t meso = r_offset>>l->dev->b->mesoblk_log;
 	uint32_t inmeso = r_offset%l->dev->mesoblk_size;
@@ -372,10 +375,10 @@ int do_req(scubed3_t *l, scubed3_io_t cmd, uint64_t r_offset, size_t size,
 	}
 
 	if (size > 0 && action(l, meso, 0, size, buf + ooff)) return 0;
+#endif 
 
 	return 1;
 }
-
 #if 0
 void test_func(void) {
 	uint8_t key[16] = {

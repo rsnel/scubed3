@@ -24,6 +24,7 @@
 #include "dllist.h"
 #include "cipher.h"
 #include "bitmap.h"
+#include "random.h"
 
 typedef struct blockio_s blockio_t;
 
@@ -32,8 +33,8 @@ typedef struct blockio_info_s {
 	uint64_t seqno;
 	char data_hash[16];
 	char seqnos_hash[16];
-	uint32_t *indices;
 	uint16_t no_indices;
+	uint32_t *indices;
 	uint16_t max_indices;
 	uint16_t no_nonobsolete;
 	struct blockio_dev_s *dev;
@@ -43,23 +44,35 @@ typedef struct blockio_dev_s {
 	const char *name;
 	blockio_t *b;
 	cipher_t *c;
-	bitmap_t used;
-	uint32_t next_free_macroblock;
-	void *tmp_macroblock;
+	bitmap_t status; // record status of all macroblocks with
+			 // respect to this device
+
 	uint32_t no_macroblocks; /* assigned to this device */
-	uint32_t scanning_at;
-	uint64_t highest_seqno_seen;
+	uint32_t device_macroblocks; /* visible in scubed file */
 
-	uint32_t reserved;
+	/* state of prng */
+	uint32_t tail_macroblock;
+	uint8_t random_len;
+	random_t r;
 
-	uint32_t no_indexblocks;
-	uint32_t mesoblk_size;
-	uint16_t mmpm; /* max mesoblocks per macroblock */
-	uint8_t strip_bits;
+	uint8_t keep_revisions;
+	
+	//uint32_t scanning_at;
+	//uint64_t highest_seqno_seen;
+
+	//uint32_t reserved;
+
+	//uint32_t no_indexblocks;
+	//uint32_t mesoblk_size;
+	//uint16_t mmpm; /* max mesoblocks per macroblock */
+	//uint8_t strip_bits;
 
 	dllist_t used_blocks;
 
-	blockio_info_t **macroblocks;
+	/* array, used with PRNG to select random blocks */
+	blockio_info_t **our_macroblocks;
+
+	uint8_t *tmp_macroblock;
 } blockio_dev_t;
 
 struct blockio_s {

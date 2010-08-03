@@ -31,18 +31,17 @@ static int last_diff(random_t *r, int last) {
 }
 
 int main(int argc, char *argv[]) {
-	FILE *fp;
+	//FILE *fp;
 	random_t r;
 	uint64_t seqno;
 	blockinfo_t blocks[NO_BLOCKS] = { };
 
 	verbose_init(argv[0]);
 
-	if (!(fp = fopen("random.test", "w"))) FATAL("error opening \"random test\"");
+	//if (!(fp = fopen("random.test", "w"))) FATAL("error opening \"random test\"");
+	//fprintf(fp, "type: d\ncount: %d\nnumbit: 6\n", 1024*64);
 
-	fprintf(fp, "type: d\ncount: %d\nnumbit: 6\n", 1024*64);
 	random_init(&r, NO_BLOCKS);
-
 
 	for (seqno = 0; seqno < 1024*64; seqno++) {
 		int cleanup, i, next, needed, no_used = 0, valid = 1, different = 1, tmp = 0;
@@ -52,7 +51,7 @@ int main(int argc, char *argv[]) {
 		}
 		cleanup = random_peek(&r, tmp);
 		needed = blocks[cleanup].used;
-#if 0
+#if 1
 		fprintf(stderr, "sequence:");
 		for (i = 0; i <= tmp; i++) {
 			fprintf(stderr, " %d", random_peek(&r, i));
@@ -61,7 +60,7 @@ int main(int argc, char *argv[]) {
 #endif
 
 		next = random_pop(&r);
-		fprintf(fp, "%d\n", next);
+		//fprintf(fp, "%d\n", next);
 		for (i = 0; i < tmp; i++) {
 			if (next == random_peek(&r, i)) valid = 0;
 		}
@@ -78,7 +77,7 @@ int main(int argc, char *argv[]) {
 		
 
 	random_free(&r);
-	fclose(fp);
+	//fclose(fp);
 	exit(0);
 }
 

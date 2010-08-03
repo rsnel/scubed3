@@ -122,21 +122,29 @@ Layout of macroblock:
 0x0040 SEQNO_HASH
 0x0060 uint64_t seqno
 0x0068 uint64_t magic0
-0x0070 uint32_t next_macroblk
+0x0070 uint32_t tail_macroblk
 0x0074 uint32_t no_macroblocks
-0x0078 uint8_t macroblock_log
-0x0079 uint8_t mesoblk_log
-0x007A uint8_t rewrite_count
-0x007B reserved 8bit
-0x007C reserved 32bit
-0x0080 uint32_t no_active_mesoblocks
-0x0084 uint32_t idx0x01
-0x0088 uint32_t idx0x02
+0x0078 uint32_t reserved_macroblocks // device size is no_macro-reserverd_macro
+0x007C uint8_t keep_revisions  // < 16
+0x007D uint8_t random_len
+0x007E uint8_t macroblock_log
+0x007F uint8_t mesoblk_log
+0x0080 reserved
 ......
-0x047C uint32_t idx0xFF
-0x1000 bitmap:
-		the nth even bit denotes if the nth macroblock is allocated
-		the nth odd bit denotes if the nth macroblock is in use
+0x00FF reserved
+0x0100 uint32_t no_active_mesoblocks
+0x0104 uint32_t idx0x01
+0x0108 uint32_t idx0x02
+......
+0x04FC uint32_t idx0xFF
+0x0500 reserved
+......
+0x0FFF reserved
+0x1000 bitmap: groups of 2 bits
+		00 this block is not allocated to us
+		01 allocated and in use
+		10 allocated and free
+		11 allocated and free and participated in selection
 0x3FFF last 8 bits of bitmap
 0x4000 datablock1
 0x8000 datablock2

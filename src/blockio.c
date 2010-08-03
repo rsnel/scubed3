@@ -64,6 +64,7 @@ static void stream_close(void *fp) {
 
 /* end stream stuff */
 
+#define MAX_MACROBLOCKS		(3*4096*4)
 #define BASE			(dev->tmp_macroblock)
 #define INDEXBLOCK_HASH		(BASE + 0)
 #define MAGIC0			(BASE + 16)
@@ -141,7 +142,8 @@ void blockio_init_file(blockio_t *b, const char *path, uint8_t macroblock_log,
 
 	/* check if the device or file is not too large */
 	tmp >>= b->macroblock_log;
-	if (tmp > UINT32_MAX) FATAL("device is too large");
+	//if (tmp > UINT32_MAX) FATAL("device is too large");
+	if (tmp > MAX_MACROBLOCKS) FATAL("device is too large");
 	b->no_macroblocks = tmp;
 
 	b->blockio_infos = ecalloc(sizeof(blockio_info_t), b->no_macroblocks);
@@ -152,6 +154,7 @@ static const uint64_t magic1 = 0x1224456789ABCDEFLL;
 
 void blockio_dev_free(blockio_dev_t *dev) {
 	assert(dev);
+#if 0
 	int i;
 
 	for (i = 0; i < dev->no_macroblocks; i++) {
@@ -162,18 +165,21 @@ void blockio_dev_free(blockio_dev_t *dev) {
 	}
 
 	bitmap_free(&dev->used);
+	random_free(&dev->r);
 	free(dev->tmp_macroblock);
 	free(dev->macroblocks);
+#endif
 }
 
 void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 		const char *name) {
+#if 0
 	int i, j = 0;
 	assert(b && c);
 	assert(b->mesoblk_log < b->macroblock_log);
 	assert(b->macroblock_log - b->mesoblk_log < 8*sizeof(uint16_t));
 	uint32_t index_len;
-	bitmap_init(&dev->used, b->no_macroblocks);
+	bitmap_init(&dev->status, 2*b->no_macroblocks);
 	dev->name = name;
 	dev->b = b;
 	dev->c = c;
@@ -234,8 +240,11 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 			dev->macroblocks[j++] = &b->blockio_infos[i];
 		}
 	}
+
+#endif
 }
 
+#if 0
 blockio_info_t *blockio_dev_gc_which_macroblock(blockio_dev_t *dev,
 		uint32_t id) {
 	blockio_info_t *bi = &dev->b->blockio_infos[id];
@@ -456,4 +465,4 @@ void blockio_dev_write_macroblock(blockio_dev_t *dev, const void *data,
 	dev->b->write(dev->b->priv, BASE, id<<dev->b->macroblock_log,
 			1<<dev->b->macroblock_log);
 }
-
+#endif

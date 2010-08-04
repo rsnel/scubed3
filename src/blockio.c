@@ -246,6 +246,7 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 				break;
 
 			case SELECTFROM:
+				if (bi->seqno == highest_seqno) dev->keep_revisions--;
 				assert(tmp2 < dev->random_len - 1);
 				rebuild_prng[tmp2++] = tmp;
 			case FREE:
@@ -274,10 +275,13 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 			dev->tail_macroblock_global)  tmp++;
 	assert(tmp < dev->no_macroblocks);
 	dev->tail_macroblock = tmp;
+	VERBOSE("tail_macroblock=%d, tail_macroblock_global=%d",
+			dev->tail_macroblock, dev->tail_macroblock_global);
 	
 	assert(tmp2 <= dev->random_len - 1);
 	VERBOSE("we have %d different blocks to rebuild prng", tmp2);
-	// FIXME: derive keep_revisions from here
+	dev->keep_revisions += tmp2 + 1;
+	VERBOSE("keep_revisions = %d", dev->keep_revisions);
 	tmp3 = tmp2;
 	random_init(&dev->r, dev->no_macroblocks);
 	random_push(&dev->r, dev->tail_macroblock);
@@ -331,7 +335,7 @@ void blockio_dev_read_header(blockio_dev_t *dev, uint32_t no,
 	bi = &dev->b->blockio_infos[no];
 
 	if (bi->dev) {
-		VERBOSE("macroblock %d already taken", no);
+		//VERBOSE("macroblock %d already taken", no);
 		return;
 	}
 

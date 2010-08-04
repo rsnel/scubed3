@@ -28,6 +28,8 @@ typedef struct random_s {
 	uint32_t no;
 } random_t;
 
+void random_rescale(random_t*, uint32_t);
+
 void random_init(random_t*, uint32_t);
 
 uint16_t random_custom(random_t*, uint32_t);

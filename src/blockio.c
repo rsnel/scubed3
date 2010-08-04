@@ -161,10 +161,12 @@ void blockio_dev_free(blockio_dev_t *dev) {
 	bitmap_free(&dev->status);
 
 	for (i = 0; i < dev->no_macroblocks; i++) {
-		dev->our_macroblocks[i]->elt.prev = NULL;
-		dev->our_macroblocks[i]->elt.next = NULL;
-		dev->our_macroblocks[i]->dev = NULL;
-		free(dev->our_macroblocks[i]->indices);
+		if (dev->our_macroblocks[i]) {
+			dev->our_macroblocks[i]->elt.prev = NULL;
+			dev->our_macroblocks[i]->elt.next = NULL;
+			dev->our_macroblocks[i]->dev = NULL;
+			free(dev->our_macroblocks[i]->indices);
+		}
 	}
 
 	dllist_free(&dev->used_blocks);
@@ -210,6 +212,9 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 	for (i = 0; i < b->no_macroblocks; i++)
 		blockio_dev_read_header(dev, i, &highest_seqno);
 	
+	random_init(&dev->r, 0);
+	dev->next_seqno = highest_seqno + 1;
+
 	if (highest_seqno == 0) {
 		VERBOSE("device \"%s\" is empty; no macroblocks found", dev->name);
 		return;
@@ -250,19 +255,20 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 				assert(tmp2 < dev->random_len - 1);
 				rebuild_prng[tmp2++] = tmp;
 			case FREE:
-				/* block is free, if it contains data,
-				 * this data is obsolete... */
-				if (bi->no_indices) bi->no_indices = 0;
-				assert(tmp < dev->no_macroblocks);
-				dev->our_macroblocks[tmp++] = bi;
-
-				/* claim this block, if we didn't already do it */
+				/* check if someone has taken it over */
 				if (bi->dev != dev) {
+					if (bi->dev) ecch_throw(ECCH_DEFAULT, "unable to open partition, datablock %d is claimed by partition \"%s\"", bi - dev->b->blockio_infos, bi->dev->name);
 					assert(!bi->dev);
 					bi->dev = dev;
 					bi->indices = ecalloc(dev->mmpm,
 							sizeof(uint32_t));
 				}
+
+				/* block is free, if it contains data,
+				 * this data is obsolete... */
+				if (bi->no_indices) bi->no_indices = 0;
+				assert(tmp < dev->no_macroblocks);
+				dev->our_macroblocks[tmp++] = bi;
 
 				break;
 		}
@@ -283,7 +289,7 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 	dev->keep_revisions += tmp2 + 1;
 	VERBOSE("keep_revisions = %d", dev->keep_revisions);
 	tmp3 = tmp2;
-	random_init(&dev->r, dev->no_macroblocks);
+	random_rescale(&dev->r, dev->no_macroblocks);
 	random_push(&dev->r, dev->tail_macroblock);
 	
 	/* first: fill in the blanks in rebuild_prng (if any) with random

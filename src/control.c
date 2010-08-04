@@ -371,6 +371,7 @@ static int control_resize(int s, control_thread_priv_t *priv, char *argv[]) {
 					FREE, SELECTFROM);
 			
 		dev->tail_macroblock = random_peek(&dev->r, tmp2);
+		dev->tail_macroblock_global = dev->our_macroblocks[dev->tail_macroblock] - dev->b->blockio_infos;
 		dev->random_len = tmp2;
 		VERBOSE("tail_macroblock = %d, random_len = %d, valid = %d", dev->tail_macroblock, tmp2, valid);
 		VERBOSE("guess %d", random_peek(&dev->r, 0));
@@ -378,6 +379,7 @@ static int control_resize(int s, control_thread_priv_t *priv, char *argv[]) {
 		
 		dev->updated = 1;
 
+#if 0
 		fprintf(stderr, "all macroblocks: ");
 		for (i = 0; i < dev->b->no_macroblocks; i++) {
 			fprintf(stderr, "%d",
@@ -391,7 +393,7 @@ static int control_resize(int s, control_thread_priv_t *priv, char *argv[]) {
 					blockio_dev_get_macroblock_status(dev, i));
 		}
 		fprintf(stderr, "\n");
-
+#endif
 		//assert(valid);
 	}
 

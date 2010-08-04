@@ -122,14 +122,13 @@ Layout of macroblock:
 0x000040 SEQNO_HASH
 0x000060 uint64_t seqno
 0x000068 8byte literal "SSS3v0.1"
-0x000070 uint32_t tail_macroblock
-0x000074 uint32_t no_macroblocks
-0x000078 uint32_t reserved_macroblocks (device size based on difference of these)
-0x00007C uint8_t keep_revisions  // < 16
-0x00007D uint8_t random_len
-0x00007E uint8_t macroblock_log
-0x00007F uint8_t mesoblock_log
-0x000080 - 0x0000FF reserved
+0x000070 uint32_t random_len
+0x000074 uint16_t no_macroblocks
+0x000076 uint16_t reserved_macroblocks (device size based on difference of these)
+0x000078 uint16_t tail_macroblock_global
+0x00007A uint8_t macroblock_log
+0x00007B uint8_t mesoblock_log
+0x00007C - 0x0000FF reserved
 0x000100 uint32_t no_indices
 0x000104 uint32_t idx0x01
 0x000108 uint32_t idx0x02

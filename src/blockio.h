@@ -26,10 +26,6 @@
 #include "bitmap.h"
 #include "random.h"
 
-typedef enum blockio_dev_macroblock_status_e {
-		NOT_ALLOCATED, HAS_DATA, FREE, SELECTFROM }
-	blockio_dev_macroblock_status_t;
-
 typedef struct blockio_s blockio_t;
 
 typedef struct blockio_info_s {
@@ -50,13 +46,15 @@ typedef struct blockio_dev_s {
 	bitmap_t status; // record status of all macroblocks with
 			 // respect to this device
 
-	uint32_t no_macroblocks; /* assigned to this device */
-	uint32_t reserved_macroblocks; /* visible in scubed file */
+	uint64_t next_seqno;
+	uint16_t no_macroblocks; /* assigned to this device */
+	uint16_t reserved_macroblocks; /* visible in scubed file */
 	blockio_info_t *bi;
 
 	/* state of prng */
-	uint32_t tail_macroblock;
-	uint8_t random_len;
+	uint16_t tail_macroblock;
+	uint16_t tail_macroblock_global;
+	uint32_t random_len;
 	random_t r;
 
 	uint8_t keep_revisions;
@@ -110,6 +108,10 @@ int blockio_check_data_hash(blockio_info_t*);
 void blockio_dev_write_current_macroblock(blockio_dev_t*);
 
 void blockio_free(blockio_t*);
+
+typedef enum blockio_dev_macroblock_status_e {
+		NOT_ALLOCATED, HAS_DATA, FREE, SELECTFROM }
+	blockio_dev_macroblock_status_t;
 
 void blockio_dev_set_macroblock_status(blockio_dev_t*, uint32_t, blockio_dev_macroblock_status_t);
 

@@ -31,6 +31,7 @@
 #include "binio.h"
 #include "util.h"
 #include "gcry.h"
+#include "ecch.h"
 
 #define DM_SECTOR_LOG 9
 
@@ -72,13 +73,12 @@ static void stream_close(void *fp) {
 #define SEQNOS_HASH		(BASE + 64)
 #define SEQNO			(BASE + 96)
 #define MAGIC			(BASE + 104)
-#define TAIL_MACROBLOCK		(BASE + 112)
+#define RANDOM_LEN		(BASE + 112)
 #define NO_MACROBLOCKS		(BASE + 116)
-#define RESERVED_MACROBLOCKS	(BASE + 120)
-#define KEEP_REVISIONS		(BASE + 124)
-#define RANDOM_LEN		(BASE + 125)
-#define MACROBLOCK_LOG		(BASE + 126)
-#define MESOBLOCK_LOG		(BASE + 127)
+#define RESERVED_MACROBLOCKS	(BASE + 118)
+#define TAIL_MACROBLOCK_GLOBAL	(BASE + 120)
+#define MACROBLOCK_LOG		(BASE + 122)
+#define MESOBLOCK_LOG		(BASE + 123)
 #define NO_INDICES		(BASE + 256)
 #define BITMAP			(BASE + 4096)
 
@@ -173,9 +173,28 @@ void blockio_dev_free(blockio_dev_t *dev) {
 	free(dev->name);
 }
 
+static int compare_seqno(blockio_info_t *bi, uint64_t *seqno) {
+	return *seqno > bi->seqno;
+}
+
+static void add_to_used(dllist_t *u, blockio_info_t *bi) {
+	blockio_info_t *tmp;
+
+	/* put block in the 'in use' list, if it contains data */
+	/* sort with sequence number */
+	if (bi->no_indices) {
+		tmp = dllist_iterate(u,
+				(int (*)(dllist_elt_t*, void*))compare_seqno,
+				&bi->seqno);
+
+		if (tmp) dllist_insert_before(&tmp->elt, &bi->elt);
+		else dllist_append(u, &bi->elt);
+	}
+}
+
 void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 		const char *name) {
-	int i;
+	int i, tmp = 0, tmp2 = 0, tmp3;
 	uint64_t highest_seqno = 0;
 	assert(b && c);
 	assert(b->mesoblk_log < b->macroblock_log);
@@ -190,47 +209,98 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 	/* read macroblock headers */
 	for (i = 0; i < b->no_macroblocks; i++)
 		blockio_dev_read_header(dev, i, &highest_seqno);
+	
 	if (highest_seqno == 0) {
-		VERBOSE("no data");
+		VERBOSE("device \"%s\" is empty; no macroblocks found", dev->name);
 		return;
 	}
 
-	FATAL("we have %d macroblocks, can't handle that yet", dev->no_macroblocks);
-#if 0
+	uint16_t rebuild_prng[dev->random_len - 1];
+	memset(&rebuild_prng[0], 0, sizeof(rebuild_prng));
 
+	dev->our_macroblocks = ecalloc(dev->no_macroblocks, sizeof(blockio_info_t*));
+	/* check all macroblocks in the map */
 	for (i = 0; i < b->no_macroblocks; i++) {
-		if (bitmap_getbit(&dev->used, i)) {
-			if (b->blockio_infos[i].dev == NULL) {
-				/* claim the yet unwritten block */
-				b->blockio_infos[i].dev = dev;
-				b->blockio_infos[i].indices =
-					ecalloc(dev->mmpm, sizeof(uint32_t));
-			} else if (b->blockio_infos[i].dev != dev) {
-				/* our block is claimed by someone else */
-				FATAL("very bad stuff happens");
-			}
-		} else {
-			/* this should be handled by removing the block */
-			if (b->blockio_infos[i].dev == dev) {
-				FATAL("block looks like ours, but isn't");
-			}
+		blockio_info_t *bi = &b->blockio_infos[i];
+		switch(bitmap_getbits(&dev->status, i<<1, 2)) {
+			case NOT_ALLOCATED:
+				if (bi->dev == dev) {
+					/* this block doesn't belong
+					 * to us anymore */
+					bi->dev = NULL;
+					free(bi->indices);
+				}
+				//VERBOSE("block %d: NOT_ALLOCATED", i);
+				break;
+
+			case HAS_DATA:
+				if (bi->dev != dev || bi->no_indices) {
+					/* no data was detected, there must
+					 * however be data, so we have
+					 * a bug */
+					ecch_throw(ECCH_DEFAULT, "unable to open partition, datablock %s", (bi->dev != dev)?"missing":"is empty");
+				}
+				assert(tmp < dev->no_macroblocks);
+				dev->our_macroblocks[tmp++] = bi;
+				add_to_used(&dev->used_blocks, bi);
+				break;
+
+			case SELECTFROM:
+				assert(tmp2 < dev->random_len - 1);
+				rebuild_prng[tmp2++] = tmp;
+			case FREE:
+				/* block is free, if it contains data,
+				 * this data is obsolete... */
+				if (bi->no_indices) bi->no_indices = 0;
+				assert(tmp < dev->no_macroblocks);
+				dev->our_macroblocks[tmp++] = bi;
+
+				/* claim this block, if we didn't already do it */
+				if (bi->dev != dev) {
+					assert(!bi->dev);
+					bi->dev = dev;
+					bi->indices = ecalloc(dev->mmpm,
+							sizeof(uint32_t));
+				}
+
+				break;
 		}
 	}
+	
+	assert(tmp == dev->no_macroblocks);
 
-	dev->no_macroblocks = bitmap_count(&dev->used);
-	dev->macroblocks =
-		ecalloc(dev->no_macroblocks, sizeof(blockio_info_t*));
-
-	//VERBOSE("we have %d macroblocks", dev->no_macroblocks);
-
-	for (i = 0; i < b->no_macroblocks; i++) {
-		if (b->blockio_infos[i].dev == dev) {
-			assert(j < dev->no_macroblocks);
-			dev->macroblocks[j++] = &b->blockio_infos[i];
-		}
+	tmp = 0;
+	while (dev->our_macroblocks[tmp] - dev->b->blockio_infos !=
+			dev->tail_macroblock_global)  tmp++;
+	assert(tmp < dev->no_macroblocks);
+	dev->tail_macroblock = tmp;
+	
+	assert(tmp2 <= dev->random_len - 1);
+	VERBOSE("we have %d different blocks to rebuild prng", tmp2);
+	// FIXME: derive keep_revisions from here
+	tmp3 = tmp2;
+	random_init(&dev->r, dev->no_macroblocks);
+	random_push(&dev->r, dev->tail_macroblock);
+	
+	/* first: fill in the blanks in rebuild_prng (if any) with random
+	 * choices of the filled in argument */
+	while (tmp2 < dev->random_len - 1)
+		rebuild_prng[tmp2++] = rebuild_prng[random_custom(&dev->r, tmp3)];
+	
+	/* shuffle */
+	for (i = 0; i < tmp2 - 1; i++) {
+		uint16_t xchg = rebuild_prng[i];
+		uint16_t index;
+		index = random_custom(&dev->r, tmp2 - i) + i;
+		rebuild_prng[i] = rebuild_prng[index];
+		rebuild_prng[index] = xchg;
+		VERBOSE("swapped %d and %d", i, index);
 	}
 
-#endif
+	for (i = 0; i < tmp2; i++) random_push(&dev->r, rebuild_prng[i]);
+
+	VERBOSE("we have %d macroblocks in partition \"%s\"",
+			dev->no_macroblocks, dev->name);
 }
 
 #if 0
@@ -251,14 +321,10 @@ blockio_info_t *blockio_dev_get_new_macroblock(blockio_dev_t *dev) {
 
 #endif
 
-int compare_seqno(blockio_info_t *bi, uint64_t *seqno) {
-	return *seqno > bi->seqno;
-}
-
 void blockio_dev_read_header(blockio_dev_t *dev, uint32_t no,
 		uint64_t *highest_seqno) {
 	assert(dev && dev->b && no < dev->b->no_macroblocks);
-	blockio_info_t *tmp, *bi = &dev->b->blockio_infos[no];
+	blockio_info_t /**tmp,*/ *bi = &dev->b->blockio_infos[no];
 	int i;
 	char sha256[32];
 	//VERBOSE("reading macroblock %d", no);
@@ -314,12 +380,12 @@ void blockio_dev_read_header(blockio_dev_t *dev, uint32_t no,
 
 	if (bi->seqno > *highest_seqno) {
 		*highest_seqno = bi->seqno;
-		dev->tail_macroblock = binio_read_uint32_be(TAIL_MACROBLOCK);
-		dev->no_macroblocks = binio_read_uint32_be(NO_MACROBLOCKS);
+		dev->tail_macroblock_global =
+			binio_read_uint16_be(TAIL_MACROBLOCK_GLOBAL);
+		dev->no_macroblocks = binio_read_uint16_be(NO_MACROBLOCKS);
 		dev->reserved_macroblocks =
-			binio_read_uint32_be(RESERVED_MACROBLOCKS);
-		dev->keep_revisions = binio_read_uint8(KEEP_REVISIONS);
-		dev->random_len = binio_read_uint8(RANDOM_LEN);
+			binio_read_uint16_be(RESERVED_MACROBLOCKS);
+		dev->random_len = binio_read_uint32_be(RANDOM_LEN);
 		bitmap_read(&dev->status, (uint32_t*)BITMAP);
 	}
 
@@ -331,15 +397,6 @@ void blockio_dev_read_header(blockio_dev_t *dev, uint32_t no,
 	VERBOSE("block %u (seqno=%llu) belongs to \"%s\" and has %d indices",
 			no, bi->seqno, dev->name, bi->no_indices);
 
-	/* put block in the 'in use' list, if it contains data */
-	if (bi->no_indices) {
-		tmp = dllist_iterate(&dev->used_blocks,
-				(int (*)(dllist_elt_t*, void*))compare_seqno,
-				&bi->seqno);
-
-		if (tmp) dllist_insert_before(&tmp->elt, &bi->elt);
-		else dllist_append(&dev->used_blocks, &bi->elt);
-	}
 	bi->dev = dev;
 
 	return;
@@ -408,11 +465,10 @@ void blockio_dev_write_current_macroblock(blockio_dev_t *dev) {
 	/* write static data */
 	binio_write_uint64_be(SEQNO, dev->bi->seqno);
 	memcpy(MAGIC, magic, sizeof(magic));
-	binio_write_uint32_be(TAIL_MACROBLOCK, dev->tail_macroblock);
-	binio_write_uint32_be(NO_MACROBLOCKS, dev->no_macroblocks);
-	binio_write_uint32_be(RESERVED_MACROBLOCKS, dev->reserved_macroblocks);
-	binio_write_uint8(KEEP_REVISIONS, dev->keep_revisions);
-	binio_write_uint8(RANDOM_LEN, dev->random_len);
+	binio_write_uint16_be(TAIL_MACROBLOCK_GLOBAL, dev->tail_macroblock_global);
+	binio_write_uint16_be(NO_MACROBLOCKS, dev->no_macroblocks);
+	binio_write_uint16_be(RESERVED_MACROBLOCKS, dev->reserved_macroblocks);
+	binio_write_uint32_be(RANDOM_LEN, dev->random_len);
 	binio_write_uint8(MACROBLOCK_LOG, dev->b->macroblock_log);
 	binio_write_uint8(MESOBLOCK_LOG, dev->b->mesoblk_log);
 
@@ -432,6 +488,9 @@ void blockio_dev_write_current_macroblock(blockio_dev_t *dev) {
 
 	dev->b->write(dev->b->priv, BASE, id<<dev->b->macroblock_log,
 			1<<dev->b->macroblock_log);
+
+	dev->next_seqno = dev->bi->seqno + 1;
+	dev->bi = NULL; /* there is no current block */
 }
 
 void blockio_dev_set_macroblock_status(blockio_dev_t *dev, uint32_t no,

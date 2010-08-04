@@ -95,9 +95,9 @@ static int fuse_io_open(const char *path, struct fuse_file_info *fi) {
 			entries, path + 1);
 	if (!entry) return -ENOENT;
 
-	// FIXME: disallow opening
-	hashtbl_unlock_element_byptr(entry);
-	return -EBUSY;
+//	// FIXME: disallow opening
+//	hashtbl_unlock_element_byptr(entry);
+//	return -EBUSY;
 
 	if (entry->inuse || entry->to_be_deleted) {
 		hashtbl_unlock_element_byptr(entry);

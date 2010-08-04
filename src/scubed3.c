@@ -143,7 +143,8 @@ void scubed3_init(scubed3_t *l, blockio_dev_t *dev) {
 
 	if (dev->no_macroblocks <= dev->reserved_macroblocks) return;
 
-	no_block_indices = (dev->no_macroblocks - dev->reserved_macroblocks)*dev->mmpm;
+	no_block_indices = (dev->no_macroblocks -
+			dev->reserved_macroblocks)*dev->mmpm;
 	l->block_indices = ecalloc(no_block_indices, sizeof(uint32_t));
 
 	for (i = 0; i < no_block_indices; i++) l->block_indices[i] = 0xFFFFFFFF;
@@ -151,6 +152,10 @@ void scubed3_init(scubed3_t *l, blockio_dev_t *dev) {
 	debug_stuff(l);
 	dllist_iterate(&dev->used_blocks,
 		(int (*)(dllist_elt_t*, void*))replay, l);
+
+	VERBOSE("we must free %d %d", dev->tail_macroblock, dev->tail_macroblock_global);
+	assert(blockio_dev_get_macroblock_status(dev, dev->tail_macroblock) == FREE);
+
 }
 
 void blockio_dev_fake_mesoblk_part(blockio_dev_t *dev, void *addr,
@@ -240,7 +245,7 @@ int do_req(scubed3_t *l, scubed3_io_t cmd, uint64_t r_offset, size_t size,
 	int (*action)(scubed3_t*, uint32_t, uint32_t, uint32_t, char*) =
 		(cmd == SCUBED3_WRITE)?do_write:do_read;
 
-	VERBOSE("do_req: %s offset=%lld size=%d\n", (cmd == SCUBED3_WRITE)?"write":"read", r_offset, size);
+	VERBOSE("do_req: %s offset=%lld size=%d", (cmd == SCUBED3_WRITE)?"write":"read", r_offset, size);
 
 	if (inmeso) {
 		if (inmeso + size <= 1<<l->dev->b->mesoblk_log) reqsz = size;

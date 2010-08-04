@@ -35,14 +35,6 @@ typedef struct scubed3_s {
 	uint16_t mesobits;
 	uint32_t mesomask;
 
-	/* current block in memory */
-	struct blockio_info_s *cur;
-	char *data;
-	int updated;
-
-	/* temporary vars for checking the integrity of the device */
-	uint64_t next_seqno;
-
 	/* the real device is split into an array of mesoblocks, where
 	 * can we find mesoblock 16? -> block_indices[16] is an uint32_t,
 	 * the high bits encode the macroblock number and the low
@@ -56,6 +48,8 @@ int do_req(scubed3_t*, scubed3_io_t, uint64_t, size_t, char*);
 struct blockio_dev_s;
 
 void scubed3_init(scubed3_t*, struct blockio_dev_s*);
+
+void scubed3_reinit(scubed3_t*);
 
 void scubed3_free(scubed3_t*);
 

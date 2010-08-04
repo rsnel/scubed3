@@ -34,6 +34,7 @@ typedef struct blockio_info_s {
 	char data_hash[32];
 	char seqnos_hash[32];
 	uint32_t no_indices;
+	uint32_t no_nonobsolete;
 	uint32_t *indices;
 	struct blockio_dev_s *dev;
 } blockio_info_t;
@@ -108,6 +109,10 @@ int blockio_check_data_hash(blockio_info_t*);
 void blockio_dev_write_current_macroblock(blockio_dev_t*);
 
 void blockio_free(blockio_t*);
+
+void blockio_dev_select_next_macroblock(blockio_dev_t*, int);
+
+void blockio_dev_select_next_valid_macroblock(blockio_dev_t*, int);
 
 typedef enum blockio_dev_macroblock_status_e {
 		NOT_ALLOCATED, HAS_DATA, FREE, SELECTFROM }

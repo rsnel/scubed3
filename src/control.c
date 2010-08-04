@@ -135,7 +135,7 @@ static int control_status(int s, control_thread_priv_t *priv, char *argv[]) {
         int rep(control_status_priv_t *priv, fuse_io_entry_t *entry) {
 		size_t size = ((entry->d.no_macroblocks - entry->d.reserved_macroblocks)*entry->d.mmpm);
 		priv->macroblocks_left -= entry->d.no_macroblocks;
-                return control_write_line(priv->s, "%07u blocks in %s (%ld usable bytes)\n", entry->d.no_macroblocks, entry->head.key, (size >= 0)?size<<entry->d.b->mesoblk_log:0);
+                return control_write_line(priv->s, "%07u blocks in %s (%ld usable bytes)\n", entry->d.no_macroblocks, entry->head.key, (entry->d.no_macroblocks >= entry->d.reserved_macroblocks)?size<<entry->d.b->mesoblk_log:0);
         }
 
 	if (control_write_status(s, 0)) return -1;
@@ -199,14 +199,10 @@ static int control_open_add_common(int s, control_thread_priv_t *priv, char *arg
 		if (!add & !entry->d.no_macroblocks)
 			ecch_throw(ECCH_DEFAULT, "unable to open device: use add instead");
 		entry->size = 0;
-		//scubed3_init(&entry->l, &entry->d);
-		//entry->size = ((entry->l.dev->no_macroblocks-entry->
-		//			l.dev->reserved)*entry->l.dev->mmpm)
-		//	<<entry->l.dev->b->mesoblk_log;
-		//VERBOSE("here-7");
+		scubed3_init(&entry->l, &entry->d);
+		if (entry->l.dev->no_macroblocks > entry->l.dev->reserved_macroblocks) entry->size = ((entry->l.dev->no_macroblocks-entry->l.dev->reserved_macroblocks)<<entry->d.b->mesoblk_log)*entry->l.dev->mmpm;
 	}
 	ecch_catch_all {
-	//	VERBOSE("here3");
 		entry->to_be_deleted = 1;
 		hashtbl_unlock_element_byptr(entry);
 		hashtbl_delete_element_byptr(priv->h, entry);
@@ -247,6 +243,7 @@ static int control_close(int s, control_thread_priv_t *priv, char *argv[]) {
 	return control_write_complete(s, 0, "partition \"%s\" closed", argv[0]);
 }
 
+#if 0
 static int last_diff(random_t *r, int last, int *first) {
         int i;
         assert(last >= 0);
@@ -259,6 +256,7 @@ static int last_diff(random_t *r, int last, int *first) {
 
         return 1;
 }
+#endif
 
 static int control_resize(int s, control_thread_priv_t *priv, char *argv[]) {
 	long int size;
@@ -357,7 +355,9 @@ static int control_resize(int s, control_thread_priv_t *priv, char *argv[]) {
 			assert(!dev->bi);
 			dev->keep_revisions = DEFAULT_KEEP_REVISIONS;
 			dev->reserved_macroblocks = DEFAULT_RESERVED_MACROBLOCKS;
+			blockio_dev_select_next_valid_macroblock(dev, 1);
 		}
+#if 0
 		if (!dev->bi) {
 			int number, valid = 1, different = 1, tmp2 = 0;
 
@@ -393,10 +393,11 @@ static int control_resize(int s, control_thread_priv_t *priv, char *argv[]) {
 			VERBOSE("guess %d", random_peek(&dev->r, 0));
 			random_pop(&dev->r);
 		}	
+#endif
 
 	}
-
 	dev->updated = 1;
+	scubed3_reinit(&entry->l);
 
 	hashtbl_unlock_element_byptr(entry);
 	

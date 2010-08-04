@@ -51,7 +51,6 @@
 #define ID	(index>>l->mesobits)
 #define NO	(index&l->mesomask)
 
-#if 0
 void obsolete_mesoblk(scubed3_t *l, blockio_info_t *bi, uint32_t no) {
 	assert(bi);
 	assert(bi->no_nonobsolete);
@@ -71,107 +70,37 @@ static inline void update_block_indices(scubed3_t *l, uint32_t offset,
 	l->block_indices[offset] = (id<<l->mesobits) + no;
 }
 
-struct hash_seqnos_s {
-	gcry_md_hd_t hd;
-	blockio_info_t *last;
-};
-
-char *hash_seqnos(scubed3_t *l, char *md5sum_res, blockio_info_t *last) {
-	struct hash_seqnos_s priv = {
-		.last = last
-	};
-	int add_seqno(blockio_info_t *bi, struct hash_seqnos_s *priv) {
-		//printf(" %llu", bi->seqno);
-		gcry_md_write(priv->hd, &bi->seqno, sizeof(uint64_t));
-		return !(priv->last == bi);
-	}
-
-	//printf("sns:");
-	gcry_call(md_open, &priv.hd, GCRY_MD_MD5, 0);
-	dllist_iterate(&l->dev->used_blocks,
-			(int (*)(dllist_elt_t*, void*))add_seqno, &priv);
-	//printf("\n");
-	memcpy(md5sum_res, gcry_md_read(priv.hd, 0), 16);
-	gcry_md_close(priv.hd);
-
-	return md5sum_res;
-}
-
 static void add_blockref(scubed3_t *l, uint32_t offset) {
-	l->cur->indices[l->cur->no_indices] = offset;
-	update_block_indices(l, offset, id(l->cur), l->cur->no_indices);
-	l->cur->no_indices++;
+	l->dev->bi->indices[l->dev->bi->no_indices] = offset;
+	update_block_indices(l, offset, id(l->dev->bi), l->dev->bi->no_indices);
+	l->dev->bi->no_indices++;
 }
 
-static inline char *mesoblk(scubed3_t *l, uint16_t no) {
-	assert(no < l->cur->max_indices);
-	return l->data + (no<<l->dev->b->mesoblk_log);
+static inline uint8_t *mesoblk(scubed3_t *l, uint16_t no) {
+	assert(no < l->dev->bi->no_indices);
+	return l->dev->tmp_macroblock + ((no+1)<<l->dev->b->mesoblk_log);
 }
 
 void select_new_macroblock(scubed3_t *l) {
-	blockio_info_t *head;
-	uint32_t new, k, index;
-
-	l->cur = blockio_dev_get_new_macroblock(l->dev);
-	l->cur->seqno = l->next_seqno++;
-	l->cur->no_indices = 0;
-	l->updated = 0;
-
-	//FIXME we use a deterministic 'random' number generator for testing
-	while (l->dev->next_free_macroblock == (new = id(l->dev->macroblocks[gcry_fastranduint32(l->dev->no_macroblocks)]))) {
-		VERBOSE("duplicator rex!");
-		blockio_dev_write_macroblock(l->dev, l->data, l->cur);
-		l->cur->seqno = l->next_seqno++;
-	}
-
-	l->dev->next_free_macroblock = new;
-
-	head = blockio_dev_gc_which_macroblock(l->dev,
-			l->dev->next_free_macroblock);
-
-	/* copy contents of selected new empty block to RAM */
-	for (k = 0; k < head->no_indices; k++) {
-		index = l->block_indices[head->indices[k]];
-		if (index != 0xFFFFFFFF &&
-				&l->dev->b->blockio_infos[ID] == head) {
-			blockio_dev_read_mesoblk(l->dev, mesoblk(l,
-					l->cur->no_indices), id(head), k);
-
-			add_blockref(l, head->indices[k]);
-
-			obsolete_mesoblk(l, head, k);
-		}
-	}
-
+	FATAL("select_new_macroblock not implemented");
+#if 0
 	DEBUG("new block %u (seqno=%llu) has %u mesoblocks due to GC of "
 			"block %u", id(l->cur), l->cur->seqno,
 			l->cur->no_indices, id(head));
+#endif
 }
 
 int replay(blockio_info_t *bi, scubed3_t *l) {
 	uint32_t k, index;
-	char md5_calc[16];
 
 	for (k = 0; k < bi->no_indices; k++) {
-		//VERBOSE("k=%u, bi->indices[k]=%u", k, bi->indices[k]);
+		VERBOSE("k=%u, bi->indices[k]=%u", k, bi->indices[k]);
 		index = l->block_indices[bi->indices[k]];
 		assert(id(bi) != ID);
 		obsolete_mesoblk_byidx(l, index);
 		update_block_indices(l, bi->indices[k], id(bi), k);
 	}
 
-	hash_seqnos(l, md5_calc, bi);
-	if (!memcmp(bi->seqnos_hash, md5_calc, 16)) {
-		VERBOSE("revision %llu OK!", bi->seqno) ;
-		l->next_seqno = bi->seqno + 1;
-	}
-#if 0
-	else {
-		VERBOSE("revision %llu not OK", b->seqno);
-	}
-#endif
-
-	l->cur = bi;
 	return 1;
 }
 
@@ -182,30 +111,21 @@ void debug_stuff(scubed3_t *l) {
 				b->seqno, b->no_nonobsolete);
 		return 1;
 	}
+	VERBOSE("debug stuff-----");
 	dllist_iterate(&l->dev->used_blocks,
 			(int (*)(dllist_elt_t*, void*))que, NULL);
-}
-
-void commit_current_macroblock(scubed3_t *l) {
-	l->cur->no_nonobsolete = l->cur->no_indices;
-	dllist_append(&l->dev->used_blocks, &l->cur->elt);
-
-	hash_seqnos(l, l->cur->seqnos_hash, NULL);
-
-	blockio_dev_write_macroblock(l->dev, l->data, l->cur);
+	VERBOSE("end-------------");
 }
 
 void scubed3_free(scubed3_t *l) {
 	VERBOSE("freeing scubed3 partition");
-	if (l->updated) {
-		DEBUG("committing current macroblock to disk and exit");
-		commit_current_macroblock(l);
-	} else {
-		DEBUG("current macroblock doesn't contain new data, exiting");
-	}
-
 	free(l->block_indices);
-	free(l->data);
+}
+
+void scubed3_reinit(scubed3_t *l) {
+	VERBOSE("scubed reinit");
+	free(l->block_indices);
+	scubed3_init(l, l->dev);
 }
 
 void scubed3_init(scubed3_t *l, blockio_dev_t *dev) {
@@ -213,57 +133,24 @@ void scubed3_init(scubed3_t *l, blockio_dev_t *dev) {
 	uint32_t no_block_indices;
 	assert(l && dev);
 
-	assert(dev->no_macroblocks); /* do not call this in this case */
-
 	l->dev = dev;
-	l->cur = NULL;
+
+	if (!dev->no_macroblocks) return;
 
 	l->mesobits = (dev->b->macroblock_log - dev->b->mesoblk_log);
 	l->mesomask = 0xFFFFFFFF>>(32 - l->mesobits);
-	DEBUG("mesobits=%u, mesomask=%08x", l->mesobits, l->mesomask);
+	//DEBUG("mesobits=%u, mesomask=%08x", l->mesobits, l->mesomask);
 
-	no_block_indices = (dev->no_macroblocks - dev->reserved)*dev->mmpm;
+	if (dev->no_macroblocks <= dev->reserved_macroblocks) return;
+
+	no_block_indices = (dev->no_macroblocks - dev->reserved_macroblocks)*dev->mmpm;
 	l->block_indices = ecalloc(no_block_indices, sizeof(uint32_t));
 
 	for (i = 0; i < no_block_indices; i++) l->block_indices[i] = 0xFFFFFFFF;
 
-	l->data = ecalloc(dev->mmpm, dev->mesoblk_size);
-
-	l->next_seqno = 0;
-	assert(!l->cur); /* l->cur should still be NULL */
+	debug_stuff(l);
 	dllist_iterate(&dev->used_blocks,
 		(int (*)(dllist_elt_t*, void*))replay, l);
-
-	if (l->cur) {
-		if (l->next_seqno != l->cur->seqno + 1)
-			FATAL("last revision (%llu) borked", l->cur->seqno);
-
-		if(!blockio_check_data_hash(l->cur)) {
-			FATAL("newest block has invalid data");
-		} else DEBUG("data in newest block is OK");
-	}
-
-	debug_stuff(l);
-
-	l->next_seqno = dev->highest_seqno_seen;
-
-	//FIXME we use a deterministic 'random' number generator for testing
-	if (!l->next_seqno) {
-		dev->next_free_macroblock =
-			id(dev->macroblocks[gcry_fastranduint32(
-						dev->no_macroblocks)]);
-	}
-
-	l->next_seqno++;
-
-	/* prepare ext[234] mount/umount detection */
-	DEBUG("next free macroblock is %d", dev->next_free_macroblock);
-
-	select_new_macroblock(l);
-
-	if (l->cur->seqno == 1) l->updated = 1;
-
-	DEBUG("next block is %u (seqno=%llu)", id(l->cur), l->cur->seqno);
 }
 
 void blockio_dev_fake_mesoblk_part(blockio_dev_t *dev, void *addr,
@@ -281,39 +168,38 @@ void do_cow(scubed3_t *l, uint32_t index, uint32_t muoff,
 	/* read the parts of the  mesoblock we don't modify from disk
 	 * otherwise, set it to zero */
 	if (muoff) readorfake(l->dev, addr, ID, NO, 0, muoff);
-	if (l->dev->mesoblk_size > size + muoff)
+	if (1<<l->dev->b->mesoblk_log > size + muoff)
 		readorfake(l->dev, addr + muoff + size, ID, NO, muoff + size,
-				l->dev->mesoblk_size - size - muoff);
+				(1<<l->dev->b->mesoblk_log) - size - muoff);
 }
 
 int do_write(scubed3_t *l, uint32_t mesoff, uint32_t muoff, uint32_t size,
 		char *in) {
 	uint32_t index = l->block_indices[mesoff];
-	assert(muoff + size <= l->dev->mesoblk_size);
+	assert(muoff + size <= 1<<l->dev->b->mesoblk_log);
 	void *addr;
 	/* three possibilities:
 	 * 1. the block is currently in RAM, we update it
 	 * 2. the block was never written, we add it to RAM
 	 * 3. the block is on disk, we obsolete it and add it to RAM */
 
-	l->updated = 1;
+	l->dev->updated = 1;
 
-	if (ID != id(l->cur)) {
+	if (ID != id(l->dev->bi)) {
 		/* could be that the new block is full after
 		 * garbage collecting (depends on the way the
 		 * to-be-freed block is selected) */
-		while (l->cur->no_indices == l->cur->max_indices) {
-			commit_current_macroblock(l);
+		while (l->dev->bi->no_indices == l->dev->mmpm) {
 			select_new_macroblock(l);
 		}
 		index = l->block_indices[mesoff];
 	}
 
-	addr = mesoblk(l, (ID == id(l->cur))?NO:l->cur->no_indices);
+	addr = mesoblk(l, (ID == id(l->dev->bi))?NO:l->dev->bi->no_indices);
 	memcpy(addr + muoff, in, size);
 
 	/* if not, the mesoblock is in RAM */
-	if (ID != id(l->cur)) { /* we are on disk */
+	if (ID != id(l->dev->bi)) { /* we are on disk */
 		/* if we do not write the complete mesoblock, read the
 		 * other parts from disk (if possible) or zero them */
 		do_cow(l, index, muoff, size, addr);
@@ -336,7 +222,7 @@ int do_read(scubed3_t *l, uint32_t mesoff, uint32_t muoff, uint32_t size,
 	 * 2. the block was never written, we return zeroes
 	 * 3. the block is on disk */
 
-	if (ID == id(l->cur)) /* in RAM */
+	if (ID == id(l->dev->bi)) /* in RAM */
 		memcpy(out, mesoblk(l, NO) + muoff, size);
 	else if (index == 0xFFFFFFFF) /* never written */
 		memset(out, 0, size);
@@ -344,21 +230,21 @@ int do_read(scubed3_t *l, uint32_t mesoff, uint32_t muoff, uint32_t size,
 		blockio_dev_read_mesoblk_part(l->dev, out, ID, NO, muoff, size);
 	return 0;
 }
-#endif
 
 int do_req(scubed3_t *l, scubed3_io_t cmd, uint64_t r_offset, size_t size,
 		char *buf) {
-#if 0
 	assert(cmd == SCUBED3_READ || cmd == SCUBED3_WRITE);
 	uint32_t meso = r_offset>>l->dev->b->mesoblk_log;
-	uint32_t inmeso = r_offset%l->dev->mesoblk_size;
+	uint32_t inmeso = r_offset%(1<<l->dev->b->mesoblk_log);
 	uint32_t ooff = 0, reqsz;
 	int (*action)(scubed3_t*, uint32_t, uint32_t, uint32_t, char*) =
 		(cmd == SCUBED3_WRITE)?do_write:do_read;
 
+	VERBOSE("do_req: %s offset=%lld size=%d\n", (cmd == SCUBED3_WRITE)?"write":"read", r_offset, size);
+
 	if (inmeso) {
-		if (inmeso + size <= l->dev->mesoblk_size) reqsz = size;
-		else reqsz = l->dev->mesoblk_size - inmeso;
+		if (inmeso + size <= 1<<l->dev->b->mesoblk_log) reqsz = size;
+		else reqsz = (1<<l->dev->b->mesoblk_log) - inmeso;
 
 		if (action(l, meso, inmeso, reqsz, buf + ooff)) return 0;
 		meso++;
@@ -366,47 +252,18 @@ int do_req(scubed3_t *l, scubed3_io_t cmd, uint64_t r_offset, size_t size,
 		ooff += reqsz;
 	}
 
-	while (size >= l->dev->mesoblk_size) {
-		if (action(l, meso, 0, l->dev->mesoblk_size, buf + ooff))
+	while (size >= 1<<l->dev->b->mesoblk_log) {
+		if (action(l, meso, 0, 1<<l->dev->b->mesoblk_log, buf + ooff))
 			return 0;
 		meso++;
-		size -= l->dev->mesoblk_size;
-		ooff += l->dev->mesoblk_size;
+		size -= 1<<l->dev->b->mesoblk_log;
+		ooff += 1<<l->dev->b->mesoblk_log;
 	}
 
 	if (size > 0 && action(l, meso, 0, size, buf + ooff)) return 0;
-#endif 
 
 	return 1;
 }
-#if 0
-void test_func(void) {
-	uint8_t key[16] = {
-		0xc2, 0x86, 0x69, 0x6d, 0x88, 0x7c, 0x9a, 0xa0,
-		0x61, 0x1b, 0xbb, 0x3e, 0x20, 0x25, 0xa4, 0x5a
-	};
-	uint8_t Z[16] = {
-		0x56, 0x2e, 0x17, 0x99, 0x6d, 0x09, 0x3d, 0x28,
-		0xdd, 0xb3, 0xba, 0x69, 0x5a, 0x2e, 0x6f, 0x58
-	};
-	uint8_t data[32] = {
-		0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
-		0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
-		0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
-		0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f
-	};
-	cipher_t w;
-
-	cipher_init(&w, "CBC_LARGE(AES)", 2, key, 16);
-	cipher_enc_iv(&w, data, data, Z);
-	verbose_md5((char*)data);
-	verbose_md5((char*)data+16);
-	cipher_dec_iv(&w, data, data, Z);
-	verbose_md5((char*)data);
-	verbose_md5((char*)data+16);
-	cipher_free(&w);
-}
-#endif
 
 #define SCUBED3_OPT_KEY(a,b,c) { a, offsetof(struct options, b), c }
 
@@ -429,10 +286,9 @@ int main(int argc, char **argv) {
 		SCUBED3_OPT_KEY("-M %d", macroblock_log, 0),
 		FUSE_OPT_END
 	};
-	int ret;//, i, j = 0;
+	int ret;
 	struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
 	blockio_t b;
-	//scubed3_t l;
 
 	verbose_init(argv[0]);
 
@@ -454,49 +310,8 @@ int main(int argc, char **argv) {
 
 	blockio_init_file(&b, options.base,
 			options.macroblock_log, options.mesoblock_log);
-#if 0
-	uint8_t key[32] = {
-		0x12, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
-		0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
-		0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
-		0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77
-	};
-	cipher_t c;
-	blockio_dev_t dev;
-	cipher_init(&c, "CBC_LARGE(AES256)", // "CBC_LARGE(SERPENT256)",
-			2<<(options.mesoblock_log - 4 - 1), key, sizeof(key));
-	blockio_dev_init(&dev, &b, &c, options.mesoblock_log, "test");
-	if (dev.no_macroblocks == 0) {
-		WARNING("device \"%s\" is empty, %u/%u, making it full",
-				dev.name, dev.used.no_set, dev.used.no_bits);
-		bitmap_setbits(&dev.used, dev.b->no_macroblocks);
-		dev.reserved = options.reserved;
-		for (i = 0; i < dev.b->no_macroblocks; i++) {
-			dev.b->blockio_infos[i].dev = &dev;
-			dev.b->blockio_infos[i].indices = ecalloc(dev.mmpm,
-					sizeof(uint32_t));
-		}
-		dev.no_macroblocks = dev.b->no_macroblocks;
-		dev.macroblocks = ecalloc(dev.no_macroblocks,
-				sizeof(blockio_info_t*));
-		for (i = 0; i < dev.b->no_macroblocks; i++) {
-			if (dev.b->blockio_infos[i].dev == &dev) {
-				assert(j < dev.no_macroblocks);
-				dev.macroblocks[j++] = &dev.b->blockio_infos[i];
-			}
-		}
-	} else {
-		VERBOSE("device \"%s\" has %u/%u macroblocks", dev.name, dev.used.no_set, dev.used.no_bits);
-	}
-
-	//scubed3_init(&l, &dev);
-#endif
 
 	ret = fuse_io_start(args.argc, args.argv, &b);
-
-	//scubed3_free(&l);
-	//blockio_dev_free(&dev);
-	//cipher_free(&c);
 
 	blockio_free(&b);
 

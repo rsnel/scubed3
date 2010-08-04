@@ -71,8 +71,8 @@ void cipher_init(cipher_t *w, const char *name, size_t size,
 			GCRYCTL_GET_KEYLEN, NULL, &bkey_len);
 	if (key_len != bkey_len) ecch_throw(ECCH_DEFAULT, "supplied key has wrong length");
 
-	VERBOSE("opening %s(%s), with %d cipherblocks per mesoblock",
-			mode, prim, size);
+	//VERBOSE("opening %s(%s), with %d cipherblocks per mesoblock",
+	//		mode, prim, size);
 
 	gcry_call(cipher_open, &w->hd, algo, GCRY_CIPHER_MODE_ECB, 0);
 	gcry_call(cipher_setkey, w->hd, key, key_len);

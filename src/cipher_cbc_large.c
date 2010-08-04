@@ -67,13 +67,21 @@ static void cbc_large_dec(void *priv, uint8_t *out,
 		const uint8_t *in, const uint8_t *iv) {
 	cbc_large_t *ctx = priv;
 	block_t tmp, tmp2;
+	const uint8_t *gcry_in = in;
+	size_t gcry_inlen = 16;
 	int i = ctx->no_blocks;
+
+	if (out == in) {
+		gcry_in = NULL;
+		gcry_inlen = 0;
+	}
 
 	memcpy(tmp, iv, 16);
 
 	while (i--) {
 		memcpy(tmp2, in, 16);
-		gcry_call(cipher_decrypt, ctx->hd, out, 16, in, 16);
+		gcry_call(cipher_decrypt, ctx->hd, out, 16,
+				gcry_in, gcry_inlen);
 		xor_block(out, out, tmp);
 		memcpy(tmp, tmp2, 16);
 		out += 16;

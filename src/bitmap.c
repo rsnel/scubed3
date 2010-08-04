@@ -87,6 +87,14 @@ void bitmap_setbit(bitmap_t *b, uint32_t index) {
 	b->no_set++;
 }
 
+void bitmap_setbit_safe(bitmap_t *b, uint32_t index) {
+	assert(b);
+	assert(index < b->no_bits);
+	b->bits[index/(8*sizeof(uint32_t))] |=
+		(1<<(index%(8*sizeof(uint32_t))));
+	b->no_set++;
+}
+
 /* may only be called on a bit that is set */
 void bitmap_clearbit(bitmap_t *b, uint32_t index) {
 	assert(b);

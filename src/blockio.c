@@ -155,7 +155,8 @@ static const char magic[8] = "SSS3v0.1";
 void blockio_dev_free(blockio_dev_t *dev) {
 	int i;
 	assert(dev);
-	VERBOSE("closing \"%s\", %s", dev->name, dev->updated?"SHOULD BE WRITTEN":"no updates");
+	//VERBOSE("closing \"%s\", %s", dev->name, dev->updated?"SHOULD BE WRITTEN":"no updates");
+	if (dev->updated) blockio_dev_write_current_macroblock(dev);
 	random_free(&dev->r);
 	bitmap_free(&dev->status);
 
@@ -281,8 +282,8 @@ void blockio_dev_read_header(blockio_dev_t *dev, uint32_t no,
 
 	/* check magic */
 	if (memcmp(magic, MAGIC, sizeof(magic))) {
-		DEBUG("magic \"%.*s\" not found in mesoblock %u",
-				sizeof(magic), magic, no);
+		//DEBUG("magic \"%.*s\" not found in mesoblock %u",
+		//		sizeof(magic), magic, no);
 		return;
 	}
 
@@ -384,66 +385,83 @@ int blockio_check_data_hash(blockio_info_t *bi) {
 }
 #endif
 
-void blockio_dev_write_macroblock(blockio_dev_t *dev, const void *data,
-		blockio_info_t *bi) {
-	uint32_t id = bi - dev->b->blockio_infos;
-	//int i;
-	assert(bi && id < dev->b->no_macroblocks);
+void blockio_dev_write_current_macroblock(blockio_dev_t *dev) {
+	uint32_t id = dev->bi - dev->b->blockio_infos;
+	int i;
+	assert(dev->bi && id < dev->b->no_macroblocks);
 
-	DEBUG("write block %u (seqno=%llu)", id, bi->seqno);
+	DEBUG("write block %u (seqno=%llu)", id, dev->bi->seqno);
 
-	/* write magic */
-	memcpy(MAGIC, magic, sizeof(magic));
+	/* encrypt datablocks (also the unused ones) */
+	for (i = 1; i <= dev->mmpm; i++)
+		cipher_enc(dev->c, BASE + (i<<dev->b->mesoblk_log),
+			BASE + (i<<dev->b->mesoblk_log), dev->bi->seqno, i);
+	
+	/* calculate hash of data, store in index */
+	gcry_md_hash_buffer(GCRY_MD_SHA256, DATABLOCKS_HASH,
+			BASE + (1<<dev->b->mesoblk_log),
+			dev->mmpm<<dev->b->mesoblk_log);
+
+	/* calculate hash of seqnos */
+	//TODO
 
 	/* write static data */
+	binio_write_uint64_be(SEQNO, dev->bi->seqno);
+	memcpy(MAGIC, magic, sizeof(magic));
+	binio_write_uint32_be(TAIL_MACROBLOCK, dev->tail_macroblock);
+	binio_write_uint32_be(NO_MACROBLOCKS, dev->no_macroblocks);
+	binio_write_uint32_be(RESERVED_MACROBLOCKS, dev->reserved_macroblocks);
+	binio_write_uint8(KEEP_REVISIONS, dev->keep_revisions);
+	binio_write_uint8(RANDOM_LEN, dev->random_len);
 	binio_write_uint8(MACROBLOCK_LOG, dev->b->macroblock_log);
 	binio_write_uint8(MESOBLOCK_LOG, dev->b->mesoblk_log);
 
-	binio_write_uint64_be(SEQNO, bi->seqno);
-#if 0
-	binio_write_uint32_be(RESERVED, dev->reserved);
-	binio_write_uint32_be(NO_INDEXBLOCKS, dev->no_indexblocks);
+	binio_write_uint32_be(NO_INDICES, dev->bi->no_indices);
+	for (i = 1; i <= dev->bi->no_indices; i++)
+		*(((uint32_t*)NO_INDICES) + i) = dev->bi->indices[i-1];
 
-	/* write other data */
-	memcpy(SEQNOS_HASH, bi->seqnos_hash, 16);
-	binio_write_uint64_be(SEQNO, bi->seqno);
-	binio_write_uint16_be(NO_INDICES, bi->no_indices);
-	binio_write_uint32_be(NEXT_MACROBLOCK, dev->next_free_macroblock);
+	bitmap_write((uint32_t*)BITMAP, &dev->status);
 
-	bit_pack(INDICES, bi->indices, bi->no_indices, dev->strip_bits);
-	binio_write_uint32_be(INDICES + 4*bit_get_size(dev->mmpm,
-				dev->strip_bits), dev->used.no_bits);
-	bitmap_write(INDICES + 4*bit_get_size(dev->mmpm,
-				dev->strip_bits) + 4, &dev->used);
+	/* calculate hash of indexblock */
+	gcry_md_hash_buffer(GCRY_MD_SHA256, INDEXBLOCK_HASH,
+			dev->tmp_macroblock + 32 /* size of hash */,
+			(1<<dev->b->mesoblk_log) - 32 /* size of hash */);
 
-	/* encrypt data */
-	for (i = 0; i < dev->mmpm; i++)
-		cipher_enc(dev->c, BASE +
-				((dev->no_indexblocks + i)<<
-				 dev->b->mesoblk_log),
-				data + (i<<dev->b->mesoblk_log), bi->seqno,
-				i + dev->no_indexblocks);
-
-	/* calculate md5sum of data, store in index */
-	gcry_md_hash_buffer(GCRY_MD_MD5, DATABLOCKS_HASH,
-			BASE + (dev->no_indexblocks<<dev->b->mesoblk_log),
-			dev->mmpm<<dev->b->mesoblk_log);
-
-	/* calculate md5sum of indexblock */
-	gcry_md_hash_buffer(GCRY_MD_MD5, INDEXBLOCK_HASH, MAGIC0,
-			(dev->no_indexblocks<<dev->b->mesoblk_log) -
-			MAGIC0_OFFSET);
-
-	/* encrypt index, first block with IV 0, we never encrypt
-	 * the same first block twice, since the first block depends
-	 * (through a cryptographic hash) on the sequence number */
+	/* encrypt index */
 	cipher_enc(dev->c, BASE, BASE, 0, 0);
-
-	for (i = 1; i < dev->no_indexblocks; i++)
-		cipher_enc(dev->c, BASE + (i<<dev->b->mesoblk_log),
-				BASE + (i<<dev->b->mesoblk_log), bi->seqno, i);
 
 	dev->b->write(dev->b->priv, BASE, id<<dev->b->macroblock_log,
 			1<<dev->b->macroblock_log);
-#endif
 }
+
+void blockio_dev_set_macroblock_status(blockio_dev_t *dev, uint32_t no,
+		blockio_dev_macroblock_status_t status) {
+	uint32_t raw_no;
+	assert(dev);
+	assert(no < dev->no_macroblocks);
+	raw_no = dev->our_macroblocks[no] - dev->b->blockio_infos;
+
+	if (status&1) bitmap_setbit_safe(&dev->status, raw_no<<1);
+	else bitmap_clearbit_safe(&dev->status, raw_no<<1);
+
+	if (status&2) bitmap_setbit_safe(&dev->status, (raw_no<<1) + 1);
+	else bitmap_clearbit_safe(&dev->status, (raw_no<<1) + 1);
+}
+
+blockio_dev_macroblock_status_t blockio_dev_get_macroblock_status(
+		blockio_dev_t *dev, uint32_t no) {
+	uint32_t raw_no;
+	assert(dev);
+	assert(no < dev->no_macroblocks);
+	raw_no = dev->our_macroblocks[no] - dev->b->blockio_infos;
+
+	return bitmap_getbits(&dev->status, raw_no<<1, 2);
+}
+
+void blockio_dev_change_macroblock_status(blockio_dev_t *dev, uint32_t no,
+		blockio_dev_macroblock_status_t old,
+		blockio_dev_macroblock_status_t new) {
+	assert(blockio_dev_get_macroblock_status(dev, no) == old);
+	blockio_dev_set_macroblock_status(dev, no, new);
+}
+

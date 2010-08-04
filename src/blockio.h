@@ -26,6 +26,10 @@
 #include "bitmap.h"
 #include "random.h"
 
+typedef enum blockio_dev_macroblock_status_e {
+		NOT_ALLOCATED, HAS_DATA, FREE, SELECTFROM }
+	blockio_dev_macroblock_status_t;
+
 typedef struct blockio_s blockio_t;
 
 typedef struct blockio_info_s {
@@ -103,8 +107,14 @@ void blockio_dev_read_mesoblk_part(blockio_dev_t*, void*, uint32_t,
 
 int blockio_check_data_hash(blockio_info_t*);
 
-void blockio_dev_write_macroblock(blockio_dev_t*, const void*, blockio_info_t*);
+void blockio_dev_write_current_macroblock(blockio_dev_t*);
 
 void blockio_free(blockio_t*);
+
+void blockio_dev_set_macroblock_status(blockio_dev_t*, uint32_t, blockio_dev_macroblock_status_t);
+
+void blockio_dev_change_macroblock_status(blockio_dev_t*, uint32_t, blockio_dev_macroblock_status_t, blockio_dev_macroblock_status_t);
+
+blockio_dev_macroblock_status_t blockio_dev_get_macroblock_status(blockio_dev_t*, uint32_t);
 
 #endif /* INCLUDE_SCUBED3_BLOCKIO_H */

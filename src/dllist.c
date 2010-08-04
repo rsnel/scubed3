@@ -33,7 +33,7 @@ void dllist_init(dllist_t *d) {
 
 void dllist_free(dllist_t *d) {
 	assert(d && !d->head.prev && !d->tail.next &&
-			d->head.next && d->tail.prev);
+			((d->head.next && d->tail.prev) || (!d->head.next && !d->tail.prev)));
 }
 
 int dllist_is_empty(dllist_t *d) {

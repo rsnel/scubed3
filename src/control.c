@@ -35,8 +35,8 @@
 
 #define BUF_SIZE 8192
 #define MAX_ARGC 10
-#define DEFAULT_RESERVED_MACROBLOCKS 10
 #define DEFAULT_KEEP_REVISIONS 3
+#define DEFAULT_RESERVED_MACROBLOCKS (DEFAULT_KEEP_REVISIONS + 4)
 
 int control_write_string(int s, const char *string, ssize_t len) {
 	ssize_t sent = 0, n;
@@ -132,8 +132,9 @@ static int control_status(int s, control_thread_priv_t *priv, char *argv[]) {
 		.macroblocks_left = priv->b->no_macroblocks
 	};
         int rep(control_status_priv_t *priv, fuse_io_entry_t *entry) {
+		size_t size = ((entry->d.no_macroblocks - entry->d.reserved_macroblocks)*entry->d.mmpm);
 		priv->macroblocks_left -= entry->d.no_macroblocks;
-                return control_write_line(priv->s, "%07u blocks in %s\n", entry->d.no_macroblocks, entry->head.key);
+                return control_write_line(priv->s, "%07u blocks in %s (%ld usable bytes)\n", entry->d.no_macroblocks, entry->head.key, (size >= 0)?size<<entry->d.b->mesoblk_log:0);
         }
 
 	if (control_write_status(s, 0)) return -1;
@@ -145,7 +146,7 @@ static int control_status(int s, control_thread_priv_t *priv, char *argv[]) {
 	return control_write_terminate(s);
 }
 
-static int control_open_add_common(int s, control_thread_priv_t *priv, char *argv[]) {
+static int control_open_add_common(int s, control_thread_priv_t *priv, char *argv[], int add) {
 	fuse_io_entry_t *entry;
 	char *allocname;
 
@@ -189,16 +190,22 @@ static int control_open_add_common(int s, control_thread_priv_t *priv, char *arg
 		if (!hashtbl_add_element(priv->ids, &entry->unique_id))
 			ecch_throw(ECCH_DEFAULT, "cipher(mode)/key combination already in use");
 		hashtbl_unlock_element_byptr(&entry->unique_id);	
+		entry->ids = priv->ids;
 
 		blockio_dev_init(&entry->d, priv->b, &entry->c, argv[0]);
+		if (add && entry->d.no_macroblocks) 
+			ecch_throw(ECCH_DEFAULT, "unable to add device: it is not empty, use open instead");
+		if (!add & !entry->d.no_macroblocks)
+			ecch_throw(ECCH_DEFAULT, "unable to open defice: use add instead");
 		entry->size = 0;
-		entry->ids = priv->ids;
 		//scubed3_init(&entry->l, &entry->d);
 		//entry->size = ((entry->l.dev->no_macroblocks-entry->
 		//			l.dev->reserved)*entry->l.dev->mmpm)
 		//	<<entry->l.dev->b->mesoblk_log;
+		//VERBOSE("here-7");
 	}
 	ecch_catch_all {
+	//	VERBOSE("here3");
 		entry->to_be_deleted = 1;
 		hashtbl_unlock_element_byptr(entry);
 		hashtbl_delete_element_byptr(priv->h, entry);
@@ -213,11 +220,11 @@ static int control_open_add_common(int s, control_thread_priv_t *priv, char *arg
 }
 
 static int control_open(int s, control_thread_priv_t *priv, char *argv[]) {
-	return control_open_add_common(s, priv, argv);
+	return control_open_add_common(s, priv, argv, 0);
 }
 
 static int control_add(int s, control_thread_priv_t *priv, char *argv[]) {
-	return control_open_add_common(s, priv, argv);
+	return control_open_add_common(s, priv, argv, 1);
 }
 
 static int control_close(int s, control_thread_priv_t *priv, char *argv[]) {
@@ -322,12 +329,15 @@ static int control_resize(int s, control_thread_priv_t *priv, char *argv[]) {
 			VERBOSE("select nr %d, %d", no, select);
 			bi = &dev->b->blockio_infos[select];
 			bi->dev = dev;
-			
-			// mark as allocated but free
-			bitmap_setbit(&dev->status, (select<<1) + 1); 
-			assert(!bitmap_getbit(&dev->status, (select<<1)));
 
+			// add to our array, so we can address it
 			dev->our_macroblocks[dev->no_macroblocks++] = bi;
+			
+			// mark as FREE and assert() that is was NOT_ALLOCATED
+			blockio_dev_change_macroblock_status(dev,
+					dev->no_macroblocks - 1,
+					NOT_ALLOCATED, FREE);
+
 			no_freeb--;
 			memmove(&freeb[no], &freeb[no+1], sizeof(freeb[0])*(no_freeb - no));
 			bi->no_indices = 0;
@@ -335,14 +345,14 @@ static int control_resize(int s, control_thread_priv_t *priv, char *argv[]) {
 			size--;
 		}
 		dev->keep_revisions = DEFAULT_KEEP_REVISIONS;
+		dev->reserved_macroblocks = DEFAULT_RESERVED_MACROBLOCKS;
 		random_init(&dev->r, dev->no_macroblocks);
-		int valid = 1, different = 1, tmp2 = 0;
+		int number, valid = 1, different = 1, tmp2 = 0;
 
+		number = random_peek(&dev->r, 0);
 		dev->bi = dev->our_macroblocks[random_peek(&dev->r, 0)];
 		dev->bi->seqno = 1;
-		assert(bitmap_getbits(&dev->status,
-					(dev->bi - dev->b->blockio_infos)<<1,
-					2) == 2);
+		assert(blockio_dev_get_macroblock_status(dev, number) == FREE);
 
 		VERBOSE("different=%d, dev->keep_revisions=%d", different, dev->keep_revisions);
 		while (different <= dev->keep_revisions) {
@@ -350,22 +360,35 @@ static int control_resize(int s, control_thread_priv_t *priv, char *argv[]) {
 			if (last_diff(&dev->r, tmp2, &valid)) {
 				different++;
 				if (different != dev->keep_revisions) {
-					assert(bitmap_getbits(&dev->status, (dev->our_macroblocks[random_peek(&dev->r, tmp2)] - dev->b->blockio_infos)<<1, 2) == 2);
-					bitmap_setbit(&dev->status, ((dev->our_macroblocks[random_peek(&dev->r, tmp2)] - dev->b->blockio_infos)<<1));
+					blockio_dev_change_macroblock_status(dev,
+							random_peek(&dev->r, tmp2),
+							FREE, SELECTFROM);
 				}
 			}
 		}
-		if (!valid) bitmap_setbit(&dev->status, (dev->bi - dev->b->blockio_infos)<<1);
+		if (!valid) 
+			blockio_dev_change_macroblock_status(dev, number,
+					FREE, SELECTFROM);
+			
 		dev->tail_macroblock = random_peek(&dev->r, tmp2);
 		dev->random_len = tmp2;
 		VERBOSE("tail_macroblock = %d, random_len = %d, valid = %d", dev->tail_macroblock, tmp2, valid);
-		VERBOSE("guess %d", random_pop(&dev->r));
+		VERBOSE("guess %d", random_peek(&dev->r, 0));
+		random_pop(&dev->r);
 		
 		dev->updated = 1;
 
+		fprintf(stderr, "all macroblocks: ");
 		for (i = 0; i < dev->b->no_macroblocks; i++) {
 			fprintf(stderr, "%d",
 					bitmap_getbits(&dev->status, i<<1, 2));
+		}
+		fprintf(stderr, "\n");
+
+		fprintf(stderr, "our macroblocks: ");
+		for (i = 0; i < dev->no_macroblocks; i++) {
+			fprintf(stderr, "%d",
+					blockio_dev_get_macroblock_status(dev, i));
 		}
 		fprintf(stderr, "\n");
 

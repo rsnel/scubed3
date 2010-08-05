@@ -56,7 +56,11 @@ void obsolete_mesoblk(scubed3_t *l, blockio_info_t *bi, uint32_t no) {
 	bi->no_nonobsolete--;
 
 	/* if the whole block is obsolete, remove it from the active list */
-	if (!bi->no_nonobsolete) dllist_remove(&bi->elt);
+	if (!bi->no_nonobsolete) {
+		blockio_dev_set_macroblock_status(l->dev,
+				bi - l->dev->b->blockio_infos, FREE);
+		dllist_remove(&bi->elt);
+	}
 }
 
 void obsolete_mesoblk_byidx(scubed3_t *l, uint32_t index) {
@@ -95,6 +99,7 @@ int replay(blockio_info_t *bi, scubed3_t *l) {
 	VERBOSE("replay at seqno=%lld (%d indices)", bi->seqno, bi->no_indices);
 	for (k = 0; k < bi->no_indices; k++) {
 		VERBOSE("k=%u, bi->indices[k]=%u", k, bi->indices[k]);
+		if (bi->indices[k] >= l->no_block_indices) continue;
 		index = l->block_indices[bi->indices[k]];
 		assert(id(bi) != ID);
 		obsolete_mesoblk_byidx(l, index);
@@ -122,7 +127,7 @@ void scubed3_free(scubed3_t *l) {
 	free(l->block_indices);
 }
 
-void scubed3_reinit(scubed3_t *l) {
+void scubed3_enlarge(scubed3_t *l) {
 	int i;
 	uint32_t tmp;
 	VERBOSE("scubed reinit");
@@ -171,10 +176,6 @@ void scubed3_init(scubed3_t *l, blockio_dev_t *dev) {
 	debug_stuff(l);
 	dllist_iterate(&dev->used_blocks,
 		(int (*)(dllist_elt_t*, void*))replay, l);
-
-	VERBOSE("we must free %d", dev->tail_macroblock_global);
-	assert(blockio_dev_get_macroblock_status(dev, dev->tail_macroblock_global) == FREE);
-
 }
 
 void blockio_dev_fake_mesoblk_part(blockio_dev_t *dev, void *addr,
@@ -218,8 +219,6 @@ int do_write(scubed3_t *l, uint32_t mesoff, uint32_t muoff, uint32_t size,
 		}
 		index = l->block_indices[mesoff];
 	}
-
-	VERBOSE("block is %s", (ID == id(l->dev->bi))?"old":"new");
 
 	addr = mesoblk(l, (ID == id(l->dev->bi))?NO:l->dev->bi->no_indices);
 	memcpy(addr + muoff, in, size);

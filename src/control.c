@@ -147,7 +147,7 @@ static int control_status(int s, control_thread_priv_t *priv, char *argv[]) {
 	return control_write_terminate(s);
 }
 
-static int control_open_add_common(int s, control_thread_priv_t *priv, char *argv[], int add) {
+static int control_open_create_common(int s, control_thread_priv_t *priv, char *argv[], int add) {
 	fuse_io_entry_t *entry;
 	char *allocname;
 
@@ -158,7 +158,7 @@ static int control_open_add_common(int s, control_thread_priv_t *priv, char *arg
 	if (!entry) {
 		free(allocname);
 		return control_write_complete(s, 1,
-				"unable to add partition \"%s\", duplicate name?", argv[0]);
+				"unable to %s partition \"%s\", duplicate name?", argv[0], add?"create":"open");
 	}
 
 	entry->to_be_deleted = 0;
@@ -195,9 +195,9 @@ static int control_open_add_common(int s, control_thread_priv_t *priv, char *arg
 
 		blockio_dev_init(&entry->d, priv->b, &entry->c, argv[0]);
 		if (add && entry->d.no_macroblocks) 
-			ecch_throw(ECCH_DEFAULT, "unable to add device: it is not empty, use open instead");
+			ecch_throw(ECCH_DEFAULT, "unable to create device: it already exists, use `open' instead");
 		if (!add & !entry->d.no_macroblocks)
-			ecch_throw(ECCH_DEFAULT, "unable to open device: use add instead");
+			ecch_throw(ECCH_DEFAULT, "unable to open device: use `create' instead");
 		entry->size = 0;
 		if (entry->d.no_macroblocks > entry->d.reserved_macroblocks) entry->size = ((entry->d.no_macroblocks-entry->d.reserved_macroblocks)<<entry->d.b->mesoblk_log)*entry->d.mmpm;
 		scubed3_init(&entry->l, &entry->d);
@@ -213,15 +213,16 @@ static int control_open_add_common(int s, control_thread_priv_t *priv, char *arg
 
 	hashtbl_unlock_element_byptr(entry);
 
-	return control_write_complete(s, 0, "partition \"%s\" added", argv[0]);
+	return control_write_complete(s, 0, "partition \"%s\" %s",
+			argv[0], add?"created":"opened");
 }
 
 static int control_open(int s, control_thread_priv_t *priv, char *argv[]) {
-	return control_open_add_common(s, priv, argv, 0);
+	return control_open_create_common(s, priv, argv, 0);
 }
 
-static int control_add(int s, control_thread_priv_t *priv, char *argv[]) {
-	return control_open_add_common(s, priv, argv, 1);
+static int control_create(int s, control_thread_priv_t *priv, char *argv[]) {
+	return control_open_create_common(s, priv, argv, 1);
 }
 
 static int control_close(int s, control_thread_priv_t *priv, char *argv[]) {
@@ -262,16 +263,26 @@ static int control_resize(int s, control_thread_priv_t *priv, char *argv[]) {
 	size = strtol(argv[1], &end, 10);
 	if (errno && (size == LONG_MIN || size == LONG_MAX)) {
 		hashtbl_unlock_element_byptr(entry);
-		return control_write_complete(s, 1, "unable to parse ->%s<- to a number: %s", argv[1], strerror(errno));
+		return control_write_complete(s, 1, "unable to parse ->%s<- "
+				"to a number: %s", argv[1], strerror(errno));
 	}
 	if (*end != '\0') {
 		hashtbl_unlock_element_byptr(entry);
-		return control_write_complete(s, 1, "unable to parse ->%s<- to a number", argv[1]);
+		return control_write_complete(s, 1, "unable to parse ->%s<- "
+				"to a number", argv[1]);
 	}
 	
+	if (dev->no_macroblocks == 0 && size < DEFAULT_RESERVED_MACROBLOCKS) {
+		hashtbl_unlock_element_byptr(entry);
+		return control_write_complete(s, 1, "reserved_macroblocks "
+				"is %d, size needs to be bigger",
+				DEFAULT_RESERVED_MACROBLOCKS);
+	}
+
 	if (size == 0) {
 		hashtbl_unlock_element_byptr(entry);
-		return control_write_complete(s, 1, "this program can't resize to zero; just discard the passphrase");
+		return control_write_complete(s, 1, "this program can't "
+				"resize to zero; just discard the passphrase");
 	}
 
 	if (size < dev->no_macroblocks) {
@@ -281,7 +292,9 @@ static int control_resize(int s, control_thread_priv_t *priv, char *argv[]) {
 
 	if (size > dev->b->no_macroblocks) {
 		hashtbl_unlock_element_byptr(entry);
-		return control_write_complete(s, 1, "not enough blocks available, base device has only %d blocks", dev->b->no_macroblocks);
+		return control_write_complete(s, 1,
+				"not enough blocks available, base device "
+				"has only %d blocks", dev->b->no_macroblocks);
 	}
 
 	size -= dev->no_macroblocks;
@@ -295,20 +308,25 @@ static int control_resize(int s, control_thread_priv_t *priv, char *argv[]) {
 
 	if ((err = blockio_dev_allocate_macroblocks(dev, size))) {
 		hashtbl_unlock_element_byptr(entry);
-		return control_write_complete(s, 1, (err == -1)?"not enough unclaimed blocks available for resize":"out of memory error");
+		return control_write_complete(s, 1,
+				(err == -1)?"not enough unclaimed blocks "
+				"available for resize":"out of memory error");
 	}
 
 	if (!dev->bi) {
 		assert(!dev->bi);
 		dev->keep_revisions = DEFAULT_KEEP_REVISIONS;
 		dev->reserved_macroblocks = DEFAULT_RESERVED_MACROBLOCKS;
-		blockio_dev_select_next_valid_macroblock(dev, 1);
+		blockio_dev_select_next_macroblock(dev, 1);
 	}
 
 	dev->updated = 1;
 
-	if (entry->d.no_macroblocks > entry->d.reserved_macroblocks) entry->size = ((entry->d.no_macroblocks-entry->d.reserved_macroblocks)<<entry->d.b->mesoblk_log)*entry->d.mmpm;
-	scubed3_reinit(&entry->l);
+	if (entry->d.no_macroblocks > entry->d.reserved_macroblocks)
+		entry->size = ((entry->d.no_macroblocks - 
+					entry->d.reserved_macroblocks)<<
+				entry->d.b->mesoblk_log)*entry->d.mmpm;
+	scubed3_enlarge(&entry->l);
 
 	hashtbl_unlock_element_byptr(entry);
 	
@@ -321,26 +339,22 @@ static control_command_t control_commands[] = {
 		.command = control_status,
 		.argc = 0,
 		.usage = ""
-	},
-	{
+	}, {
 		.head.key = "open-internal",
 		.command = control_open,
 		.argc = 3,
 		.usage = " NAME CIPHER_SPEC KEY"
-	},
-	{
-		.head.key = "add-internal",
-		.command = control_add,
+	}, {
+		.head.key = "create-internal",
+		.command = control_create,
 		.argc = 3,
 		.usage = " NAME CIPHER_SPEC KEY"
-	},
-	{
+	}, {
 		.head.key = "close",
 		.command = control_close,
 		.argc = 1,
 		.usage = " NAME"
-	},
-	{
+	}, {
 		.head.key = "resize-force",
 		.command = control_resize,
 		.argc = 2,

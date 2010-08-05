@@ -51,6 +51,7 @@ typedef struct blockio_dev_s {
 	uint16_t no_macroblocks; /* assigned to this device */
 	uint16_t reserved_macroblocks; /* visible in scubed file */
 	blockio_info_t *bi;
+	int valid;
 
 	/* state of prng */
 	uint16_t tail_macroblock_global;
@@ -117,17 +118,15 @@ typedef enum blockio_dev_macroblock_status_e {
 		NOT_ALLOCATED, HAS_DATA, FREE, SELECTFROM }
 	blockio_dev_macroblock_status_t;
 
-void blockio_dev_set_macroblock_status(blockio_dev_t*, uint32_t, blockio_dev_macroblock_status_t);
+void blockio_dev_set_macroblock_status(blockio_dev_t*,
+		uint32_t, blockio_dev_macroblock_status_t);
 
-void blockio_dev_change_macroblock_status(blockio_dev_t*, uint32_t, blockio_dev_macroblock_status_t, blockio_dev_macroblock_status_t);
+void blockio_dev_change_macroblock_status(blockio_dev_t*,
+		uint32_t, blockio_dev_macroblock_status_t,
+		blockio_dev_macroblock_status_t);
 
-blockio_dev_macroblock_status_t blockio_dev_get_macroblock_status(blockio_dev_t*, uint32_t);
-
-void blockio_dev_set_macroblock_status_old(blockio_dev_t*, uint32_t, blockio_dev_macroblock_status_t);
-
-void blockio_dev_change_macroblock_status_old(blockio_dev_t*, uint32_t, blockio_dev_macroblock_status_t, blockio_dev_macroblock_status_t);
-
-blockio_dev_macroblock_status_t blockio_dev_get_macroblock_status_old(blockio_dev_t*, uint32_t);
+blockio_dev_macroblock_status_t blockio_dev_get_macroblock_status(
+		blockio_dev_t*, uint32_t);
 
 // returns errors -1: not enough blocks available, -2 out of memory
 int blockio_dev_allocate_macroblocks(blockio_dev_t*, uint16_t);

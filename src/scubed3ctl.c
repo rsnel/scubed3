@@ -160,11 +160,11 @@ int main(int argc, char **argv) {
 		else if (!strcmp(line, "help")) {
 			printf("convenience functions:\n\n");
 			printf("exit,x,quit,q\n");
-			printf("add NAME (asks twice for passphrase, expects 0 allocated blocks)\n");
+			printf("create NAME (asks twice for passphrase, expects 0 allocated blocks)\n");
 			printf("open NAME (asks once for passphrase, expects >0 allocated blocks)\n");
 			printf("resize NAME BLOCKS\n");
 			printf("\n");
-		} else if (!strncmp(line, "add ", 4) || !strncmp(line, "open ", 5) || !strcmp(line, "add") || !strcmp(line,"open")) {
+		} else if (!strncmp(line, "create ", 5) || !strncmp(line, "open ", 5) || !strcmp(line, "create") || !strcmp(line,"open")) {
 			/* tokenize, and build custom command */
 			int argc = 0;
 			char *argv[MAX_ARGC+1];
@@ -207,7 +207,7 @@ int main(int argc, char **argv) {
 			printf("Enter passphrase: ");
 			if (my_getpass(&pw, &pw_len, stdin) == -1)
 				FATAL("unable to get password");
-			if (!strcmp(argv[0], "add")) {
+			if (!strcmp(argv[0], "create")) {
 				printf("Verify passphrase: ");
 				if (my_getpass(&pw2, &pw2_len, stdin) == -1) {
 					wipememory(pw, pw_len);
@@ -235,7 +235,7 @@ int main(int argc, char **argv) {
 			wipememory(conv, sizeof(conv));
 
 		} else if (!strncmp(line, "resize ", 7) || !strcmp(line, "resize")) {
-			printf("unimplemented, use low-level command resize-forceh\n");
+			printf("unimplemented, use low-level command resize-force\n");
 		} else {
 			do_command(s, line);
 			wipememory(line, strlen(line));

@@ -207,35 +207,34 @@ static int last_diff(random_t *r, int last, int *first) {
 }
 
 void blockio_dev_select_next_macroblock(blockio_dev_t *dev, int first) {
-	int number, valid = 1, different = 1, tmp2 = 0;
+	int number, different = 1, tmp2 = 0;
 	assert(!dev->bi);
 
-	number = random_peek(&dev->r, 0);
-	dev->bi = &dev->b->blockio_infos[dev->macroblock_ref[
-		random_peek(&dev->r, 0)]];
+	dev->valid = 1;
+
+	number = dev->macroblock_ref[random_peek(&dev->r, 0)];
+	dev->bi = &dev->b->blockio_infos[number];
 	dev->bi->seqno = dev->next_seqno;
 
-	if (first) assert(blockio_dev_get_macroblock_status_old(dev,
+	if (first) assert(blockio_dev_get_macroblock_status(dev,
 				number) == FREE);
-	else blockio_dev_change_macroblock_status_old(dev,
+	else blockio_dev_change_macroblock_status(dev,
 			number, SELECTFROM, FREE);
 
 	while (different <= dev->keep_revisions) {
 		tmp2++;
-		if (last_diff(&dev->r, tmp2, &valid)) {
+		if (last_diff(&dev->r, tmp2, &dev->valid)) {
 			if (different != dev->keep_revisions) {
-				if (first) blockio_dev_change_macroblock_status_old(
-						dev, random_peek(&dev->r, tmp2),
-						FREE, SELECTFROM);
-				else blockio_dev_set_macroblock_status_old(dev,
-						random_peek(&dev->r, tmp2),
+				blockio_dev_set_macroblock_status(dev,
+						dev->macroblock_ref[
+						random_peek(&dev->r, tmp2)],
 					    	SELECTFROM);
 			}
 			different++;
 		}
 	}
 
-	if (!valid) blockio_dev_change_macroblock_status_old(dev,
+	if (!dev->valid) blockio_dev_change_macroblock_status(dev,
 			number, FREE, SELECTFROM);
 
 	dev->tail_macroblock_global = dev->macroblock_ref[random_peek(&dev->r, tmp2)];
@@ -250,11 +249,11 @@ void blockio_dev_select_next_valid_macroblock(blockio_dev_t *dev, int first) {
 	do {
 		first = 0;
 		blockio_dev_write_current_macroblock(dev);
+
 middle:
 		blockio_dev_select_next_macroblock(dev, first);
-	} while (bitmap_getbits(&dev->status,
-				(dev->bi - dev->b->blockio_infos)<<1, 2) ==
-			SELECTFROM);
+
+	} while (!dev->valid);
 }
 
 void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
@@ -389,7 +388,7 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 			dev->no_macroblocks, dev->name);
 
 	/* select next block */
-	blockio_dev_select_next_valid_macroblock(dev, 0);
+	blockio_dev_select_next_macroblock(dev, 0);
 }
 
 struct hash_seqnos_s {
@@ -397,7 +396,7 @@ struct hash_seqnos_s {
         blockio_info_t *last;
 };
 
-char *hash_seqnos(scubed3_t *l, char *hash_res, blockio_info_t *last) {
+uint8_t *hash_seqnos(blockio_dev_t *dev, uint8_t *hash_res, blockio_info_t *last) {
         struct hash_seqnos_s priv = {
                 .last = last
         };
@@ -409,7 +408,7 @@ char *hash_seqnos(scubed3_t *l, char *hash_res, blockio_info_t *last) {
 
         //printf("sns:");
         gcry_call(md_open, &priv.hd, GCRY_MD_SHA256, 0);
-        dllist_iterate(&l->dev->used_blocks,
+        dllist_iterate(&dev->used_blocks,
                         (int (*)(dllist_elt_t*, void*))add_seqno, &priv);
         //printf("\n");
         memcpy(hash_res, gcry_md_read(priv.hd, 0), 32);
@@ -561,7 +560,7 @@ void blockio_dev_write_current_macroblock(blockio_dev_t *dev) {
 			dev->mmpm<<dev->b->mesoblk_log);
 
 	/* calculate hash of seqnos */
-	//TODO
+	hash_seqnos(dev, SEQNOS_HASH, dev->bi);
 
 	/* write static data */
 	binio_write_uint64_be(SEQNO, dev->bi->seqno);
@@ -607,43 +606,12 @@ void blockio_dev_set_macroblock_status(blockio_dev_t *dev, uint32_t raw_no,
 	else bitmap_clearbit_safe(&dev->status, (raw_no<<1) + 1);
 }
 
-void blockio_dev_set_macroblock_status_old(blockio_dev_t *dev, uint32_t no,
-		blockio_dev_macroblock_status_t status) {
-	uint32_t raw_no;
-	assert(dev);
-	assert(no < dev->no_macroblocks);
-	raw_no = dev->macroblock_ref[no];
-
-	if (status&1) bitmap_setbit_safe(&dev->status, raw_no<<1);
-	else bitmap_clearbit_safe(&dev->status, raw_no<<1);
-
-	if (status&2) bitmap_setbit_safe(&dev->status, (raw_no<<1) + 1);
-	else bitmap_clearbit_safe(&dev->status, (raw_no<<1) + 1);
-}
-
 blockio_dev_macroblock_status_t blockio_dev_get_macroblock_status(
 		blockio_dev_t *dev, uint32_t raw_no) {
 	assert(dev);
 	assert(raw_no < dev->b->no_macroblocks);
 
 	return bitmap_getbits(&dev->status, raw_no<<1, 2);
-}
-
-blockio_dev_macroblock_status_t blockio_dev_get_macroblock_status_old(
-		blockio_dev_t *dev, uint32_t no) {
-	uint32_t raw_no;
-	assert(dev);
-	assert(no < dev->no_macroblocks);
-	raw_no = dev->macroblock_ref[no];
-
-	return bitmap_getbits(&dev->status, raw_no<<1, 2);
-}
-
-void blockio_dev_change_macroblock_status_old(blockio_dev_t *dev, uint32_t no,
-		blockio_dev_macroblock_status_t old,
-		blockio_dev_macroblock_status_t new) {
-	assert(blockio_dev_get_macroblock_status_old(dev, no) == old);
-	blockio_dev_set_macroblock_status_old(dev, no, new);
 }
 
 void blockio_dev_change_macroblock_status(blockio_dev_t *dev, uint32_t no,

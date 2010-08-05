@@ -153,7 +153,7 @@ void scubed3_init(scubed3_t *l, blockio_dev_t *dev) {
 		(int (*)(dllist_elt_t*, void*))replay, l);
 
 	VERBOSE("we must free %d %d", dev->tail_macroblock, dev->tail_macroblock_global);
-	assert(blockio_dev_get_macroblock_status(dev, dev->tail_macroblock) == FREE);
+	assert(blockio_dev_get_macroblock_status_old(dev, dev->tail_macroblock) == FREE);
 
 }
 

@@ -11,8 +11,8 @@
 
 //#define NO_BLOCKS 8
 //#define HISTORY 3
-#define NO_BLOCKS 64
-#define HISTORY 16
+#define NO_BLOCKS 16
+#define HISTORY 4
 
 typedef struct blockinfo_s {
 	uint64_t seqno;
@@ -46,13 +46,14 @@ int main(int argc, char *argv[]) {
 
 	random_init(&r, NO_BLOCKS);
 
-	for (seqno = 0; seqno < 1024*64; seqno++) {
+	for (seqno = 0; seqno < 1024; seqno++) {
 		int cleanup, i, next, needed, no_used = 0, valid2 = 1, different = 1, tmp = 0;
 		while (different <= HISTORY) {
 			tmp++;
 			if (last_diff(&r, tmp, &valid2)) different++;
 		}
-		cleanup = random_peek(&r, tmp);
+		//cleanup = random_peek(&r, tmp);
+		cleanup = random_peek(&r, 1);
 		needed = blocks[cleanup].used;
 #if 1
 		fprintf(stderr, "sequence:");
@@ -66,7 +67,8 @@ int main(int argc, char *argv[]) {
 
 		if (blocks[next].used) assert(0);
 
-		if (valid2) blocks[random_peek(&r, tmp - 1)].used = 0;
+		//if (valid2) blocks[random_peek(&r, tmp - 1)].used = 0;
+		if (valid2) blocks[cleanup].used = 0;
 		if (valid2) blocks[next].used = 1;
 		for (i = 0; i < NO_BLOCKS; i++) {
 			no_used += blocks[i].used;

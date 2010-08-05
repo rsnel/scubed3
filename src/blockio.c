@@ -215,9 +215,9 @@ void blockio_dev_select_next_macroblock(blockio_dev_t *dev, int first) {
 	dev->bi_number = random_peek(&dev->r, 0);
 	dev->bi->seqno = dev->next_seqno;
 
-	if (first) assert(blockio_dev_get_macroblock_status(dev,
+	if (first) assert(blockio_dev_get_macroblock_status_old(dev,
 				number) == FREE);
-	else blockio_dev_change_macroblock_status(dev,
+	else blockio_dev_change_macroblock_status_old(dev,
 			number, SELECTFROM, FREE);
 	//VERBOSE("random[%d]=%d %d", tmp2, random_peek(&dev->r, tmp2), dev->our_macroblocks[random_peek(&dev->r, tmp2)] - dev->b->blockio_infos);
 
@@ -226,10 +226,10 @@ void blockio_dev_select_next_macroblock(blockio_dev_t *dev, int first) {
 		//VERBOSE("random[%d]=%d %d", tmp2, random_peek(&dev->r, tmp2), dev->our_macroblocks[random_peek(&dev->r, tmp2)] - dev->b->blockio_infos);
 		if (last_diff(&dev->r, tmp2, &valid)) {
 			if (different != dev->keep_revisions) {
-				if (first) blockio_dev_change_macroblock_status(
+				if (first) blockio_dev_change_macroblock_status_old(
 						dev, random_peek(&dev->r, tmp2),
 						FREE, SELECTFROM);
-				else blockio_dev_set_macroblock_status(dev,
+				else blockio_dev_set_macroblock_status_old(dev,
 						random_peek(&dev->r, tmp2),
 					    	SELECTFROM);
 			}
@@ -237,7 +237,7 @@ void blockio_dev_select_next_macroblock(blockio_dev_t *dev, int first) {
 		}
 	}
 
-	if (!valid) blockio_dev_change_macroblock_status(dev,
+	if (!valid) blockio_dev_change_macroblock_status_old(dev,
 			number, FREE, SELECTFROM);
 
 	dev->tail_macroblock = random_peek(&dev->r, tmp2);
@@ -543,7 +543,7 @@ void blockio_dev_write_current_macroblock(blockio_dev_t *dev) {
 	assert(dev->bi && id < dev->b->no_macroblocks);
 
 	if (dev->bi->no_indices)
-		blockio_dev_change_macroblock_status(dev,
+		blockio_dev_change_macroblock_status_old(dev,
 				dev->bi_number, FREE, HAS_DATA);
 
 	DEBUG("write block %u (seqno=%llu)", id, dev->bi->seqno);
@@ -593,7 +593,7 @@ void blockio_dev_write_current_macroblock(blockio_dev_t *dev) {
 	dev->bi = NULL; /* there is no current block */
 }
 
-void blockio_dev_set_macroblock_status(blockio_dev_t *dev, uint32_t no,
+void blockio_dev_set_macroblock_status_old(blockio_dev_t *dev, uint32_t no,
 		blockio_dev_macroblock_status_t status) {
 	uint32_t raw_no;
 	assert(dev);
@@ -607,7 +607,7 @@ void blockio_dev_set_macroblock_status(blockio_dev_t *dev, uint32_t no,
 	else bitmap_clearbit_safe(&dev->status, (raw_no<<1) + 1);
 }
 
-blockio_dev_macroblock_status_t blockio_dev_get_macroblock_status(
+blockio_dev_macroblock_status_t blockio_dev_get_macroblock_status_old(
 		blockio_dev_t *dev, uint32_t no) {
 	uint32_t raw_no;
 	assert(dev);
@@ -617,10 +617,58 @@ blockio_dev_macroblock_status_t blockio_dev_get_macroblock_status(
 	return bitmap_getbits(&dev->status, raw_no<<1, 2);
 }
 
-void blockio_dev_change_macroblock_status(blockio_dev_t *dev, uint32_t no,
+void blockio_dev_change_macroblock_status_old(blockio_dev_t *dev, uint32_t no,
 		blockio_dev_macroblock_status_t old,
 		blockio_dev_macroblock_status_t new) {
-	assert(blockio_dev_get_macroblock_status(dev, no) == old);
-	blockio_dev_set_macroblock_status(dev, no, new);
+	assert(blockio_dev_get_macroblock_status_old(dev, no) == old);
+	blockio_dev_set_macroblock_status_old(dev, no, new);
+}
+
+int blockio_dev_allocate_macroblocks(blockio_dev_t *dev, uint16_t size) {
+	// 16 bit arithmetic
+	assert(dev->no_macroblocks < dev->no_macroblocks + size); 
+
+	int i, no_freeb = 0;
+	uint16_t freeb[dev->b->no_macroblocks];
+	uint16_t no, select = 0;
+	void *tmp;
+	assert(dev->b->no_macroblocks < 65536);
+	for (i = 0; i < dev->b->no_macroblocks; i++)
+		if (!dev->b->blockio_infos[i].dev) freeb[no_freeb++] = i;
+
+	VERBOSE("we have %d free blocks to choose from", no_freeb);
+
+	if (size > no_freeb) return -1; // not enough blocks
+
+	tmp = realloc(dev->our_macroblocks, sizeof(dev->our_macroblocks[0])*(size + dev->no_macroblocks));
+	if (!tmp) return -1; // out of memory
+	dev->our_macroblocks = tmp;
+
+	while (size) {
+		blockio_info_t *bi;
+		no = random_custom(&dev->b->r, no_freeb);
+		select = freeb[no];
+		VERBOSE("select nr %d, %d", no, select);
+		bi = &dev->b->blockio_infos[select];
+		bi->dev = dev;
+
+		// add to our array, so we can address it
+		dev->our_macroblocks[dev->no_macroblocks++] = bi;
+
+		// mark as FREE and assert() that is was NOT_ALLOCATED
+		blockio_dev_change_macroblock_status_old(dev,
+				dev->no_macroblocks - 1,
+				NOT_ALLOCATED, FREE);
+
+		no_freeb--;
+		memmove(&freeb[no], &freeb[no+1], sizeof(freeb[0])*(no_freeb - no));
+		bi->no_indices = 0;
+		bi->indices = ecalloc(dev->mmpm, sizeof(uint32_t));
+		size--;
+	}
+
+	random_rescale(&dev->r, dev->no_macroblocks);
+
+	return 0;
 }
 

@@ -66,7 +66,8 @@ typedef struct blockio_dev_s {
 	dllist_t used_blocks;
 
 	/* array, used with PRNG to select random blocks */
-	blockio_info_t **our_macroblocks;
+	blockio_info_t **our_macroblocks; // deprecated
+	uint16_t *macroblock_ref;
 
 	uint8_t *tmp_macroblock;
 } blockio_dev_t;
@@ -119,10 +120,13 @@ typedef enum blockio_dev_macroblock_status_e {
 		NOT_ALLOCATED, HAS_DATA, FREE, SELECTFROM }
 	blockio_dev_macroblock_status_t;
 
-void blockio_dev_set_macroblock_status(blockio_dev_t*, uint32_t, blockio_dev_macroblock_status_t);
+void blockio_dev_set_macroblock_status_old(blockio_dev_t*, uint32_t, blockio_dev_macroblock_status_t);
 
-void blockio_dev_change_macroblock_status(blockio_dev_t*, uint32_t, blockio_dev_macroblock_status_t, blockio_dev_macroblock_status_t);
+void blockio_dev_change_macroblock_status_old(blockio_dev_t*, uint32_t, blockio_dev_macroblock_status_t, blockio_dev_macroblock_status_t);
 
-blockio_dev_macroblock_status_t blockio_dev_get_macroblock_status(blockio_dev_t*, uint32_t);
+blockio_dev_macroblock_status_t blockio_dev_get_macroblock_status_old(blockio_dev_t*, uint32_t);
+
+// returns errors -1: not enough blocks available, -2 out of memory
+int blockio_dev_allocate_macroblocks(blockio_dev_t*, uint16_t);
 
 #endif /* INCLUDE_SCUBED3_BLOCKIO_H */

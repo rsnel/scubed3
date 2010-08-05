@@ -213,7 +213,6 @@ void blockio_dev_select_next_macroblock(blockio_dev_t *dev, int first) {
 	number = random_peek(&dev->r, 0);
 	dev->bi = &dev->b->blockio_infos[dev->macroblock_ref[
 		random_peek(&dev->r, 0)]];
-	dev->bi_number = random_peek(&dev->r, 0);
 	dev->bi->seqno = dev->next_seqno;
 
 	if (first) assert(blockio_dev_get_macroblock_status_old(dev,
@@ -239,10 +238,9 @@ void blockio_dev_select_next_macroblock(blockio_dev_t *dev, int first) {
 	if (!valid) blockio_dev_change_macroblock_status_old(dev,
 			number, FREE, SELECTFROM);
 
-	dev->tail_macroblock = random_peek(&dev->r, tmp2);
-	dev->tail_macroblock_global = dev->macroblock_ref[dev->tail_macroblock];
+	dev->tail_macroblock_global = dev->macroblock_ref[random_peek(&dev->r, tmp2)];
 	dev->random_len = tmp2;
-	//VERBOSE("tail_macroblock=%d, random_len=%d, valid=%d, cur=%d, seqno=%lld", dev->tail_macroblock, tmp2, valid, random_peek(&dev->r, 0), dev->bi->seqno);
+
 	random_pop(&dev->r);
 }
 
@@ -350,9 +348,14 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 	assert(tmp == dev->no_macroblocks);
 
 	tmp = 0;
+	if (blockio_dev_get_macroblock_status(dev,
+				dev->tail_macroblock_global) == NOT_ALLOCATED) {
+		//FIXME, make this non-fatal
+		ecch_throw(ECCH_DEFAULT, "designated followup not available");
+	}
+
 	while (dev->macroblock_ref[tmp] != dev->tail_macroblock_global)  tmp++;
 	assert(tmp < dev->no_macroblocks);
-	dev->tail_macroblock = tmp;
 	
 	//VERBOSE("tail_macroblock=%d, tail_macroblock_global=%d",
 	//		dev->tail_macroblock, dev->tail_macroblock_global);
@@ -363,7 +366,7 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 	//VERBOSE("keep_revisions = %d", dev->keep_revisions);
 	tmp3 = tmp2;
 	random_rescale(&dev->r, dev->no_macroblocks);
-	random_push(&dev->r, dev->tail_macroblock);
+	random_push(&dev->r, tmp);
 	
 	/* first: fill in the blanks in rebuild_prng (if any) with random
 	 * choices of the filled in argument */
@@ -542,8 +545,8 @@ void blockio_dev_write_current_macroblock(blockio_dev_t *dev) {
 	assert(dev->bi && id < dev->b->no_macroblocks);
 
 	if (dev->bi->no_indices)
-		blockio_dev_change_macroblock_status_old(dev,
-				dev->bi_number, FREE, HAS_DATA);
+		blockio_dev_change_macroblock_status(dev,
+				id, FREE, HAS_DATA);
 
 	DEBUG("write block %u (seqno=%llu)", id, dev->bi->seqno);
 
@@ -592,6 +595,18 @@ void blockio_dev_write_current_macroblock(blockio_dev_t *dev) {
 	dev->bi = NULL; /* there is no current block */
 }
 
+void blockio_dev_set_macroblock_status(blockio_dev_t *dev, uint32_t raw_no,
+		blockio_dev_macroblock_status_t status) {
+	assert(dev);
+	assert(raw_no < dev->b->no_macroblocks);
+
+	if (status&1) bitmap_setbit_safe(&dev->status, raw_no<<1);
+	else bitmap_clearbit_safe(&dev->status, raw_no<<1);
+
+	if (status&2) bitmap_setbit_safe(&dev->status, (raw_no<<1) + 1);
+	else bitmap_clearbit_safe(&dev->status, (raw_no<<1) + 1);
+}
+
 void blockio_dev_set_macroblock_status_old(blockio_dev_t *dev, uint32_t no,
 		blockio_dev_macroblock_status_t status) {
 	uint32_t raw_no;
@@ -604,6 +619,14 @@ void blockio_dev_set_macroblock_status_old(blockio_dev_t *dev, uint32_t no,
 
 	if (status&2) bitmap_setbit_safe(&dev->status, (raw_no<<1) + 1);
 	else bitmap_clearbit_safe(&dev->status, (raw_no<<1) + 1);
+}
+
+blockio_dev_macroblock_status_t blockio_dev_get_macroblock_status(
+		blockio_dev_t *dev, uint32_t raw_no) {
+	assert(dev);
+	assert(raw_no < dev->b->no_macroblocks);
+
+	return bitmap_getbits(&dev->status, raw_no<<1, 2);
 }
 
 blockio_dev_macroblock_status_t blockio_dev_get_macroblock_status_old(
@@ -623,6 +646,13 @@ void blockio_dev_change_macroblock_status_old(blockio_dev_t *dev, uint32_t no,
 	blockio_dev_set_macroblock_status_old(dev, no, new);
 }
 
+void blockio_dev_change_macroblock_status(blockio_dev_t *dev, uint32_t no,
+		blockio_dev_macroblock_status_t old,
+		blockio_dev_macroblock_status_t new) {
+	assert(blockio_dev_get_macroblock_status(dev, no) == old);
+	blockio_dev_set_macroblock_status(dev, no, new);
+}
+
 int blockio_dev_allocate_macroblocks(blockio_dev_t *dev, uint16_t size) {
 	// 16 bit arithmetic
 	assert(dev->no_macroblocks < dev->no_macroblocks + size); 
@@ -639,7 +669,8 @@ int blockio_dev_allocate_macroblocks(blockio_dev_t *dev, uint16_t size) {
 
 	if (size > no_freeb) return -1; // not enough blocks
 
-	tmp = realloc(dev->macroblock_ref, sizeof(uint16_t)*(size + dev->no_macroblocks));
+	tmp = realloc(dev->macroblock_ref,
+			sizeof(uint16_t)*(size + dev->no_macroblocks));
 	if (!tmp) return -1; // out of memory
 	dev->macroblock_ref = tmp;
 
@@ -651,12 +682,11 @@ int blockio_dev_allocate_macroblocks(blockio_dev_t *dev, uint16_t size) {
 		bi = &dev->b->blockio_infos[select];
 		bi->dev = dev;
 
-		// add to our array, so we can address it
+		// add to our array
 		dev->macroblock_ref[dev->no_macroblocks++] = select;
 
 		// mark as FREE and assert() that is was NOT_ALLOCATED
-		blockio_dev_change_macroblock_status_old(dev,
-				dev->no_macroblocks - 1,
+		blockio_dev_change_macroblock_status(dev, select,
 				NOT_ALLOCATED, FREE);
 
 		no_freeb--;

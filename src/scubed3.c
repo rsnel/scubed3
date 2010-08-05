@@ -123,9 +123,29 @@ void scubed3_free(scubed3_t *l) {
 }
 
 void scubed3_reinit(scubed3_t *l) {
+	int i;
+	uint32_t tmp;
 	VERBOSE("scubed reinit");
-	free(l->block_indices);
-	scubed3_init(l, l->dev);
+	if (l->no_block_indices == 0) {
+		scubed3_init(l, l->dev);
+		return;
+	}
+
+	tmp = l->no_block_indices;
+	
+	l->no_block_indices = (l->dev->no_macroblocks -
+			l->dev->reserved_macroblocks)*l->dev->mmpm;
+	
+	if (tmp == l->no_block_indices) return;
+
+	if (l->no_block_indices < tmp) FATAL("shrinking device not supported");
+
+	l->block_indices = realloc(l->block_indices, 
+			l->no_block_indices*sizeof(uint32_t));
+	if (!l->block_indices) FATAL("out of memory error");
+
+	for (i = tmp; i < l->no_block_indices; i++)
+		l->block_indices[i] = 0xFFFFFFFF;
 }
 
 void scubed3_init(scubed3_t *l, blockio_dev_t *dev) {
@@ -152,8 +172,8 @@ void scubed3_init(scubed3_t *l, blockio_dev_t *dev) {
 	dllist_iterate(&dev->used_blocks,
 		(int (*)(dllist_elt_t*, void*))replay, l);
 
-	VERBOSE("we must free %d %d", dev->tail_macroblock, dev->tail_macroblock_global);
-	assert(blockio_dev_get_macroblock_status_old(dev, dev->tail_macroblock) == FREE);
+	VERBOSE("we must free %d", dev->tail_macroblock_global);
+	assert(blockio_dev_get_macroblock_status(dev, dev->tail_macroblock_global) == FREE);
 
 }
 

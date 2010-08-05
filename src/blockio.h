@@ -51,10 +51,8 @@ typedef struct blockio_dev_s {
 	uint16_t no_macroblocks; /* assigned to this device */
 	uint16_t reserved_macroblocks; /* visible in scubed file */
 	blockio_info_t *bi;
-	uint16_t bi_number;
 
 	/* state of prng */
-	uint16_t tail_macroblock;
 	uint16_t tail_macroblock_global;
 	uint32_t random_len;
 	random_t r;
@@ -118,6 +116,12 @@ void blockio_dev_select_next_valid_macroblock(blockio_dev_t*, int);
 typedef enum blockio_dev_macroblock_status_e {
 		NOT_ALLOCATED, HAS_DATA, FREE, SELECTFROM }
 	blockio_dev_macroblock_status_t;
+
+void blockio_dev_set_macroblock_status(blockio_dev_t*, uint32_t, blockio_dev_macroblock_status_t);
+
+void blockio_dev_change_macroblock_status(blockio_dev_t*, uint32_t, blockio_dev_macroblock_status_t, blockio_dev_macroblock_status_t);
+
+blockio_dev_macroblock_status_t blockio_dev_get_macroblock_status(blockio_dev_t*, uint32_t);
 
 void blockio_dev_set_macroblock_status_old(blockio_dev_t*, uint32_t, blockio_dev_macroblock_status_t);
 

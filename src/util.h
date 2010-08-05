@@ -44,33 +44,33 @@ static inline int32_t swap32(int32_t x){
 
 #if BYTE_ORDER == LITTLE_ENDIAN
 
-static inline int32_t be32_to_cpu(int32_t x){
-  return(swap32(x));
+static inline int32_t be32_to_cpu(int32_t x) {
+	return swap32(x);
 }
 
-static inline int32_t le32_to_cpu(int32_t x){
-  return(x);
+static inline int32_t le32_to_cpu(int32_t x) {
+	return x;
 }
 
 #else
 
-static inline int32_t be32_to_cpu(int32_t x){
-  return(x);
+static inline int32_t be32_to_cpu(int32_t x) {
+	return x;
 }
 
-static inline int32_t le32_to_cpu(int32_t x){
-  return(swap32(x));
+static inline int32_t le32_to_cpu(int32_t x) {
+	return swap32(x);
 }
 
 
 #endif
 
-static inline int32_t cpu_to_be32(int32_t x){
-  return(be32_to_cpu(x));
+static inline int32_t cpu_to_be32(int32_t x) {
+	return be32_to_cpu(x);
 }
 
-static inline int32_t cpu_to_le32(int32_t x){
-  return(le32_to_cpu(x));
+static inline int32_t cpu_to_le32(int32_t x) {
+	return le32_to_cpu(x);
 }
 
 #endif /* INCLUDE_SCUBED3_UTIL_H */

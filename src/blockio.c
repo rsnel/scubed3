@@ -25,7 +25,6 @@
 #include <sys/mount.h>
 #include <fcntl.h>
 #include "blockio.h"
-#include "bit.h"
 #include "bitmap.h"
 #include "verbose.h"
 #include "binio.h"

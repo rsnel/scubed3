@@ -4,7 +4,6 @@
 #include <stdint.h>
 #include "blockio.h"
 #include "binio.h"
-#include "bit.h"
 
 struct scubed3_s;
 

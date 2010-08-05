@@ -37,7 +37,6 @@
 #include "config.h"
 #include "scubed3.h"
 #include "gcry.h"
-#include "bit.h"
 #include "blockio.h"
 #include "verbose.h"
 #include "dllist.h"

@@ -60,6 +60,7 @@ void obsolete_mesoblk(scubed3_t *l, blockio_info_t *bi, uint32_t no) {
 		blockio_dev_set_macroblock_status(l->dev,
 				bi - l->dev->b->blockio_infos, FREE);
 		dllist_remove(&bi->elt);
+		bi->no_indices = 0;
 	}
 }
 
@@ -84,21 +85,49 @@ static inline uint8_t *mesoblk(scubed3_t *l, uint16_t no) {
 	return l->dev->tmp_macroblock + ((no+1)<<l->dev->b->mesoblk_log);
 }
 
+void copy_old_block_to_current(scubed3_t *l) {
+	int k;
+	uint32_t index;
+	if (blockio_dev_get_macroblock_status(l->dev,
+				l->dev->tail_macroblock_global) == HAS_DATA) {
+		blockio_info_t *bi =
+			&l->dev->b->blockio_infos[l->dev->tail_macroblock_global];
+
+		for (k = 0; k < bi->no_indices; k++) {
+			if (bi->indices[k] >= l->no_block_indices) continue;
+
+			index = l->block_indices[bi->indices[k]];
+			if (index != 0xFFFFFFFF &&
+					&l->dev->b->blockio_infos[ID] == bi) {
+				blockio_dev_read_mesoblk(l->dev, mesoblk(l,
+						l->dev->bi->no_indices), id(bi), k);
+
+				add_blockref(l, bi->indices[k]);
+
+				obsolete_mesoblk(l, bi, k);
+			}
+		}
+	}
+}
+
 void select_new_macroblock(scubed3_t *l) {
-	FATAL("select_new_macroblock not implemented");
-#if 0
-	DEBUG("new block %u (seqno=%llu) has %u mesoblocks due to GC of "
-			"block %u", id(l->cur), l->cur->seqno,
-			l->cur->no_indices, id(head));
-#endif
+	do {
+		blockio_dev_write_current_and_select_next_valid_macroblock(l->dev);
+		copy_old_block_to_current(l);
+		DEBUG("new block %u (seqno=%llu) has %u mesoblocks due "
+				"to GC of block %u",
+				id(l->dev->bi), l->dev->bi->seqno,
+				l->dev->bi->no_indices,
+				l->dev->tail_macroblock_global);
+	} while (l->dev->bi->no_indices == l->dev->mmpm);
 }
 
 int replay(blockio_info_t *bi, scubed3_t *l) {
 	uint32_t k, index;
 
-	VERBOSE("replay at seqno=%lld (%d indices)", bi->seqno, bi->no_indices);
+	//VERBOSE("replay at seqno=%lld (%d indices)", bi->seqno, bi->no_indices);
 	for (k = 0; k < bi->no_indices; k++) {
-		VERBOSE("k=%u, bi->indices[k]=%u", k, bi->indices[k]);
+		//VERBOSE("k=%u, bi->indices[k]=%u", k, bi->indices[k]);
 		if (bi->indices[k] >= l->no_block_indices) continue;
 		index = l->block_indices[bi->indices[k]];
 		assert(id(bi) != ID);
@@ -168,12 +197,13 @@ void scubed3_init(scubed3_t *l, blockio_dev_t *dev) {
 
 	l->no_block_indices = (dev->no_macroblocks -
 			dev->reserved_macroblocks)*dev->mmpm;
-	VERBOSE("l->no_block_indices=%d", l->no_block_indices);
+
+	//VERBOSE("l->no_block_indices=%d", l->no_block_indices);
 	l->block_indices = ecalloc(l->no_block_indices, sizeof(uint32_t));
 
 	for (i = 0; i < l->no_block_indices; i++) l->block_indices[i] = 0xFFFFFFFF;
 
-	debug_stuff(l);
+	//debug_stuff(l);
 	dllist_iterate(&dev->used_blocks,
 		(int (*)(dllist_elt_t*, void*))replay, l);
 }
@@ -210,13 +240,28 @@ int do_write(scubed3_t *l, uint32_t mesoff, uint32_t muoff, uint32_t size,
 
 	l->dev->updated = 1;
 
+	if (!l->output_initialized) {
+		if (!l->dev->valid) {
+			assert(l->dev->bi->no_indices == 0);
+			select_new_macroblock(l);
+		} else {
+			copy_old_block_to_current(l);
+			DEBUG("new block %u (seqno=%llu) has %u mesoblocks due "
+					"to GC of block %u",
+					id(l->dev->bi), l->dev->bi->seqno,
+					l->dev->bi->no_indices, l->dev->tail_macroblock_global);
+		}
+
+		l->output_initialized = 1;
+	}
+
 	if (ID != id(l->dev->bi)) {
 		/* could be that the new block is full after
 		 * garbage collecting (depends on the way the
 		 * to-be-freed block is selected) */
-		while (l->dev->bi->no_indices == l->dev->mmpm) {
+		if (l->dev->bi->no_indices == l->dev->mmpm)
 			select_new_macroblock(l);
-		}
+
 		index = l->block_indices[mesoff];
 	}
 
@@ -265,9 +310,9 @@ int do_req(scubed3_t *l, scubed3_io_t cmd, uint64_t r_offset, size_t size,
 	int (*action)(scubed3_t*, uint32_t, uint32_t, uint32_t, char*) =
 		(cmd == SCUBED3_WRITE)?do_write:do_read;
 
-	VERBOSE("do_req: %s offset=%lld size=%d on \"%s\"",
-			(cmd == SCUBED3_WRITE)?"write":"read",
-			r_offset, size, l->dev->name);
+//	VERBOSE("do_req: %s offset=%lld size=%d on \"%s\"",
+//			(cmd == SCUBED3_WRITE)?"write":"read",
+//			r_offset, size, l->dev->name);
 
 	if ((r_offset + size - 1)>>l->dev->b->mesoblk_log >= l->no_block_indices) {
 		WARNING("%s access past end of device \"%s\"", 
@@ -332,6 +377,7 @@ int main(int argc, char **argv) {
 	if (fuse_opt_parse(&args, &options, scubed3_opts, NULL) == -1)
 		FATAL("error parsing options");
 
+	VERBOSE("argc=%d", args.argc);
 	if (!options.base) FATAL("argument -b FILE is required");
 
 	if (options.mesoblock_log < 12) FATAL("mesoblock log is too small");

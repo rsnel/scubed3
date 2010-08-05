@@ -237,22 +237,19 @@ void blockio_dev_select_next_macroblock(blockio_dev_t *dev, int first) {
 	if (!dev->valid) blockio_dev_change_macroblock_status(dev,
 			number, FREE, SELECTFROM);
 
-	dev->tail_macroblock_global = dev->macroblock_ref[random_peek(&dev->r, tmp2)];
+	dev->tail_macroblock_global =
+		dev->macroblock_ref[random_peek(&dev->r, tmp2)];
+
 	dev->random_len = tmp2;
 
 	random_pop(&dev->r);
 }
 
-void blockio_dev_select_next_valid_macroblock(blockio_dev_t *dev, int first) {
-	goto middle;
-
+void blockio_dev_write_current_and_select_next_valid_macroblock(
+		blockio_dev_t *dev) {
 	do {
-		first = 0;
 		blockio_dev_write_current_macroblock(dev);
-
-middle:
-		blockio_dev_select_next_macroblock(dev, first);
-
+		blockio_dev_select_next_macroblock(dev, 0);
 	} while (!dev->valid);
 }
 
@@ -543,9 +540,11 @@ void blockio_dev_write_current_macroblock(blockio_dev_t *dev) {
 	int i;
 	assert(dev->bi && id < dev->b->no_macroblocks);
 
-	if (dev->bi->no_indices)
+	if (dev->bi->no_indices) {
 		blockio_dev_change_macroblock_status(dev,
 				id, FREE, HAS_DATA);
+		dllist_append(&dev->used_blocks, &dev->bi->elt);
+	}
 
 	DEBUG("write block %u (seqno=%llu)", id, dev->bi->seqno);
 

@@ -294,6 +294,9 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 	dev->our_macroblocks = ecalloc(dev->no_macroblocks, sizeof(blockio_info_t*));
 	//VERBOSE("dev->random_len=%d", dev->random_len);
 
+	tmp = dev->no_macroblocks;
+	dev->no_macroblocks = 0;
+
 	/* check all macroblocks in the map */
 	for (i = 0; i < b->no_macroblocks; i++) {
 		blockio_info_t *bi = &b->blockio_infos[i];
@@ -315,8 +318,8 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 					 * a bug */
 					ecch_throw(ECCH_DEFAULT, "unable to open partition, datablock %s", (bi->dev != dev)?"missing":"is empty");
 				}
-				assert(tmp < dev->no_macroblocks);
-				dev->our_macroblocks[tmp++] = bi;
+				assert(tmp > dev->no_macroblocks);
+				dev->our_macroblocks[dev->no_macroblocks++] = bi;
 				add_to_used(&dev->used_blocks, bi);
 				break;
 
@@ -324,7 +327,7 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 				if (bi->seqno == highest_seqno) dev->keep_revisions--;
 				//VERBOSE("found selectblock %d %d", tmp2, i);
 				assert(tmp2 < dev->random_len - 1);
-				rebuild_prng[tmp2++] = tmp;
+				rebuild_prng[tmp2++] = dev->no_macroblocks;
 			case FREE:
 				/* check if someone has taken it over */
 				if (bi->dev != dev) {
@@ -341,8 +344,8 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 				       	bi->no_indices = 0;
 					bi->no_nonobsolete = 0;
 				}
-				assert(tmp < dev->no_macroblocks);
-				dev->our_macroblocks[tmp++] = bi;
+				assert(tmp > dev->no_macroblocks);
+				dev->our_macroblocks[dev->no_macroblocks++] = bi;
 
 				break;
 		}

@@ -199,7 +199,7 @@ static int control_open_add_common(int s, control_thread_priv_t *priv, char *arg
 		if (!add & !entry->d.no_macroblocks)
 			ecch_throw(ECCH_DEFAULT, "unable to open device: use add instead");
 		entry->size = 0;
-		if (entry->l.dev->no_macroblocks > entry->l.dev->reserved_macroblocks) entry->size = ((entry->l.dev->no_macroblocks-entry->l.dev->reserved_macroblocks)<<entry->d.b->mesoblk_log)*entry->l.dev->mmpm;
+		if (entry->d.no_macroblocks > entry->d.reserved_macroblocks) entry->size = ((entry->d.no_macroblocks-entry->d.reserved_macroblocks)<<entry->d.b->mesoblk_log)*entry->d.mmpm;
 		scubed3_init(&entry->l, &entry->d);
 	}
 	ecch_catch_all {
@@ -307,7 +307,7 @@ static int control_resize(int s, control_thread_priv_t *priv, char *argv[]) {
 
 	dev->updated = 1;
 
-	if (entry->l.dev->no_macroblocks > entry->l.dev->reserved_macroblocks) entry->size = ((entry->l.dev->no_macroblocks-entry->l.dev->reserved_macroblocks)<<entry->d.b->mesoblk_log)*entry->l.dev->mmpm;
+	if (entry->d.no_macroblocks > entry->d.reserved_macroblocks) entry->size = ((entry->d.no_macroblocks-entry->d.reserved_macroblocks)<<entry->d.b->mesoblk_log)*entry->d.mmpm;
 	scubed3_reinit(&entry->l);
 
 	hashtbl_unlock_element_byptr(entry);

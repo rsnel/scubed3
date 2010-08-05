@@ -39,6 +39,7 @@ typedef struct scubed3_s {
 	 * the high bits encode the macroblock number and the low
 	 * bits encode the index of the mesoblock in the specified
 	 * macroblock, see the definitions of ID and NO below */
+	uint32_t no_block_indices;
 	uint32_t *block_indices;
 } scubed3_t;
 

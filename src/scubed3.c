@@ -129,7 +129,6 @@ void scubed3_reinit(scubed3_t *l) {
 
 void scubed3_init(scubed3_t *l, blockio_dev_t *dev) {
 	int i;
-	uint32_t no_block_indices;
 	assert(l && dev);
 
 	l->dev = dev;
@@ -138,15 +137,15 @@ void scubed3_init(scubed3_t *l, blockio_dev_t *dev) {
 
 	l->mesobits = (dev->b->macroblock_log - dev->b->mesoblk_log);
 	l->mesomask = 0xFFFFFFFF>>(32 - l->mesobits);
-	//DEBUG("mesobits=%u, mesomask=%08x", l->mesobits, l->mesomask);
 
 	if (dev->no_macroblocks <= dev->reserved_macroblocks) return;
 
-	no_block_indices = (dev->no_macroblocks -
+	l->no_block_indices = (dev->no_macroblocks -
 			dev->reserved_macroblocks)*dev->mmpm;
-	l->block_indices = ecalloc(no_block_indices, sizeof(uint32_t));
+	VERBOSE("l->no_block_indices=%d", l->no_block_indices);
+	l->block_indices = ecalloc(l->no_block_indices, sizeof(uint32_t));
 
-	for (i = 0; i < no_block_indices; i++) l->block_indices[i] = 0xFFFFFFFF;
+	for (i = 0; i < l->no_block_indices; i++) l->block_indices[i] = 0xFFFFFFFF;
 
 	debug_stuff(l);
 	dllist_iterate(&dev->used_blocks,
@@ -244,7 +243,16 @@ int do_req(scubed3_t *l, scubed3_io_t cmd, uint64_t r_offset, size_t size,
 	int (*action)(scubed3_t*, uint32_t, uint32_t, uint32_t, char*) =
 		(cmd == SCUBED3_WRITE)?do_write:do_read;
 
-	VERBOSE("do_req: %s offset=%lld size=%d", (cmd == SCUBED3_WRITE)?"write":"read", r_offset, size);
+	VERBOSE("do_req: %s offset=%lld size=%d on \"%s\"",
+			(cmd == SCUBED3_WRITE)?"write":"read",
+			r_offset, size, l->dev->name);
+
+	if ((r_offset + size - 1)>>l->dev->b->mesoblk_log >= l->no_block_indices) {
+		WARNING("%s access past end of device \"%s\"", 
+				(cmd == SCUBED3_WRITE)?"write":"read",
+				l->dev->name);
+		return 1;
+	}
 
 	if (inmeso) {
 		if (inmeso + size <= 1<<l->dev->b->mesoblk_log) reqsz = size;
@@ -296,11 +304,12 @@ int main(int argc, char **argv) {
 
 	verbose_init(argv[0]);
 
+	VERBOSE("version %s Copyright (C) 2009, Rik Snel <rik@snel.it>",
+			PACKAGE_VERSION);
+
 	if (fuse_opt_parse(&args, &options, scubed3_opts, NULL) == -1)
 		FATAL("error parsing options");
 
-	VERBOSE("version %s Copyright (C) 2009, Rik Snel <rik@snel.it>",
-			PACKAGE_VERSION);
 	if (!options.base) FATAL("argument -b FILE is required");
 
 	if (options.mesoblock_log < 12) FATAL("mesoblock log is too small");

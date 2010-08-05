@@ -160,17 +160,17 @@ void blockio_dev_free(blockio_dev_t *dev) {
 	bitmap_free(&dev->status);
 
 	for (i = 0; i < dev->no_macroblocks; i++) {
-		if (dev->our_macroblocks[i]) {
-			dev->our_macroblocks[i]->elt.prev = NULL;
-			dev->our_macroblocks[i]->elt.next = NULL;
-			dev->our_macroblocks[i]->dev = NULL;
-			free(dev->our_macroblocks[i]->indices);
-		}
+		blockio_info_t *bi =
+			&dev->b->blockio_infos[dev->macroblock_ref[i]];
+		bi->elt.prev = NULL;
+		bi->elt.next = NULL;
+		bi->dev = NULL;
+		free(bi->indices);
 	}
 
 	dllist_free(&dev->used_blocks);
 	free(dev->tmp_macroblock);
-	free(dev->our_macroblocks);
+	free(dev->macroblock_ref);
 	free(dev->name);
 }
 
@@ -211,7 +211,8 @@ void blockio_dev_select_next_macroblock(blockio_dev_t *dev, int first) {
 	assert(!dev->bi);
 
 	number = random_peek(&dev->r, 0);
-	dev->bi = dev->our_macroblocks[random_peek(&dev->r, 0)];
+	dev->bi = &dev->b->blockio_infos[dev->macroblock_ref[
+		random_peek(&dev->r, 0)]];
 	dev->bi_number = random_peek(&dev->r, 0);
 	dev->bi->seqno = dev->next_seqno;
 
@@ -219,11 +220,9 @@ void blockio_dev_select_next_macroblock(blockio_dev_t *dev, int first) {
 				number) == FREE);
 	else blockio_dev_change_macroblock_status_old(dev,
 			number, SELECTFROM, FREE);
-	//VERBOSE("random[%d]=%d %d", tmp2, random_peek(&dev->r, tmp2), dev->our_macroblocks[random_peek(&dev->r, tmp2)] - dev->b->blockio_infos);
 
 	while (different <= dev->keep_revisions) {
 		tmp2++;
-		//VERBOSE("random[%d]=%d %d", tmp2, random_peek(&dev->r, tmp2), dev->our_macroblocks[random_peek(&dev->r, tmp2)] - dev->b->blockio_infos);
 		if (last_diff(&dev->r, tmp2, &valid)) {
 			if (different != dev->keep_revisions) {
 				if (first) blockio_dev_change_macroblock_status_old(
@@ -241,9 +240,7 @@ void blockio_dev_select_next_macroblock(blockio_dev_t *dev, int first) {
 			number, FREE, SELECTFROM);
 
 	dev->tail_macroblock = random_peek(&dev->r, tmp2);
-	dev->tail_macroblock_global =
-		dev->our_macroblocks[dev->tail_macroblock] -
-		dev->b->blockio_infos;
+	dev->tail_macroblock_global = dev->macroblock_ref[dev->tail_macroblock];
 	dev->random_len = tmp2;
 	//VERBOSE("tail_macroblock=%d, random_len=%d, valid=%d, cur=%d, seqno=%lld", dev->tail_macroblock, tmp2, valid, random_peek(&dev->r, 0), dev->bi->seqno);
 	random_pop(&dev->r);
@@ -291,8 +288,7 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 	uint16_t rebuild_prng[dev->random_len - 1];
 	memset(&rebuild_prng[0], 0, sizeof(rebuild_prng));
 
-	dev->our_macroblocks = ecalloc(dev->no_macroblocks, sizeof(blockio_info_t*));
-	//VERBOSE("dev->random_len=%d", dev->random_len);
+	dev->macroblock_ref = ecalloc(dev->no_macroblocks, sizeof(uint16_t));
 
 	tmp = dev->no_macroblocks;
 	dev->no_macroblocks = 0;
@@ -319,7 +315,7 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 					ecch_throw(ECCH_DEFAULT, "unable to open partition, datablock %s", (bi->dev != dev)?"missing":"is empty");
 				}
 				assert(tmp > dev->no_macroblocks);
-				dev->our_macroblocks[dev->no_macroblocks++] = bi;
+				dev->macroblock_ref[dev->no_macroblocks++] = i;
 				add_to_used(&dev->used_blocks, bi);
 				break;
 
@@ -345,7 +341,7 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 					bi->no_nonobsolete = 0;
 				}
 				assert(tmp > dev->no_macroblocks);
-				dev->our_macroblocks[dev->no_macroblocks++] = bi;
+				dev->macroblock_ref[dev->no_macroblocks++] = i;
 
 				break;
 		}
@@ -354,10 +350,10 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 	assert(tmp == dev->no_macroblocks);
 
 	tmp = 0;
-	while (dev->our_macroblocks[tmp] - dev->b->blockio_infos !=
-			dev->tail_macroblock_global)  tmp++;
+	while (dev->macroblock_ref[tmp] != dev->tail_macroblock_global)  tmp++;
 	assert(tmp < dev->no_macroblocks);
 	dev->tail_macroblock = tmp;
+	
 	//VERBOSE("tail_macroblock=%d, tail_macroblock_global=%d",
 	//		dev->tail_macroblock, dev->tail_macroblock_global);
 	
@@ -601,7 +597,7 @@ void blockio_dev_set_macroblock_status_old(blockio_dev_t *dev, uint32_t no,
 	uint32_t raw_no;
 	assert(dev);
 	assert(no < dev->no_macroblocks);
-	raw_no = dev->our_macroblocks[no] - dev->b->blockio_infos;
+	raw_no = dev->macroblock_ref[no];
 
 	if (status&1) bitmap_setbit_safe(&dev->status, raw_no<<1);
 	else bitmap_clearbit_safe(&dev->status, raw_no<<1);
@@ -615,7 +611,7 @@ blockio_dev_macroblock_status_t blockio_dev_get_macroblock_status_old(
 	uint32_t raw_no;
 	assert(dev);
 	assert(no < dev->no_macroblocks);
-	raw_no = dev->our_macroblocks[no] - dev->b->blockio_infos;
+	raw_no = dev->macroblock_ref[no];
 
 	return bitmap_getbits(&dev->status, raw_no<<1, 2);
 }
@@ -643,9 +639,9 @@ int blockio_dev_allocate_macroblocks(blockio_dev_t *dev, uint16_t size) {
 
 	if (size > no_freeb) return -1; // not enough blocks
 
-	tmp = realloc(dev->our_macroblocks, sizeof(dev->our_macroblocks[0])*(size + dev->no_macroblocks));
+	tmp = realloc(dev->macroblock_ref, sizeof(uint16_t)*(size + dev->no_macroblocks));
 	if (!tmp) return -1; // out of memory
-	dev->our_macroblocks = tmp;
+	dev->macroblock_ref = tmp;
 
 	while (size) {
 		blockio_info_t *bi;
@@ -656,7 +652,7 @@ int blockio_dev_allocate_macroblocks(blockio_dev_t *dev, uint16_t size) {
 		bi->dev = dev;
 
 		// add to our array, so we can address it
-		dev->our_macroblocks[dev->no_macroblocks++] = bi;
+		dev->macroblock_ref[dev->no_macroblocks++] = select;
 
 		// mark as FREE and assert() that is was NOT_ALLOCATED
 		blockio_dev_change_macroblock_status_old(dev,

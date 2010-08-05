@@ -66,7 +66,6 @@ typedef struct blockio_dev_s {
 	dllist_t used_blocks;
 
 	/* array, used with PRNG to select random blocks */
-	blockio_info_t **our_macroblocks; // deprecated
 	uint16_t *macroblock_ref;
 
 	uint8_t *tmp_macroblock;

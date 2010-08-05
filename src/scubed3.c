@@ -92,6 +92,7 @@ void select_new_macroblock(scubed3_t *l) {
 int replay(blockio_info_t *bi, scubed3_t *l) {
 	uint32_t k, index;
 
+	VERBOSE("replay at seqno=%lld (%d indices)", bi->seqno, bi->no_indices);
 	for (k = 0; k < bi->no_indices; k++) {
 		VERBOSE("k=%u, bi->indices[k]=%u", k, bi->indices[k]);
 		index = l->block_indices[bi->indices[k]];
@@ -197,6 +198,8 @@ int do_write(scubed3_t *l, uint32_t mesoff, uint32_t muoff, uint32_t size,
 		}
 		index = l->block_indices[mesoff];
 	}
+
+	VERBOSE("block is %s", (ID == id(l->dev->bi))?"old":"new");
 
 	addr = mesoblk(l, (ID == id(l->dev->bi))?NO:l->dev->bi->no_indices);
 	memcpy(addr + muoff, in, size);

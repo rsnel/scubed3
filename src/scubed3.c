@@ -377,7 +377,6 @@ int main(int argc, char **argv) {
 	if (fuse_opt_parse(&args, &options, scubed3_opts, NULL) == -1)
 		FATAL("error parsing options");
 
-	VERBOSE("argc=%d", args.argc);
 	if (!options.base) FATAL("argument -b FILE is required");
 
 	if (options.mesoblock_log < 12) FATAL("mesoblock log is too small");

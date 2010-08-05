@@ -119,8 +119,37 @@ typedef struct control_command {
 	char *usage;
 } control_command_t;
 
-	//if (control_write_line(s, "consists of %u macroblocks of %u bytes\n", priv->b->no_macroblocks, priv->b->macroblock_size)) return -1;
-	//if (control_write_line(s, "each macroblock has %d mesoblocks of %u bytes\n", 1<<(priv->b->macroblock_log - priv->b->mesoblk_log), 1<<priv->b->mesoblk_log)) return -1;
+static int control_mountpoint(int s, control_thread_priv_t *priv, char *argv[]) {
+	return control_write_complete(s, 0, "%s", priv->mountpoint);
+}
+
+static int control_exit(int s, control_thread_priv_t *priv, char *argv[]) {
+	control_write_complete(s, 0, "kthxbye!");
+	//VERBOSE("closing connection");
+	return -1; // close connection
+}
+
+typedef struct control_help_priv_s {
+	int s; /* socket */
+} control_help_priv_t;
+
+static int control_help(int s, control_thread_priv_t *priv, char *argv[]) {
+	control_help_priv_t help_priv = {
+		.s = s
+	};
+	int rep(control_help_priv_t *priv, control_command_t *c) {
+		return control_write_line(priv->s, "%s%s\n",
+				c->head.key, c->usage);
+	}
+
+	if (control_write_status(s, 0)) return -1;
+
+	if (hashtbl_ts_traverse(&priv->c,
+				(int (*)(void*, hashtbl_elt_t*))rep,
+				&help_priv)) return -1;
+
+	return control_write_terminate(s);
+}
 
 typedef struct control_status_priv_s {
 	int s; /* socket */
@@ -139,6 +168,9 @@ static int control_status(int s, control_thread_priv_t *priv, char *argv[]) {
         }
 
 	if (control_write_status(s, 0)) return -1;
+
+//	if (control_write_line(s, "consists of %u macroblocks of %u bytes\n", priv->b->no_macroblocks, priv->b->macroblock_size)) return -1;
+//	if (control_write_line(s, "each macroblock has %d mesoblocks of %u bytes\n", 1<<(priv->b->macroblock_log - priv->b->mesoblk_log), 1<<priv->b->mesoblk_log)) return -1;
 
 	if (hashtbl_ts_traverse(priv->h, (int (*)(void*, hashtbl_elt_t*))rep, &status_priv)) return -1;
 
@@ -330,11 +362,21 @@ static int control_resize(int s, control_thread_priv_t *priv, char *argv[]) {
 
 	hashtbl_unlock_element_byptr(entry);
 	
-	return control_write_complete(s, 0, "succesful resized");
+	return control_write_complete(s, 0, "succesfull resized");
 }
 
 static control_command_t control_commands[] = {
 	{
+		.head.key = "mountpoint",
+		.command = control_mountpoint,
+		.argc = 0,
+		.usage = ""
+	}, {
+		.head.key = "exit",
+		.command = control_exit,
+		.argc = 0,
+		.usage = ""
+	}, {
 		.head.key = "p",
 		.command = control_status,
 		.argc = 0,
@@ -349,6 +391,11 @@ static control_command_t control_commands[] = {
 		.command = control_create,
 		.argc = 3,
 		.usage = " NAME CIPHER_SPEC KEY"
+	}, {
+		.head.key = "help",
+		.command = control_help,
+		.argc = 0,
+		.usage = ""
 	}, {
 		.head.key = "close",
 		.command = control_close,
@@ -385,6 +432,8 @@ int control_call(int s, control_thread_priv_t *priv, char *command) {
 		if (*argv[argc] == ' ') *argv[argc]++ = '\0';
 
 	} while (*argv[argc] != '\0');
+
+	if (argc == 1 && *argv[0] == '\0') return control_write_string(s, "OK\n.\n", 5);
 
 	if (!(cmnd = hashtbl_find_element_bykey(&priv->c, argv[0])))
 		return control_write_complete(s, 1, "unknown command \"%s\"", argv[0]);
@@ -427,13 +476,15 @@ void *control_thread(void *arg) {
 	if (listen(s, 1) == -1)
 		FATAL("listen: %s", strerror(errno));
 
+	VERBOSE("listening for connection with scubed2ctl on " CONTROL_SOCKET);
+
 	while (1) {
 		int n, i, start, done = 0, ret;
-		VERBOSE("waiting for connection on " CONTROL_SOCKET);
 		t = sizeof(remote);
 		if ((s2 = accept(s, (struct sockaddr*)&remote, &t)) == -1)
 			FATAL("accept: %s", strerror(errno));
 
+		buf_len = 0;
 		do {
 			n = recv(s2, buf + buf_len, BUF_SIZE - buf_len, 0);
 			if (n == 0) {

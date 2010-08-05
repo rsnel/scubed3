@@ -30,6 +30,7 @@ typedef struct control_thread_priv_s {
 	hashtbl_t c;
 	blockio_t *b;
 	hashtbl_t *ids;
+	char *mountpoint;
 } control_thread_priv_t;
 
 void *control_thread(void *arg);

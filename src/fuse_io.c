@@ -212,28 +212,44 @@ static void freer(fuse_io_entry_t *entry) {
 	free(entry);
 }
 
+/* we want access to the mountpoint, so we copy
+ * the definition of fuse_main_comon and pass the mountpoint
+ * to the control thread */
+static int fuse_main_custom(int argc, char *argv[],
+		const struct fuse_operations *op,
+		size_t op_size, void *user_data, int compat) {
+	fuse_io_priv_t *priv = user_data;
+	struct fuse *fuse;
+	int multithreaded;
+	int res;
+
+	fuse = fuse_setup(argc, argv, op, op_size,
+			&priv->control_thread_priv.mountpoint,
+			&multithreaded, priv);
+
+	if (!fuse) return 1;
+
+	res = multithreaded?fuse_loop_mt(fuse):fuse_loop(fuse);
+
+	fuse_teardown(fuse, priv->control_thread_priv.mountpoint);
+
+	if (res == -1) return 1;
+
+	return 0;
+}
+
 int fuse_io_start(int argc, char **argv, blockio_t *b) {
 	int ret;
 	fuse_io_priv_t priv;
-	//fuse_io_entry_t *entry;
 	hashtbl_init_default(&priv.entries, -1, 4, 1, 1,
 			(void (*)(void*))freer);
 	hashtbl_init_default(&priv.ids, 32, 4, 1, 1, NULL);
 
 	priv.control_thread_priv.b = b;
-#if 0
-	/* /test */
-	entry = hashtbl_allocate_and_add_element(&priv.entries,
-			estrdup("test"), sizeof(*entry));
-	entry->size = ((l->dev->no_macroblocks-l->dev->reserved)*l->dev->mmpm)
-		<<l->dev->mesoblk_log;
-	entry->to_be_deleted = 0;
-	entry->inuse = 0;
-	entry->l = l;
-	hashtbl_unlock_element_byptr(entry);
-#endif
 
-	ret = fuse_main(argc, argv, &fuse_io_operations, &priv);
+	//ret = fuse_main(argc, argv, &fuse_io_operations, &priv);
+	ret = fuse_main_custom(argc, argv, &fuse_io_operations,
+			sizeof(fuse_io_operations), &priv, 0);
 
 	hashtbl_free(&priv.entries);
 

@@ -47,6 +47,7 @@
 int do_command(int s, char *format, ...) {
 	char buf[BUF_SIZE];
 	int ret = 0, buf_len = 0, start = 0, i, done = 0;
+	int status_known = 0;
 	ssize_t sent = 0, len, n;
 
 	len = strlen(format);
@@ -75,13 +76,18 @@ int do_command(int s, char *format, ...) {
 				buf[i] = '\0';
 				if (*(buf + start) == '.' && i - start == 1) {
 					done = 1;
+					if (!status_known) WARNING("message terminates without known status");
 					break;
 				}
-				if (strcmp(buf + start, "OK") &&
-						strcmp(buf + start, "ERR")) {
+				if (status_known) {
 					printf("%s\n", buf + start);
-				} else if (!strcmp(buf + start, "ERR"))
-					ret = -1;
+				} else if (!strcmp(buf + start, "ERR") ||
+						!strcmp(buf + start, "OK")) {
+					status_known = 1;
+					if (!strcmp(buf + start, "ERR"))
+						ret = -1;
+				} else FATAL("malformed response, "
+						"expected OK or ERR");
 
 				start = i + 1;
 			}
@@ -156,14 +162,22 @@ int main(int argc, char **argv) {
 		}
 
 		if (!strcmp(line, "exit") || !strcmp(line, "quit") ||
-				!strcmp(line, "q") || !strcmp(line, "x")) break;
-		else if (!strcmp(line, "help")) {
-			printf("convenience functions:\n\n");
-			printf("exit,x,quit,q\n");
+				!strcmp(line, "q") || !strcmp(line, "x") ||
+				!strcmp(line, "bye") || !strcmp(line, "kthxbye") ||
+				!strcmp(line, "thanks")) {
+			char bla[5] = { 'e', 'x', 'i', 't', '\0' };
+			do_command(s, bla);
+			break;
+		} else if (!strcmp(line, "help")) {
+			char bla[5] = { 'h', 'e', 'l', 'p', '\0' };
+			printf("helper functions in scubed3ctl:\n\n");
+			printf("exit (and common synonyms)\n");
 			printf("create NAME (asks twice for passphrase, expects 0 allocated blocks)\n");
 			printf("open NAME (asks once for passphrase, expects >0 allocated blocks)\n");
 			printf("resize NAME BLOCKS\n");
 			printf("\n");
+			printf("internal commands of scubed3:\n\n");
+			do_command(s, bla);
 		} else if (!strncmp(line, "create ", 5) || !strncmp(line, "open ", 5) || !strcmp(line, "create") || !strcmp(line,"open")) {
 			/* tokenize, and build custom command */
 			int argc = 0;

@@ -51,6 +51,7 @@ typedef struct blockio_dev_s {
 	uint16_t no_macroblocks; /* assigned to this device */
 	uint16_t reserved_macroblocks; /* visible in scubed file */
 	blockio_info_t *bi;
+	uint16_t bi_number;
 
 	/* state of prng */
 	uint16_t tail_macroblock;

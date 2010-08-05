@@ -98,12 +98,15 @@ static int fuse_io_open(const char *path, struct fuse_file_info *fi) {
 //	// FIXME: disallow opening
 //	hashtbl_unlock_element_byptr(entry);
 //	return -EBUSY;
+	//VERBOSE("attempt to openen \"%s\"", path + 1);
 
 	if (entry->inuse || entry->to_be_deleted) {
 		hashtbl_unlock_element_byptr(entry);
 		return -EBUSY;
 	}
 	entry->inuse++;
+	//VERBOSE("openend \"%s\"", path + 1);
+
 	hashtbl_unlock_element_byptr(entry);
 	return 0;
 }
@@ -116,7 +119,7 @@ static int fuse_io_release(const char *path, struct fuse_file_info *fi) {
 
 	assert(entry->inuse);
 	/* we should do some kind of cleanup here */
-	VERBOSE("release called on %s", path);
+	//VERBOSE("release called on %s", path);
 	entry->inuse--;
 	hashtbl_unlock_element_byptr(entry);
 	return 0;

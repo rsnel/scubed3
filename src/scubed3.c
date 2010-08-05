@@ -77,7 +77,7 @@ static void add_blockref(scubed3_t *l, uint32_t offset) {
 }
 
 static inline uint8_t *mesoblk(scubed3_t *l, uint16_t no) {
-	assert(no < l->dev->bi->no_indices);
+	assert(no < l->dev->mmpm);
 	return l->dev->tmp_macroblock + ((no+1)<<l->dev->b->mesoblk_log);
 }
 

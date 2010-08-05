@@ -213,6 +213,7 @@ void blockio_dev_select_next_macroblock(blockio_dev_t *dev, int first) {
 
 	number = random_peek(&dev->r, 0);
 	dev->bi = dev->our_macroblocks[random_peek(&dev->r, 0)];
+	dev->bi_number = random_peek(&dev->r, 0);
 	dev->bi->seqno = dev->next_seqno;
 
 	if (first) assert(blockio_dev_get_macroblock_status(dev,
@@ -309,7 +310,7 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 				break;
 
 			case HAS_DATA:
-				if (bi->dev != dev || bi->no_indices) {
+				if (bi->dev != dev || !bi->no_indices) {
 					/* no data was detected, there must
 					 * however be data, so we have
 					 * a bug */
@@ -541,6 +542,10 @@ void blockio_dev_write_current_macroblock(blockio_dev_t *dev) {
 	uint32_t id = dev->bi - dev->b->blockio_infos;
 	int i;
 	assert(dev->bi && id < dev->b->no_macroblocks);
+
+	if (dev->bi->no_indices)
+		blockio_dev_change_macroblock_status(dev,
+				dev->bi_number, FREE, HAS_DATA);
 
 	DEBUG("write block %u (seqno=%llu)", id, dev->bi->seqno);
 

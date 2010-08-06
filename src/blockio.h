@@ -68,6 +68,9 @@ typedef struct blockio_dev_s {
 	uint16_t *macroblock_ref;
 
 	uint8_t *tmp_macroblock;
+
+	/* stats */
+	uint32_t writes;
 } blockio_dev_t;
 
 struct blockio_s {

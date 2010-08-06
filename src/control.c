@@ -56,6 +56,10 @@ int control_write_string(int s, const char *string, ssize_t len) {
 	return 0;
 }
 
+int control_write_silent_success(int s) {
+	return control_write_string(s, "OK\n.\n", 5);
+}
+
 int control_write_status(int s, int err) {
 	if (!err) {
 		if (control_write_string(s, "OK\n", 3)) return -1;
@@ -121,6 +125,10 @@ typedef struct control_command {
 
 static int control_mountpoint(int s, control_thread_priv_t *priv, char *argv[]) {
 	return control_write_complete(s, 0, "%s", priv->mountpoint);
+}
+
+static int control_version(int s, control_thread_priv_t *priv, char *argv[]) {
+	return control_write_complete(s, 0, "%s", VERSION);
 }
 
 static int control_exit(int s, control_thread_priv_t *priv, char *argv[]) {
@@ -245,8 +253,8 @@ static int control_open_create_common(int s, control_thread_priv_t *priv, char *
 
 	hashtbl_unlock_element_byptr(entry);
 
-	return control_write_complete(s, 0, "partition \"%s\" %s",
-			argv[0], add?"created":"opened");
+	return control_write_silent_success(s);
+	//control_write_complete(s, 0, "partition \"%s\" %s", argv[0], add?"created":"opened");
 }
 
 static int control_open(int s, control_thread_priv_t *priv, char *argv[]) {
@@ -255,6 +263,21 @@ static int control_open(int s, control_thread_priv_t *priv, char *argv[]) {
 
 static int control_create(int s, control_thread_priv_t *priv, char *argv[]) {
 	return control_open_create_common(s, priv, argv, 1);
+}
+
+static int control_stats(int s, control_thread_priv_t *priv, char *argv[]) {
+	fuse_io_entry_t *entry = hashtbl_find_element_bykey(priv->h, argv[0]);
+	if (!entry) return control_write_complete(s, 1,
+			"partition \"%s\" not found", argv[0]);
+
+
+	if (control_write_status(s, 0)) return -1;
+
+	if (control_write_line(s, "writes=%d\n", entry->d.writes)) return -1;
+
+	hashtbl_unlock_element_byptr(entry);
+
+	return control_write_terminate(s);
 }
 
 static int control_close(int s, control_thread_priv_t *priv, char *argv[]) {
@@ -273,7 +296,8 @@ static int control_close(int s, control_thread_priv_t *priv, char *argv[]) {
 
 	hashtbl_delete_element_byptr(priv->h, entry);
 
-	return control_write_complete(s, 0, "partition \"%s\" closed", argv[0]);
+	//return control_write_complete(s, 0, "partition \"%s\" closed", argv[0]);
+	return control_write_silent_success(s);
 }
 
 static int control_resize(int s, control_thread_priv_t *priv, char *argv[]) {
@@ -362,11 +386,17 @@ static int control_resize(int s, control_thread_priv_t *priv, char *argv[]) {
 
 	hashtbl_unlock_element_byptr(entry);
 	
-	return control_write_complete(s, 0, "succesfull resized");
+	return control_write_silent_success(s);
+	//return control_write_complete(s, 0, "succesfull resized");
 }
 
 static control_command_t control_commands[] = {
 	{
+		.head.key = "version",
+		.command = control_version,
+		.argc = 0,
+		.usage = ""
+	}, {
 		.head.key = "mountpoint",
 		.command = control_mountpoint,
 		.argc = 0,
@@ -387,12 +417,17 @@ static control_command_t control_commands[] = {
 		.argc = 3,
 		.usage = " NAME CIPHER_SPEC KEY"
 	}, {
+		.head.key = "stats",
+		.command = control_stats,
+		.argc = 1,
+		.usage = " NAME"
+	}, {
 		.head.key = "create-internal",
 		.command = control_create,
 		.argc = 3,
 		.usage = " NAME CIPHER_SPEC KEY"
 	}, {
-		.head.key = "help",
+		.head.key = "help-internal",
 		.command = control_help,
 		.argc = 0,
 		.usage = ""
@@ -433,7 +468,7 @@ int control_call(int s, control_thread_priv_t *priv, char *command) {
 
 	} while (*argv[argc] != '\0');
 
-	if (argc == 1 && *argv[0] == '\0') return control_write_string(s, "OK\n.\n", 5);
+	if (argc == 1 && *argv[0] == '\0') return control_write_silent_success(s);
 
 	if (!(cmnd = hashtbl_find_element_bykey(&priv->c, argv[0])))
 		return control_write_complete(s, 1, "unknown command \"%s\"", argv[0]);

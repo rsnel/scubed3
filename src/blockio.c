@@ -546,7 +546,8 @@ void blockio_dev_write_current_macroblock(blockio_dev_t *dev) {
 		dllist_append(&dev->used_blocks, &dev->bi->elt);
 	}
 
-	DEBUG("write block %u (seqno=%llu)", id, dev->bi->seqno);
+	//DEBUG("write block %u (seqno=%llu)", id, dev->bi->seqno);
+	dev->writes++;
 
 	/* encrypt datablocks (also the unused ones) */
 	for (i = 1; i <= dev->mmpm; i++)

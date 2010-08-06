@@ -44,48 +44,129 @@
 #define DEFAULT_CIPHER_STRING "CBC_LARGE(AES256)"
 #define KEY_LENGTH	32
 
-int do_command(int s, char *format, ...) {
+#define MAX_RESULT_LINES 128
+
+typedef struct result_s {
 	char buf[BUF_SIZE];
-	int ret = 0, buf_len = 0, start = 0, i, done = 0;
-	int status_known = 0;
+	char *argv[MAX_RESULT_LINES];
+	int argc;
+	int status;
+} result_t;
+
+result_t result;
+
+int vvar_system(const char *format, va_list ap) {
+	char *string;
+	ssize_t len;
+	int ret;
+
+	if ((len = vasprintf(&string, format, ap)) == -1)
+		FATAL("vasprintf: %s", strerror(errno));
+
+	ret = system(string);
+
+	wipememory(string, len);
+
+	free(string);
+	return ret;
+	
+}
+
+int var_system(const char *format, ...) {
+	va_list ap;
+	int ret;
+
+	va_start(ap, format);
+	ret = vvar_system(format, ap);
+	va_end(ap);
+
+	return ret;
+}
+
+int vwrite_line(int s, const char *format, va_list ap) {
+	char *string;
 	ssize_t sent = 0, len, n;
+	if ((len = vasprintf(&string, format, ap)) == -1) 
+		FATAL("vasprintf: %s", strerror(errno));
 
-	len = strlen(format);
+	//VERBOSE("send: %s", string);
 
-	format[len] = '\n';
-	len++;
+	string[len++] = '\n';
 
 	do {
-		n = send(s, format + sent, len - sent, 0);
-		if (n == 0) FATAL("send: connection reset by peer");
-		if (n < 0) FATAL("send: %s", strerror(errno));
+		n = send(s, string + sent, len - sent, 0);
+		if (n == 0) {
+			wipememory(string, len);
+			FATAL("send: connection reset by peer");
+		}
+		if (n < 0) {
+			wipememory(string, len);
+			FATAL("send: %s", strerror(errno));
+		}
 		sent += n;
 	} while (sent < len);
 
-	len--;
-	format[len] = '\0';
+	wipememory(string, len);
 
+	free(string);
+	return 0;
+	
+}
+
+#if 0
+int write_line(int s, const char *format, ...) {
+	int ret;
+	va_list ap;
+
+	va_start(ap, format);
+	ret = vwrite_line(s, format, ap);
+	va_end(ap);
+
+	return ret;
+}
+#endif
+
+int do_server_command(int s, int echo, char *format, ...) {
+	int ret = 0, buf_len = 0, start = 0, i, done = 0;
+	int status_known = 0;
+	ssize_t  n;
+	va_list ap;
+
+	va_start(ap, format);
+	ret = vwrite_line(s, format, ap);
+	va_end(ap);
+
+	if (ret) return ret;
+
+	result.status = 0;
+	result.argc = 0;
 	do {
 		if (buf_len == BUF_SIZE) FATAL("response too long");
-		n = recv(s, buf + buf_len, BUF_SIZE - buf_len, 0);
+		n = recv(s, result.buf + buf_len, BUF_SIZE - buf_len, 0);
 		if (n == 0) FATAL("recv: connection reset by peer");
 		if (n < 0) FATAL("recv: %s", strerror(errno));
 
 		for (i = buf_len; i < buf_len + n; i++) {
-			if (buf[i] == '\n') {
-				buf[i] = '\0';
-				if (*(buf + start) == '.' && i - start == 1) {
+			if (result.buf[i] == '\n') {
+				result.buf[i] = '\0';
+				if (*(result.buf + start) == '.' &&
+						i - start == 1) {
 					done = 1;
 					if (!status_known) WARNING("message terminates without known status");
 					break;
 				}
 				if (status_known) {
-					printf("%s\n", buf + start);
-				} else if (!strcmp(buf + start, "ERR") ||
-						!strcmp(buf + start, "OK")) {
+					if (echo) printf("%s\n",
+							result.buf + start);
+					if (result.argc == MAX_RESULT_LINES) FATAL("too many lines in response");
+					result.argv[result.argc++] = result.buf + start;
+				} else if (!strcmp(result.buf + start, "ERR") ||
+						!strcmp(result.buf + start, "OK")) {
 					status_known = 1;
-					if (!strcmp(buf + start, "ERR"))
+					if (!strcmp(result.buf + start, "ERR")) {
 						ret = -1;
+						result.status = -1;
+					}
 				} else FATAL("malformed response, "
 						"expected OK or ERR");
 
@@ -123,11 +204,102 @@ int my_getpass(char **lineptr, size_t *n, FILE *stream) {
 
 #define MAX_ARGC 10
 
-int main(int argc, char **argv) {
+typedef struct ctl_priv_s {
 	int s;
+	hashtbl_t c;
+} ctl_priv_t;
+
+static int ctl_open(ctl_priv_t *priv, char *argv[]) {
+	return 0;
+}
+
+static int ctl_create(ctl_priv_t *priv, char *argv[]) {
+	return 0;
+}
+
+static int ctl_close(ctl_priv_t *priv, char *argv[]) {
+	return 0;
+}
+
+static int ctl_resize(ctl_priv_t *priv, char *argv[]) {
+	return 0;
+}
+
+static int ctl_mount(ctl_priv_t *priv, char *argv[]) {
+	return 0;
+}
+
+static int ctl_umount(ctl_priv_t *priv, char *argv[]) {
+	return 0;
+}
+
+static int ctl_exit(ctl_priv_t *priv, char *argv[]) {
+	return 0;
+}
+
+typedef struct ctl_command_s {
+	hashtbl_elt_t head;
+	int (*command)(ctl_priv_t*, char**);
+	int argc;
+	char *usage;
+} ctl_command_t;
+
+static ctl_command_t ctl_commands[] = {
+	{
+		.head.key = "create",
+		.command = ctl_create,
+		.argc = 1,
+		.usage = " NAME"
+	}, {
+		.head.key = "open",
+		.command = ctl_open,
+		.argc = 1,
+		.usage = " NAME"
+	}, {
+		.head.key = "close",
+		.command = ctl_close,
+		.argc = 1,
+		.usage = " NAME"
+	}, {
+		.head.key = "resize",
+		.command = ctl_resize,
+		.argc = 2,
+		.usage = " NAME"
+	}, {
+		.head.key = "mount",
+		.command = ctl_mount,
+		.argc = 2,
+		.usage = " NAME MOUNTPOINT"
+	}, {
+		.head.key = "umount",
+		.command = ctl_umount,
+		.argc = 1,
+		.usage = " NAME"
+	}, {
+		.head.key = "exit",
+		.command = ctl_exit,
+		.argc = 0,
+		.usage = ""
+	}
+};
+
+int control_call(ctl_priv_t *priv, char *command) {
+	//int argc = 0;
+	//char *argv[MAX_ARGC+1];
+	//ctl_command_t *cmnd;
+
+	VERBOSE("got command ->%s<-", command);
+	return 0;
+}
+
+#define NO_COMMANDS (sizeof(ctl_commands)/sizeof(ctl_commands[0]))
+
+int main(int argc, char **argv) {
+	ctl_priv_t priv;
 	socklen_t len;
 	int i;
 	char *line = NULL;
+	char *mountpoint;
 	struct sockaddr_un remote;
 	assert(PASSPHRASE_HASH == GCRY_MD_SHA256);
 	assert(!strcmp("CBC_LARGE(AES256)", DEFAULT_CIPHER_STRING));
@@ -141,20 +313,35 @@ int main(int argc, char **argv) {
 
 	gcry_global_init();
 
-	if ((s = socket(AF_UNIX, SOCK_STREAM, 0)) == -1)
+	/* load all command descriptors in hash table */
+	hashtbl_init_default(&priv.c, -1, 4, 0, 1, NULL);
+	for (i = 0; i < NO_COMMANDS; i++) {
+		if (hashtbl_add_element(&priv.c, &ctl_commands[i]) == NULL)
+			FATAL("duplicate command");
+	}
+
+	if ((priv.s = socket(AF_UNIX, SOCK_STREAM, 0)) == -1)
 		FATAL("socket: %s", strerror(errno));
 
 	remote.sun_family = AF_UNIX;
 	strcpy(remote.sun_path, CONTROL_SOCKET);
 	len = strlen(remote.sun_path) + sizeof(remote.sun_family);
-	if (connect(s, (struct sockaddr*)&remote, len) == -1)
+	if (connect(priv.s, (struct sockaddr*)&remote, len) == -1)
 		FATAL("connect: %s", strerror(errno));
 
-	printf("scubed3ctl-" VERSION ", connected to scubed3\n");
+	do_server_command(priv.s, 0, "version");
+	printf("scubed3ctl-" VERSION ", connected to scubed3-%s\n", result.argv[0]);
+
+	do_server_command(priv.s, 0, "mountpoint");
+	if (result.argc != 1 || result.status == -1)
+		FATAL("unexpected reply from server");
+	
+	mountpoint = strdup(result.argv[0]);
+	if (!mountpoint) FATAL("out of memory");
 
 	do {
 		if (line) free(line);
-		line = readline("> ");
+		line = readline("s3> ");
 
 		if (!line) {
 			printf("\nEOF\n");
@@ -165,11 +352,9 @@ int main(int argc, char **argv) {
 				!strcmp(line, "q") || !strcmp(line, "x") ||
 				!strcmp(line, "bye") || !strcmp(line, "kthxbye") ||
 				!strcmp(line, "thanks")) {
-			char bla[5] = { 'e', 'x', 'i', 't', '\0' };
-			do_command(s, bla);
+			do_server_command(priv.s, 1, "exit");
 			break;
 		} else if (!strcmp(line, "help")) {
-			char bla[5] = { 'h', 'e', 'l', 'p', '\0' };
 			printf("helper functions in scubed3ctl:\n\n");
 			printf("exit (and common synonyms)\n");
 			printf("create NAME (asks twice for passphrase, expects 0 allocated blocks)\n");
@@ -177,7 +362,7 @@ int main(int argc, char **argv) {
 			printf("resize NAME BLOCKS\n");
 			printf("\n");
 			printf("internal commands of scubed3:\n\n");
-			do_command(s, bla);
+			do_server_command(priv.s, 1, "help-internal");
 		} else if (!strncmp(line, "create ", 5) || !strncmp(line, "open ", 5) || !strcmp(line, "create") || !strcmp(line,"open")) {
 			/* tokenize, and build custom command */
 			int argc = 0;
@@ -245,13 +430,84 @@ int main(int argc, char **argv) {
 			wipememory(pw, pw_len);
 			free(pw);
 			
-			do_command(s, conv);
+			do_server_command(priv.s, 1, "%s", conv);
 			wipememory(conv, sizeof(conv));
+
+		} else if (!strncmp(line, "umount ", 7) || !strcmp(line, "umount")) {
+			/* tokenize, and build custom command */
+			int argc = 0;
+			char *argv[MAX_ARGC+1];
+
+			argv[argc] = line; 
+			
+			do {
+				while (*argv[argc] == ' ') argv[argc]++;
+
+				argc++;
+
+				if (argc > MAX_ARGC) {
+					printf("too many arguments\n");
+					continue;
+				}
+
+                		argv[argc] = argv[argc-1];
+
+                		while (*argv[argc] != '\0' && *argv[argc] != ' ') argv[argc]++;
+
+                		if (*argv[argc] == ' ') *argv[argc]++ = '\0';
+
+			} while (*argv[argc] != '\0');
+
+			if (argc != 2) {
+				printf("usage: %s MOUNTPOINT\n", argv[0]);
+				continue;
+			}
+
+			var_system("umount %s", argv[1]);
+
+		} else if (!strncmp(line, "mount ", 6) || !strcmp(line, "mount")) {
+			/* tokenize, and build custom command */
+			int argc = 0;
+			char *argv[MAX_ARGC+1];
+
+			argv[argc] = line; 
+			
+			do {
+				while (*argv[argc] == ' ') argv[argc]++;
+
+				argc++;
+
+				if (argc > MAX_ARGC) {
+					printf("too many arguments\n");
+					continue;
+				}
+
+                		argv[argc] = argv[argc-1];
+
+                		while (*argv[argc] != '\0' && *argv[argc] != ' ') argv[argc]++;
+
+                		if (*argv[argc] == ' ') *argv[argc]++ = '\0';
+
+			} while (*argv[argc] != '\0');
+
+			if (argc != 3) {
+				printf("usage: %s NAME MOUNTPOINT\n", argv[0]);
+				continue;
+			}
+
+			//VERBOSE("we should mount -o loop %s/%s %s", mountpoint, argv[1], argv[2]);
+			do_server_command(priv.s, 0, "stats %s", argv[1]);
+			if (result.status) {
+				printf("partition %s is not open\n", argv[1]);
+			} else {
+				var_system("mount -o loop %s/%s %s", mountpoint, argv[1], argv[2]);
+			}
+
 
 		} else if (!strncmp(line, "resize ", 7) || !strcmp(line, "resize")) {
 			printf("unimplemented, use low-level command resize-force\n");
 		} else {
-			do_command(s, line);
+			do_server_command(priv.s, 1, "%s", line);
 			wipememory(line, strlen(line));
 		}
 
@@ -259,7 +515,7 @@ int main(int argc, char **argv) {
 
 	free(line);
 
-	close(s);
+	close(priv.s);
 
 	exit(0);
 }

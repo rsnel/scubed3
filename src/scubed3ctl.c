@@ -177,7 +177,7 @@ int do_server_command(int s, int echo, char *format, ...) {
 		buf_len += n;
 	} while (!done);
 
-	return ret;
+	return 0;
 }
 
 int my_getpass(char **lineptr, size_t *n, FILE *stream) {
@@ -209,19 +209,62 @@ typedef struct ctl_priv_s {
 	hashtbl_t c;
 } ctl_priv_t;
 
+static int ctl_open_create_common(ctl_priv_t *priv, char *argv[], int create) {
+	uint8_t hash[gcry_md_get_algo_dlen(PASSPHRASE_HASH)];
+	char hash_text[2*sizeof(hash)];
+	char *ptr = hash_text;
+	char *pw = NULL, *pw2 = NULL;
+	size_t pw_len, pw2_len;
+	int i;
+
+	printf("Enter passphrase: ");
+	if (my_getpass(&pw, &pw_len, stdin) == -1) {
+		ERROR("unable to get password");
+		return -1;
+	}
+	if (create) {
+		printf("Verify passphrase: ");
+		if (my_getpass(&pw2, &pw2_len, stdin) == -1) {
+			wipememory(pw, pw_len);
+			free(pw);
+			ERROR("unable to get password for verification");
+			return -1;
+		}
+		if (pw_len != pw2_len || strcmp(pw, pw2)) {
+			wipememory(pw, pw_len);
+			wipememory(pw2, pw2_len);
+			free(pw);
+			free(pw2);
+			printf("passphrases do not match\n");
+			return 0;
+		}
+				
+		wipememory(pw2, pw2_len);
+		free(pw2);
+	}
+	
+	gcry_md_hash_buffer(PASSPHRASE_HASH, hash, pw, pw_len - 1);
+	for (i = 0; i < sizeof(hash); i++)
+		ptr += snprintf(ptr, 2, "%02x", hash[i]);
+
+	wipememory(pw, pw_len);
+	free(pw);
+			
+	VERBOSE("size=%d", sizeof(hash_text));
+	return do_server_command(priv->s, 1, "open-internal %s %s %*.s",
+			argv[0], DEFAULT_CIPHER_STRING, hash_text, sizeof(hash_text ));
+}
+
 static int ctl_open(ctl_priv_t *priv, char *argv[]) {
-	return 0;
+	return ctl_open_create_common(priv, argv, 0);
 }
 
 static int ctl_create(ctl_priv_t *priv, char *argv[]) {
-	return 0;
-}
-
-static int ctl_close(ctl_priv_t *priv, char *argv[]) {
-	return 0;
+	return ctl_open_create_common(priv, argv, 1);
 }
 
 static int ctl_resize(ctl_priv_t *priv, char *argv[]) {
+	printf("unimplemented, use low-level command resize-force\n");
 	return 0;
 }
 
@@ -230,10 +273,6 @@ static int ctl_mount(ctl_priv_t *priv, char *argv[]) {
 }
 
 static int ctl_umount(ctl_priv_t *priv, char *argv[]) {
-	return 0;
-}
-
-static int ctl_exit(ctl_priv_t *priv, char *argv[]) {
 	return 0;
 }
 
@@ -256,15 +295,10 @@ static ctl_command_t ctl_commands[] = {
 		.argc = 1,
 		.usage = " NAME"
 	}, {
-		.head.key = "close",
-		.command = ctl_close,
-		.argc = 1,
-		.usage = " NAME"
-	}, {
 		.head.key = "resize",
 		.command = ctl_resize,
 		.argc = 2,
-		.usage = " NAME"
+		.usage = " NAME MACROBLOCKS"
 	}, {
 		.head.key = "mount",
 		.command = ctl_mount,
@@ -275,21 +309,66 @@ static ctl_command_t ctl_commands[] = {
 		.command = ctl_umount,
 		.argc = 1,
 		.usage = " NAME"
-	}, {
-		.head.key = "exit",
-		.command = ctl_exit,
-		.argc = 0,
-		.usage = ""
 	}
 };
 
-int control_call(ctl_priv_t *priv, char *command) {
-	//int argc = 0;
-	//char *argv[MAX_ARGC+1];
-	//ctl_command_t *cmnd;
+int do_local_command(ctl_priv_t *priv, ctl_command_t *cmnd, char *args) {
+	int argc = 0;
+	char *argv[MAX_ARGC+1];
+	
+	//VERBOSE("executing internal command ->%s<- args=%s", cmnd->head.key, args);
+	argv[argc] = args;
 
-	VERBOSE("got command ->%s<-", command);
-	return 0;
+	while (argv[argc] != '\0') {
+		while (*argv[argc] == ' ') argv[argc]++;
+
+		argc++;
+
+		if (argc > MAX_ARGC) {
+			printf("too many arguments, discarding command\n");
+			return 0;
+		}
+
+		argv[argc] = argv[argc-1];
+
+		while (*argv[argc] != '\0' && *argv[argc] != ' ') argv[argc]++;
+
+		if (argv[argc] == argv[argc-1]) {
+			argc--; // last arg empty
+			break;
+		}
+
+		if (*argv[argc] == ' ') *argv[argc]++ = '\0';
+	}
+	
+	if (argc != cmnd->argc) {
+		printf("usage: %s%s\n", cmnd->head.key, cmnd->usage);
+		return 0;
+	}
+
+	return (*cmnd->command)(priv, argv);
+}
+
+int ctl_call(ctl_priv_t *priv, char *command) {
+	char *tmp;
+	ctl_command_t *cmnd;
+
+	/* strip leading spaces */
+	while (*command == ' ' ) command++;
+	
+	/* check if the command is local */
+	tmp = strchr(command, ' ');
+	if (tmp) *tmp = '\0'; // temprary terminator
+
+	if ((cmnd = hashtbl_find_element_bykey(&priv->c, command))) {
+		if (tmp) *tmp = ' '; // replace space
+		return do_local_command(priv, cmnd, tmp);
+	}
+
+	if (tmp) *tmp = ' '; // replace space
+
+	/* it is a server command */
+	return do_server_command(priv->s, 1, command);
 }
 
 #define NO_COMMANDS (sizeof(ctl_commands)/sizeof(ctl_commands[0]))
@@ -298,6 +377,7 @@ int main(int argc, char **argv) {
 	ctl_priv_t priv;
 	socklen_t len;
 	int i;
+	int ret = -1;
 	char *line = NULL;
 	char *mountpoint;
 	struct sockaddr_un remote;
@@ -348,13 +428,17 @@ int main(int argc, char **argv) {
 			exit(1);
 		}
 
+		/* exit is a special case */
 		if (!strcmp(line, "exit") || !strcmp(line, "quit") ||
 				!strcmp(line, "q") || !strcmp(line, "x") ||
 				!strcmp(line, "bye") || !strcmp(line, "kthxbye") ||
 				!strcmp(line, "thanks")) {
-			do_server_command(priv.s, 1, "exit");
+			ret = do_server_command(priv.s, 1, "exit");
 			break;
-		} else if (!strcmp(line, "help")) {
+		} 
+		
+#if 0
+		else if (!strcmp(line, "help")) {
 			printf("helper functions in scubed3ctl:\n\n");
 			printf("exit (and common synonyms)\n");
 			printf("create NAME (asks twice for passphrase, expects 0 allocated blocks)\n");
@@ -511,7 +595,8 @@ int main(int argc, char **argv) {
 			wipememory(line, strlen(line));
 		}
 
-	} while (1);
+#endif
+	} while (!ctl_call(&priv, line));
 
 	free(line);
 

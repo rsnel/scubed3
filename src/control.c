@@ -464,7 +464,7 @@ int control_call(int s, control_thread_priv_t *priv, char *command) {
 
 		while (*argv[argc] != '\0' && *argv[argc] != ' ') argv[argc]++;
 
-		if (*argv[argc] == ' ') *argv[argc]++ = '\0';
+		while (*argv[argc] == ' ') *argv[argc]++ = '\0';
 
 	} while (*argv[argc] != '\0');
 

@@ -250,9 +250,8 @@ static int ctl_open_create_common(ctl_priv_t *priv, char *argv[], int create) {
 	wipememory(pw, pw_len);
 	free(pw);
 			
-	VERBOSE("size=%d", sizeof(hash_text));
 	return do_server_command(priv->s, 1, "open-internal %s %s %*.s",
-			argv[0], DEFAULT_CIPHER_STRING, hash_text, sizeof(hash_text ));
+			argv[0], DEFAULT_CIPHER_STRING, sizeof(hash_text), hash_text);
 }
 
 static int ctl_open(ctl_priv_t *priv, char *argv[]) {

@@ -207,6 +207,7 @@ int my_getpass(char **lineptr, size_t *n, FILE *stream) {
 typedef struct ctl_priv_s {
 	int s;
 	hashtbl_t c;
+	char *mountpoint;
 } ctl_priv_t;
 
 static int ctl_open_create_common(ctl_priv_t *priv, char *argv[], int create) {
@@ -215,7 +216,7 @@ static int ctl_open_create_common(ctl_priv_t *priv, char *argv[], int create) {
 	char *ptr = hash_text;
 	char *pw = NULL, *pw2 = NULL;
 	size_t pw_len, pw2_len;
-	int i;
+	int i, ret;
 
 	printf("Enter passphrase: ");
 	if (my_getpass(&pw, &pw_len, stdin) == -1) {
@@ -244,14 +245,23 @@ static int ctl_open_create_common(ctl_priv_t *priv, char *argv[], int create) {
 	}
 	
 	gcry_md_hash_buffer(PASSPHRASE_HASH, hash, pw, pw_len - 1);
-	for (i = 0; i < sizeof(hash); i++)
-		ptr += snprintf(ptr, 2, "%02x", hash[i]);
 
 	wipememory(pw, pw_len);
 	free(pw);
+
+	for (i = 0; i < sizeof(hash); i++)
+		ptr += snprintf(ptr, 3, "%02x", hash[i]);
 			
-	return do_server_command(priv->s, 1, "open-internal %s %s %*.s",
-			argv[0], DEFAULT_CIPHER_STRING, sizeof(hash_text), hash_text);
+	wipememory(hash, sizeof(hash));
+
+	ret = do_server_command(priv->s, 1, "%s-internal %s %s %.*s",
+			create?"create":"open", argv[0],
+			DEFAULT_CIPHER_STRING, sizeof(hash_text),
+			hash_text);
+
+	wipememory(hash_text, sizeof(hash_text));
+
+	return ret;
 }
 
 static int ctl_open(ctl_priv_t *priv, char *argv[]) {
@@ -268,10 +278,20 @@ static int ctl_resize(ctl_priv_t *priv, char *argv[]) {
 }
 
 static int ctl_mount(ctl_priv_t *priv, char *argv[]) {
+	do_server_command(priv->s, 0, "stats %s", argv[0]);
+	if (result.status) {
+		// we try to open the partition
+		if (ctl_open(priv, argv)) return -1;
+		if (result.status) return 0;
+	} 
+
+	var_system("mount -o loop %s/%s %s", priv->mountpoint, argv[0], argv[1]);
+
 	return 0;
 }
 
 static int ctl_umount(ctl_priv_t *priv, char *argv[]) {
+	var_system("umount %s", argv[0]);
 	return 0;
 }
 
@@ -315,7 +335,6 @@ int do_local_command(ctl_priv_t *priv, ctl_command_t *cmnd, char *args) {
 	int argc = 0;
 	char *argv[MAX_ARGC+1];
 	
-	//VERBOSE("executing internal command ->%s<- args=%s", cmnd->head.key, args);
 	argv[argc] = args;
 
 	while (argv[argc] != '\0') {
@@ -356,18 +375,13 @@ int ctl_call(ctl_priv_t *priv, char *command) {
 	while (*command == ' ' ) command++;
 	
 	/* check if the command is local */
-	tmp = strchr(command, ' ');
-	if (tmp) *tmp = '\0'; // temprary terminator
-
-	if ((cmnd = hashtbl_find_element_bykey(&priv->c, command))) {
-		if (tmp) *tmp = ' '; // replace space
-		return do_local_command(priv, cmnd, tmp);
-	}
-
+	if ((tmp = strchr(command, ' '))) *tmp = '\0'; // temprary terminator
+	cmnd = hashtbl_find_element_bykey(&priv->c, command);
 	if (tmp) *tmp = ' '; // replace space
 
-	/* it is a server command */
-	return do_server_command(priv->s, 1, command);
+	/* execute */
+	if (cmnd) return do_local_command(priv, cmnd, tmp);
+	else return do_server_command(priv->s, 1, "%s", command);
 }
 
 #define NO_COMMANDS (sizeof(ctl_commands)/sizeof(ctl_commands[0]))
@@ -378,7 +392,6 @@ int main(int argc, char **argv) {
 	int i;
 	int ret = -1;
 	char *line = NULL;
-	char *mountpoint;
 	struct sockaddr_un remote;
 	assert(PASSPHRASE_HASH == GCRY_MD_SHA256);
 	assert(!strcmp("CBC_LARGE(AES256)", DEFAULT_CIPHER_STRING));
@@ -415,8 +428,8 @@ int main(int argc, char **argv) {
 	if (result.argc != 1 || result.status == -1)
 		FATAL("unexpected reply from server");
 	
-	mountpoint = strdup(result.argv[0]);
-	if (!mountpoint) FATAL("out of memory");
+	priv.mountpoint = strdup(result.argv[0]);
+	if (!priv.mountpoint) FATAL("out of memory");
 
 	do {
 		if (line) free(line);
@@ -436,168 +449,11 @@ int main(int argc, char **argv) {
 			break;
 		} 
 		
-#if 0
-		else if (!strcmp(line, "help")) {
-			printf("helper functions in scubed3ctl:\n\n");
-			printf("exit (and common synonyms)\n");
-			printf("create NAME (asks twice for passphrase, expects 0 allocated blocks)\n");
-			printf("open NAME (asks once for passphrase, expects >0 allocated blocks)\n");
-			printf("resize NAME BLOCKS\n");
-			printf("\n");
-			printf("internal commands of scubed3:\n\n");
-			do_server_command(priv.s, 1, "help-internal");
-		} else if (!strncmp(line, "create ", 5) || !strncmp(line, "open ", 5) || !strcmp(line, "create") || !strcmp(line,"open")) {
-			/* tokenize, and build custom command */
-			int argc = 0;
-			char *argv[MAX_ARGC+1];
-			char conv[CONV_SIZE], *convp = conv;
-			unsigned char key[KEY_LENGTH];
-			char *pw = NULL, *pw2 = NULL;
-			size_t pw_len, pw2_len;
-
-			argv[argc] = line; 
-			
-			do {
-				while (*argv[argc] == ' ') argv[argc]++;
-
-				argc++;
-
-				if (argc > MAX_ARGC) {
-					printf("too many arguments\n");
-					continue;
-				}
-
-                		argv[argc] = argv[argc-1];
-
-                		while (*argv[argc] != '\0' && *argv[argc] != ' ') argv[argc]++;
-
-                		if (*argv[argc] == ' ') *argv[argc]++ = '\0';
-
-			} while (*argv[argc] != '\0');
-
-			if (argc != 2) {
-				printf("usage: %s NAME\n", argv[0]);
-				continue;
-			}
-
-			convp += snprintf(convp, CONV_SIZE, "%s-internal %s " DEFAULT_CIPHER_STRING " ", argv[0], argv[1]);
-			if (convp > conv + CONV_SIZE - 2*KEY_LENGTH - 1) {
-				printf("large buffer not large enough\n");
-				continue;
-			}
-
-			printf("Enter passphrase: ");
-			if (my_getpass(&pw, &pw_len, stdin) == -1)
-				FATAL("unable to get password");
-			if (!strcmp(argv[0], "create")) {
-				printf("Verify passphrase: ");
-				if (my_getpass(&pw2, &pw2_len, stdin) == -1) {
-					wipememory(pw, pw_len);
-					free(pw);
-					FATAL("unable to get password for verification");
-				}
-				if (pw_len != pw2_len || strcmp(pw, pw2)) {
-					wipememory(pw, pw_len);
-					wipememory(pw2, pw2_len);
-					free(pw);
-					free(pw2);
-					printf("passphrases do not match\n");
-					continue;
-				}
-				wipememory(pw2, pw2_len);
-				free(pw2);
-			}
-			
-			gcry_md_hash_buffer(PASSPHRASE_HASH, key, pw, pw_len - 1);
-			for (i = 0; i < 32; i++) convp += sprintf(convp, "%02x", key[i]);
-			wipememory(pw, pw_len);
-			free(pw);
-			
-			do_server_command(priv.s, 1, "%s", conv);
-			wipememory(conv, sizeof(conv));
-
-		} else if (!strncmp(line, "umount ", 7) || !strcmp(line, "umount")) {
-			/* tokenize, and build custom command */
-			int argc = 0;
-			char *argv[MAX_ARGC+1];
-
-			argv[argc] = line; 
-			
-			do {
-				while (*argv[argc] == ' ') argv[argc]++;
-
-				argc++;
-
-				if (argc > MAX_ARGC) {
-					printf("too many arguments\n");
-					continue;
-				}
-
-                		argv[argc] = argv[argc-1];
-
-                		while (*argv[argc] != '\0' && *argv[argc] != ' ') argv[argc]++;
-
-                		if (*argv[argc] == ' ') *argv[argc]++ = '\0';
-
-			} while (*argv[argc] != '\0');
-
-			if (argc != 2) {
-				printf("usage: %s MOUNTPOINT\n", argv[0]);
-				continue;
-			}
-
-			var_system("umount %s", argv[1]);
-
-		} else if (!strncmp(line, "mount ", 6) || !strcmp(line, "mount")) {
-			/* tokenize, and build custom command */
-			int argc = 0;
-			char *argv[MAX_ARGC+1];
-
-			argv[argc] = line; 
-			
-			do {
-				while (*argv[argc] == ' ') argv[argc]++;
-
-				argc++;
-
-				if (argc > MAX_ARGC) {
-					printf("too many arguments\n");
-					continue;
-				}
-
-                		argv[argc] = argv[argc-1];
-
-                		while (*argv[argc] != '\0' && *argv[argc] != ' ') argv[argc]++;
-
-                		if (*argv[argc] == ' ') *argv[argc]++ = '\0';
-
-			} while (*argv[argc] != '\0');
-
-			if (argc != 3) {
-				printf("usage: %s NAME MOUNTPOINT\n", argv[0]);
-				continue;
-			}
-
-			//VERBOSE("we should mount -o loop %s/%s %s", mountpoint, argv[1], argv[2]);
-			do_server_command(priv.s, 0, "stats %s", argv[1]);
-			if (result.status) {
-				printf("partition %s is not open\n", argv[1]);
-			} else {
-				var_system("mount -o loop %s/%s %s", mountpoint, argv[1], argv[2]);
-			}
-
-
-		} else if (!strncmp(line, "resize ", 7) || !strcmp(line, "resize")) {
-			printf("unimplemented, use low-level command resize-force\n");
-		} else {
-			do_server_command(priv.s, 1, "%s", line);
-			wipememory(line, strlen(line));
-		}
-
-#endif
 	} while (!ctl_call(&priv, line));
 
 	free(line);
+
+	free(priv.mountpoint);
 
 	close(priv.s);
 

@@ -187,9 +187,27 @@ static int control_status(int s, control_thread_priv_t *priv, char *argv[]) {
 	return control_write_terminate(s);
 }
 
+static int check_name(const char *ptr) {
+	while (*ptr != '\0') {
+		if (!(*ptr >= 'a' && *ptr <= 'z') &&
+				!(*ptr >= 'A' && *ptr <= 'Z') &&
+				!(*ptr >= '0' && *ptr <= '9') &&
+				!(*ptr == '_'))
+			return -1;
+		ptr++;
+	}
+
+	return 0;
+}
+
 static int control_open_create_common(int s, control_thread_priv_t *priv, char *argv[], int add) {
 	fuse_io_entry_t *entry;
 	char *allocname;
+
+	if (check_name(argv[0])) return control_write_complete(s, 1,
+				"illegal name specified for partition, "
+				"it may only contain letters, digits and "
+				"the underscore");
 
 	allocname = estrdup(argv[0]);
 	entry = hashtbl_allocate_and_add_element(priv->h,
@@ -198,10 +216,12 @@ static int control_open_create_common(int s, control_thread_priv_t *priv, char *
 	if (!entry) {
 		free(allocname);
 		return control_write_complete(s, 1,
-				"unable to %s partition \"%s\", duplicate name?", argv[0], add?"create":"open");
+				"unable to %s partition \"%s\", duplicate "
+				"name?", add?"create":"open", argv[0]);
 	}
 
 	entry->to_be_deleted = 0;
+	assert(!entry->close_on_release);
 	entry->inuse = 0;
 
 	ecch_try {
@@ -237,7 +257,7 @@ static int control_open_create_common(int s, control_thread_priv_t *priv, char *
 		if (add && entry->d.no_macroblocks) 
 			ecch_throw(ECCH_DEFAULT, "unable to create device: it already exists, use `open' instead");
 		if (!add & !entry->d.no_macroblocks)
-			ecch_throw(ECCH_DEFAULT, "unable to open device: use `create' instead");
+			ecch_throw(ECCH_DEFAULT, "unable to open device: passphrase wrong?");
 		entry->size = 0;
 		if (entry->d.no_macroblocks > entry->d.reserved_macroblocks) entry->size = ((entry->d.no_macroblocks-entry->d.reserved_macroblocks)<<entry->d.b->mesoblk_log)*entry->d.mmpm;
 		scubed3_init(&entry->l, &entry->d);
@@ -263,6 +283,47 @@ static int control_open(int s, control_thread_priv_t *priv, char *argv[]) {
 
 static int control_create(int s, control_thread_priv_t *priv, char *argv[]) {
 	return control_open_create_common(s, priv, argv, 1);
+}
+
+static int control_check_available(int s,
+		control_thread_priv_t *priv, char *argv[]) {
+	fuse_io_entry_t *entry;
+
+	if (check_name(argv[0])) return control_write_complete(s, 1,
+				"illegal name specified for partition, "
+				"it may only contain letters, digits and "
+				"the underscore");
+
+	entry = hashtbl_find_element_bykey(priv->h, argv[0]);
+
+	if (!entry) return control_write_silent_success(s);
+
+	hashtbl_unlock_element_byptr(entry);
+
+	return control_write_complete(s, 1,
+			"partition \"%s\" is in use", argv[0]);
+}
+
+static int control_set_close_on_release(int s,
+		control_thread_priv_t *priv, char *argv[]) {
+	fuse_io_entry_t *entry = hashtbl_find_element_bykey(priv->h, argv[0]);
+	int err = 0;
+
+	if (!entry) return control_write_complete(s, 1,
+			"partition \"%s\" not found", argv[0]);
+
+	if (!strcmp(argv[1], "0") || !strcasecmp(argv[1], "false")) {
+		entry->close_on_release = 0;
+	} else if (!strcmp(argv[1], "1") || !strcasecmp(argv[1], "true")) {
+		entry->close_on_release = 1;
+	} else err = 1;
+
+	hashtbl_unlock_element_byptr(entry);
+
+	if (err) return control_write_complete(s, 1,
+			"illegal argument; expected boolean");
+
+	return control_write_silent_success(s);
 }
 
 static int control_stats(int s, control_thread_priv_t *priv, char *argv[]) {
@@ -411,6 +472,16 @@ static control_command_t control_commands[] = {
 		.command = control_status,
 		.argc = 0,
 		.usage = ""
+	}, {
+		.head.key = "set-close-on-release",
+		.command = control_set_close_on_release,
+		.argc = 2,
+		.usage = " NAME BOOL"
+	}, {
+		.head.key = "check-available",
+		.command = control_check_available,
+		.argc = 1,
+		.usage = " NAME"
 	}, {
 		.head.key = "open-internal",
 		.command = control_open,

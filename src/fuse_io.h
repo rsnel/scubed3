@@ -30,6 +30,7 @@ typedef struct fuse_io_entry_s {
         uint64_t size;
         int inuse;
 	int to_be_deleted;
+	int close_on_release;
 	cipher_t c;
 	blockio_dev_t d;
         scubed3_t l;

@@ -525,7 +525,7 @@ int blockio_check_data_hash(blockio_info_t *bi) {
 			(bi->dev->no_indexblocks<<bi->dev->b->mesoblk_log),
 			bi->dev->mmpm<<bi->dev->b->mesoblk_log);
 
-	gcry_md_hash_buffer(GCRY_MD_MD5, md5, bi->dev->tmp_macroblock +
+	gcry_md_hash_buffer(GCRY_MD_SHA256, hash, bi->dev->tmp_macroblock +
 			(bi->dev->no_indexblocks<<bi->dev->b->mesoblk_log),
 			bi->dev->mmpm<<bi->dev->b->mesoblk_log);
 

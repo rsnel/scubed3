@@ -112,6 +112,7 @@ static int fuse_io_open(const char *path, struct fuse_file_info *fi) {
 }
 
 static int fuse_io_release(const char *path, struct fuse_file_info *fi) {
+	int delete = 0;
 	fuse_io_entry_t *entry = hashtbl_find_element_bykey(
 			&((fuse_io_priv_t*)fuse_get_context()->private_data)->
 			entries, path + 1);
@@ -121,7 +122,16 @@ static int fuse_io_release(const char *path, struct fuse_file_info *fi) {
 	/* we should do some kind of cleanup here */
 	//VERBOSE("release called on %s", path);
 	entry->inuse--;
+	if (entry->close_on_release) {
+		delete = 1;
+		entry->to_be_deleted = 1;
+	}
 	hashtbl_unlock_element_byptr(entry);
+
+	if (delete) hashtbl_delete_element_byptr(
+			&((fuse_io_priv_t*)fuse_get_context()->
+				private_data)-> entries, entry);
+
 	return 0;
 }
 

@@ -35,7 +35,6 @@
 #include "verbose.h"
 #include "control.h"
 #include "gcry.h"
-//#include "cipher.h"
 
 #define BUF_SIZE 1024
 #define CONV_SIZE 512
@@ -211,13 +210,17 @@ typedef struct ctl_priv_s {
 } ctl_priv_t;
 
 static int ctl_open_create_common(ctl_priv_t *priv, char *argv[], int create) {
-	uint8_t hash[gcry_md_get_algo_dlen(PASSPHRASE_HASH)];
-	char hash_text[2*sizeof(hash)];
-	char *ptr = hash_text;
+	uint8_t *hash;
 	char *pw = NULL, *pw2 = NULL;
 	size_t pw_len, pw2_len;
 	int i, ret;
+	gcry_md_hd_t hd;
 
+	if (do_server_command(priv->s, 1, "check-available %s", argv[0]))
+		return -1;
+	if (result.status == -1) return 0;
+
+	assert(gcry_md_get_algo_dlen(PASSPHRASE_HASH));
 	printf("Enter passphrase: ");
 	if (my_getpass(&pw, &pw_len, stdin) == -1) {
 		ERROR("unable to get password");
@@ -244,15 +247,22 @@ static int ctl_open_create_common(ctl_priv_t *priv, char *argv[], int create) {
 		free(pw2);
 	}
 	
-	gcry_md_hash_buffer(PASSPHRASE_HASH, hash, pw, pw_len - 1);
+	gcry_call(md_open, &hd, PASSPHRASE_HASH, GCRY_MD_FLAG_SECURE);
+	assert(gcry_md_is_secure(hd));
 
+	gcry_md_write(hd, pw, pw_len - 1);
 	wipememory(pw, pw_len);
 	free(pw);
 
-	for (i = 0; i < sizeof(hash); i++)
+	hash = gcry_md_read(hd, PASSPHRASE_HASH);
+	assert(hash);
+	
+	char hash_text[2*gcry_md_get_algo_dlen(PASSPHRASE_HASH)], *ptr = hash_text;
+
+	for (i = 0; i < gcry_md_get_algo_dlen(PASSPHRASE_HASH); i++)
 		ptr += snprintf(ptr, 3, "%02x", hash[i]);
 			
-	wipememory(hash, sizeof(hash));
+	gcry_md_close(hd);
 
 	ret = do_server_command(priv->s, 1, "%s-internal %s %s %.*s",
 			create?"create":"open", argv[0],
@@ -278,10 +288,13 @@ static int ctl_resize(ctl_priv_t *priv, char *argv[]) {
 }
 
 static int ctl_mount(ctl_priv_t *priv, char *argv[]) {
-	do_server_command(priv->s, 0, "stats %s", argv[0]);
+	if (do_server_command(priv->s, 0, "stats %s", argv[0])) return -1;
 	if (result.status) {
 		// we try to open the partition
 		if (ctl_open(priv, argv)) return -1;
+		if (result.status) return 0;
+		if (do_server_command(priv->s, 0, "set-close-on-release %s 1",
+				argv[0])) return -1;
 		if (result.status) return 0;
 	} 
 
@@ -421,10 +434,13 @@ int main(int argc, char **argv) {
 	if (connect(priv.s, (struct sockaddr*)&remote, len) == -1)
 		FATAL("connect: %s", strerror(errno));
 
-	do_server_command(priv.s, 0, "version");
+	if (do_server_command(priv.s, 0, "version")) FATAL("unable "
+			"to request version");
+
 	printf("scubed3ctl-" VERSION ", connected to scubed3-%s\n", result.argv[0]);
 
-	do_server_command(priv.s, 0, "mountpoint");
+	if (do_server_command(priv.s, 0, "mountpoint")) FATAL("unable to "
+			"request mountpoint");
 	if (result.argc != 1 || result.status == -1)
 		FATAL("unexpected reply from server");
 	

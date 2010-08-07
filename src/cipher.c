@@ -74,7 +74,8 @@ void cipher_init(cipher_t *w, const char *name, size_t size,
 	//VERBOSE("opening %s(%s), with %d cipherblocks per mesoblock",
 	//		mode, prim, size);
 
-	gcry_call(cipher_open, &w->hd, algo, GCRY_CIPHER_MODE_ECB, 0);
+	gcry_call(cipher_open, &w->hd, algo,
+			GCRY_CIPHER_MODE_ECB, GCRY_CIPHER_SECURE);
 	gcry_call(cipher_setkey, w->hd, key, key_len);
 
 	w->spec = mode_spec;

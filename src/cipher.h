@@ -34,7 +34,7 @@
  * the iv is assumed to be one cipherblock */
 
 typedef struct cipher_spec_s {
-	void *(*init)(gcry_cipher_hd_t, size_t);
+	void *(*init)(const char*, size_t, const void*, size_t);
 	void (*enc)(void*, uint8_t*, const uint8_t*, const uint8_t*);
 	void (*dec)(void*, uint8_t*, const uint8_t*, const uint8_t*);
 	void (*free)(void*);
@@ -43,24 +43,27 @@ typedef struct cipher_spec_s {
 
 extern const cipher_spec_t cipher_abl4;
 extern const cipher_spec_t cipher_null;
-extern const cipher_spec_t cipher_cbc_large;
+extern const cipher_spec_t cipher_cbc_plain;
+extern const cipher_spec_t cipher_cbc_essiv;
 
 typedef struct cipher_s {
 	const cipher_spec_t *spec;
 	void *ctx;
-	gcry_cipher_hd_t hd;
 } cipher_t;
 
-void cipher_init(cipher_t*, const char*, size_t, const uint8_t*, size_t);
+void cipher_init(cipher_t*, const char*, size_t, const void*, size_t);
 
 void cipher_enc(cipher_t*, uint8_t*, const uint8_t*, uint64_t, uint32_t);
 
-void cipher_enc_iv(cipher_t*, uint8_t*, const uint8_t*, const uint8_t*);
+//void cipher_enc_iv(cipher_t*, uint8_t*, const uint8_t*, const uint8_t*);
 
 void cipher_dec(cipher_t*, uint8_t*, const uint8_t*, uint64_t, uint32_t);
 
-void cipher_dec_iv(cipher_t*, uint8_t*, const uint8_t*, const uint8_t*);
+//void cipher_dec_iv(cipher_t*, uint8_t*, const uint8_t*, const uint8_t*);
 
 void cipher_free(cipher_t*);
+
+void cipher_open_set_and_destroy_key(gcry_cipher_hd_t*, const char*,
+		const void*, size_t);
 
 #endif /* INCLUDE_SCUBED3_CIPHER_H */

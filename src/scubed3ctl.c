@@ -25,6 +25,7 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <limits.h>
 #undef NDEBUG /* we need sanity checking */
 #include <assert.h>
 #include <readline/readline.h>
@@ -39,8 +40,8 @@
 #define BUF_SIZE 1024
 #define CONV_SIZE 512
 
-#define PASSPHRASE_HASH GCRY_MD_SHA256
-#define DEFAULT_CIPHER_STRING "CBC_LARGE(AES256)"
+#define DEFAULT_PASSPHRASE_HASH		"SHA256"
+#define DEFAULT_CIPHER_STRING		"CBC_ESSIV(AES256)"
 #define KEY_LENGTH	32
 
 #define MAX_RESULT_LINES 128
@@ -59,8 +60,10 @@ int vvar_system(const char *format, va_list ap) {
 	ssize_t len;
 	int ret;
 
-	if ((len = vasprintf(&string, format, ap)) == -1)
-		FATAL("vasprintf: %s", strerror(errno));
+	if ((len = vasprintf(&string, format, ap)) == -1) {
+		ERROR("vasprintf: %s", strerror(errno));
+		return -1;
+	}
 
 	ret = system(string);
 
@@ -85,8 +88,10 @@ int var_system(const char *format, ...) {
 int vwrite_line(int s, const char *format, va_list ap) {
 	char *string;
 	ssize_t sent = 0, len, n;
-	if ((len = vasprintf(&string, format, ap)) == -1) 
-		FATAL("vasprintf: %s", strerror(errno));
+	if ((len = vasprintf(&string, format, ap)) == -1) {
+		ERROR("vasprintf: %s", strerror(errno));
+		return -1;
+	}
 
 	//VERBOSE("send: %s", string);
 
@@ -151,7 +156,10 @@ int do_server_command(int s, int echo, char *format, ...) {
 				if (*(result.buf + start) == '.' &&
 						i - start == 1) {
 					done = 1;
-					if (!status_known) WARNING("message terminates without known status");
+					if (!status_known)
+						WARNING("message terminates "
+								"without known "
+								"status");
 					break;
 				}
 				if (status_known) {
@@ -166,8 +174,11 @@ int do_server_command(int s, int echo, char *format, ...) {
 						ret = -1;
 						result.status = -1;
 					}
-				} else FATAL("malformed response, "
+				} else {
+					ERROR("malformed response, "
 						"expected OK or ERR");
+					return -1;
+				}
 
 				start = i + 1;
 			}
@@ -177,6 +188,70 @@ int do_server_command(int s, int echo, char *format, ...) {
 	} while (!done);
 
 	return 0;
+}
+
+#define MAX_ARGC 10
+
+typedef struct ctl_priv_s {
+	int s;
+	hashtbl_t c;
+	char *mountpoint;
+	int no_macroblocks;
+} ctl_priv_t;
+
+typedef struct ctl_command_s {
+	hashtbl_elt_t head;
+	int (*command)(ctl_priv_t*, char**);
+	int argc;
+	char *usage;
+} ctl_command_t;
+
+int do_local_command(ctl_priv_t *priv, ctl_command_t *cmnd, char *format, ...) {
+	int argc = 0, ret;
+	char *args;
+	char *argv[MAX_ARGC+1];
+	va_list ap;
+	
+	va_start(ap, format);
+	ret = vasprintf(&args, format, ap);
+	va_end(ap);
+
+	if (ret == -1) return -1;
+	
+	argv[argc] = args;
+
+	while (argv[argc] != '\0') {
+		while (*argv[argc] == ' ') argv[argc]++;
+
+		argc++;
+
+		if (argc > MAX_ARGC) {
+			printf("too many arguments, discarding command\n");
+			free(args);
+			return 0;
+		}
+
+		argv[argc] = argv[argc-1];
+
+		while (*argv[argc] != '\0' && *argv[argc] != ' ') argv[argc]++;
+
+		if (argv[argc] == argv[argc-1]) {
+			argc--; // last arg empty
+			break;
+		}
+
+		if (*argv[argc] == ' ') *argv[argc]++ = '\0';
+	}
+	
+	if (argc != cmnd->argc) {
+		printf("usage: %s%s\n", cmnd->head.key, cmnd->usage);
+		free(args);
+		return 0;
+	}
+
+	ret = (*cmnd->command)(priv, argv);
+	free(args);
+	return ret;
 }
 
 int my_getpass(char **lineptr, size_t *n, FILE *stream) {
@@ -201,26 +276,20 @@ int my_getpass(char **lineptr, size_t *n, FILE *stream) {
 	return 0;
 }
 
-#define MAX_ARGC 10
-
-typedef struct ctl_priv_s {
-	int s;
-	hashtbl_t c;
-	char *mountpoint;
-} ctl_priv_t;
-
 static int ctl_open_create_common(ctl_priv_t *priv, char *argv[], int create) {
 	uint8_t *hash;
 	char *pw = NULL, *pw2 = NULL;
 	size_t pw_len, pw2_len;
 	int i, ret;
+	int algo;
 	gcry_md_hd_t hd;
 
 	if (do_server_command(priv->s, 1, "check-available %s", argv[0]))
 		return -1;
 	if (result.status == -1) return 0;
 
-	assert(gcry_md_get_algo_dlen(PASSPHRASE_HASH));
+	algo = gcry_md_map_name("SHA256");
+	assert(algo && gcry_md_get_algo_dlen(algo));
 	printf("Enter passphrase: ");
 	if (my_getpass(&pw, &pw_len, stdin) == -1) {
 		ERROR("unable to get password");
@@ -247,19 +316,19 @@ static int ctl_open_create_common(ctl_priv_t *priv, char *argv[], int create) {
 		free(pw2);
 	}
 	
-	gcry_call(md_open, &hd, PASSPHRASE_HASH, GCRY_MD_FLAG_SECURE);
+	gcry_call(md_open, &hd, algo, GCRY_MD_FLAG_SECURE);
 	assert(gcry_md_is_secure(hd));
 
 	gcry_md_write(hd, pw, pw_len - 1);
 	wipememory(pw, pw_len);
 	free(pw);
 
-	hash = gcry_md_read(hd, PASSPHRASE_HASH);
+	hash = gcry_md_read(hd, algo);
 	assert(hash);
 	
-	char hash_text[2*gcry_md_get_algo_dlen(PASSPHRASE_HASH)], *ptr = hash_text;
+	char hash_text[2*gcry_md_get_algo_dlen(algo)], *ptr = hash_text;
 
-	for (i = 0; i < gcry_md_get_algo_dlen(PASSPHRASE_HASH); i++)
+	for (i = 0; i < gcry_md_get_algo_dlen(algo); i++)
 		ptr += snprintf(ptr, 3, "%02x", hash[i]);
 			
 	gcry_md_close(hd);
@@ -282,16 +351,171 @@ static int ctl_create(ctl_priv_t *priv, char *argv[]) {
 	return ctl_open_create_common(priv, argv, 1);
 }
 
-static int ctl_resize(ctl_priv_t *priv, char *argv[]) {
-	printf("unimplemented, use low-level command resize-force\n");
+int yesno() {
+	char answer[4];
+label:
+	fgets(answer, sizeof(answer), stdin);
+	if (answer[0] == '\n' || !strcmp("No\n", answer)) return 0; /* No */
+	if (strcmp("Yes", answer)) {
+		printf("Please answer Yes or No. [No] ");
+		goto label;
+	}
+	return 1; /* Yes */
+}
+
+void warning(void) {
+	printf("---WARNING---WARNING---WARNING---WARNING"
+			"---WARNING---WARNING---WARNING---\n");
+}
+
+
+static int parse_int(int *r, const char *in) {
+	char *end;
+	int ret = strtol(in, &end, 10);
+
+	if (errno && (ret == LONG_MIN || ret == LONG_MAX)) {
+		printf("integer out of range\n");
+		return -1;
+	}
+	if (*end != '\0') {
+		printf("unable to parse ->%s<-\n", in);
+		return -1;
+	}
+	*r = ret;
+
 	return 0;
+}
+
+static int parse_info(ctl_priv_t *priv, int no, ...) {
+	int done[no], *ptrs[no], i, j;
+	char *names[no], *is;
+	va_list ap;
+
+	va_start(ap, no);
+	for (i = 0; i < no; i++) {
+		done[i] = 0;
+		names[i] = va_arg(ap, char*);
+		ptrs[i] = va_arg(ap, int*);
+	}
+	va_end(ap);
+
+	for (j = 0; j < result.argc; j++) {
+		if (!(is = strchr(result.argv[j], '='))) {
+			printf("malformed response from server\n");
+			return -1;
+		}
+
+		*(is++) = '\0';
+
+		for (i = 0; i < no; i++) {
+			if (!strcmp(result.argv[j], names[i])) {
+				if (done[i]) {
+					printf("double response from the server");
+					return -1;
+				}
+				
+				if (parse_int(ptrs[i], is)) return -1;
+
+				done[i] = 1;
+
+				continue;
+			}
+		}
+	}
+
+	return 0;
+}
+
+#define DEFAULT_KEEP_REVISIONS 3
+#define DEFAULT_INCREMENT 4
+#define DEFAULT_RESERVED_MACROBLOCKS (DEFAULT_KEEP_REVISIONS + DEFAULT_INCREMENT)
+
+static int ctl_resize(ctl_priv_t *priv, char *argv[]) {
+	int no_macroblocks, new, reserved_macroblocks, keep_revisions;
+
+	if (do_server_command(priv->s, 0, "info %s", argv[0])) return -1;
+	if (result.status) {
+		printf("%s\n", result.argv[0]);
+		return 0;
+	}
+	
+	if (parse_info(priv, 3, "no_macroblocks",
+				&no_macroblocks, "reserved_macroblocks",
+				&reserved_macroblocks, "keep_revisions",
+				&keep_revisions)) return 0;
+
+	if (parse_int(&new, argv[1])) return 0;
+
+	if (no_macroblocks == 0 && reserved_macroblocks == 0 &&
+			keep_revisions == 0) {
+		reserved_macroblocks = (new < DEFAULT_RESERVED_MACROBLOCKS)?
+			new:DEFAULT_RESERVED_MACROBLOCKS;
+		keep_revisions = (reserved_macroblocks - DEFAULT_INCREMENT <
+				DEFAULT_KEEP_REVISIONS)?reserved_macroblocks -
+		       	DEFAULT_INCREMENT:DEFAULT_KEEP_REVISIONS;
+		if (keep_revisions < 0) keep_revisions = 0;
+	}
+
+	if (new == no_macroblocks) {
+		printf("size already is %d\n", new);
+		return 0;
+	}
+
+	if (new <= 0) {
+		printf("you cannot resize below 1\n");
+		return 0;
+	}
+
+	if (new > priv->no_macroblocks) {
+		printf("there are only %d macroblocks in total\n",
+				priv->no_macroblocks);
+		return 0;
+	}
+
+	if (new < reserved_macroblocks) {
+		printf("we need to decrease the amount of reserved "
+				"macroblocks by %d to %d\n",
+				reserved_macroblocks - new, new);
+
+		reserved_macroblocks = new;
+	}
+
+	if (reserved_macroblocks - DEFAULT_INCREMENT < keep_revisions) {
+		int nr = reserved_macroblocks - DEFAULT_INCREMENT;
+		if (nr < 0) nr = 0;
+
+		if (keep_revisions != 0) printf("we need to decrease "
+				"the amount of kept revisions to %d\n", nr);
+
+		keep_revisions = nr;
+	}
+
+	if (new > no_macroblocks) {
+		warning();
+		printf("allocating %d blocks for %s from the unclaimed pool, "
+				"this is\n", new - no_macroblocks, argv[0]);
+		printf("only safe if ALL your scubed3 partitions "
+				"are open, continue? [No] ");
+
+		if (!yesno()) return 0;
+	}
+
+	if (new < no_macroblocks) {
+		printf("shrinking a partition is not yet supported\n");
+		return 0;
+	}
+
+	return do_server_command(priv->s, 1, "resize-internal %s %d %d %d",
+			argv[0], new, reserved_macroblocks,
+			keep_revisions);
 }
 
 static int ctl_mount(ctl_priv_t *priv, char *argv[]) {
 	if (do_server_command(priv->s, 0, "stats %s", argv[0])) return -1;
 	if (result.status) {
 		// we try to open the partition
-		if (ctl_open(priv, argv)) return -1;
+		do_local_command(priv, hashtbl_find_element_bykey(&priv->c, "open"), "%s", argv[0]);
+		//if (ctl_open(priv, argv)) return -1;
 		if (result.status) return 0;
 		if (do_server_command(priv->s, 0, "set-close-on-release %s 1",
 				argv[0])) return -1;
@@ -307,13 +531,6 @@ static int ctl_umount(ctl_priv_t *priv, char *argv[]) {
 	var_system("umount %s", argv[0]);
 	return 0;
 }
-
-typedef struct ctl_command_s {
-	hashtbl_elt_t head;
-	int (*command)(ctl_priv_t*, char**);
-	int argc;
-	char *usage;
-} ctl_command_t;
 
 static ctl_command_t ctl_commands[] = {
 	{
@@ -344,42 +561,6 @@ static ctl_command_t ctl_commands[] = {
 	}
 };
 
-int do_local_command(ctl_priv_t *priv, ctl_command_t *cmnd, char *args) {
-	int argc = 0;
-	char *argv[MAX_ARGC+1];
-	
-	argv[argc] = args;
-
-	while (argv[argc] != '\0') {
-		while (*argv[argc] == ' ') argv[argc]++;
-
-		argc++;
-
-		if (argc > MAX_ARGC) {
-			printf("too many arguments, discarding command\n");
-			return 0;
-		}
-
-		argv[argc] = argv[argc-1];
-
-		while (*argv[argc] != '\0' && *argv[argc] != ' ') argv[argc]++;
-
-		if (argv[argc] == argv[argc-1]) {
-			argc--; // last arg empty
-			break;
-		}
-
-		if (*argv[argc] == ' ') *argv[argc]++ = '\0';
-	}
-	
-	if (argc != cmnd->argc) {
-		printf("usage: %s%s\n", cmnd->head.key, cmnd->usage);
-		return 0;
-	}
-
-	return (*cmnd->command)(priv, argv);
-}
-
 int ctl_call(ctl_priv_t *priv, char *command) {
 	char *tmp;
 	ctl_command_t *cmnd;
@@ -393,7 +574,7 @@ int ctl_call(ctl_priv_t *priv, char *command) {
 	if (tmp) *tmp = ' '; // replace space
 
 	/* execute */
-	if (cmnd) return do_local_command(priv, cmnd, tmp);
+	if (cmnd) return do_local_command(priv, cmnd, "%s", tmp);
 	else return do_server_command(priv->s, 1, "%s", command);
 }
 
@@ -406,8 +587,8 @@ int main(int argc, char **argv) {
 	int ret = -1;
 	char *line = NULL;
 	struct sockaddr_un remote;
-	assert(PASSPHRASE_HASH == GCRY_MD_SHA256);
-	assert(!strcmp("CBC_LARGE(AES256)", DEFAULT_CIPHER_STRING));
+	assert(!strcmp("SHA256", DEFAULT_PASSPHRASE_HASH));
+	assert(!strcmp("CBC_ESSIV(AES256)", DEFAULT_CIPHER_STRING));
 
 	verbose_init(argv[0]);
 
@@ -434,18 +615,21 @@ int main(int argc, char **argv) {
 	if (connect(priv.s, (struct sockaddr*)&remote, len) == -1)
 		FATAL("connect: %s", strerror(errno));
 
-	if (do_server_command(priv.s, 0, "version")) FATAL("unable "
-			"to request version");
 
-	printf("scubed3ctl-" VERSION ", connected to scubed3-%s\n", result.argv[0]);
-
-	if (do_server_command(priv.s, 0, "mountpoint")) FATAL("unable to "
+	if (do_server_command(priv.s, 0, "static-info")) FATAL("unable to "
 			"request mountpoint");
-	if (result.argc != 1 || result.status == -1)
+	if (result.argc != 3 || result.status == -1)
 		FATAL("unexpected reply from server");
-	
+
 	priv.mountpoint = strdup(result.argv[0]);
 	if (!priv.mountpoint) FATAL("out of memory");
+
+	if (parse_int(&priv.no_macroblocks, result.argv[1])) 
+		FATAL("unable to read the number of macroblocks from the server");
+
+	printf("scubed3ctl-" VERSION ", connected to scubed3-%s\n", result.argv[2]);
+	printf("default cipher is %s, passphrase hash is %s\n",
+			DEFAULT_CIPHER_STRING, DEFAULT_PASSPHRASE_HASH);
 
 	do {
 		if (line) free(line);

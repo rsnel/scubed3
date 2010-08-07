@@ -103,12 +103,13 @@ static void inc(block_t count) {
 	*((uint32_t*)count + 3) = cpu_to_be32(++c);
 }
 
-static void *abl_init(gcry_cipher_hd_t hd, size_t no_blocks) {
+static void *abl_init(const char *name, size_t no_blocks,
+		const void *key, size_t len) {
 	abl_t *priv;
 	assert(no_blocks > 0);
 	priv = ecalloc(1, sizeof(abl_t));
-
-	priv->hd = hd;
+	
+	cipher_open_set_and_destroy_key(&priv->hd, name, key, len);
 	priv->L0[15] = 1;
 	priv->L1[15] = 2;
 	priv->M0[15] = 3;
@@ -214,6 +215,7 @@ static void abl_dec(void *priv, uint8_t *out,
 }
 
 static void abl_free(void *priv) {
+	gcry_cipher_close(((abl_t*)priv)->hd);
 	wipememory(priv, sizeof(abl_t));
 	free(priv);
 }

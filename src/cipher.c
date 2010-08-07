@@ -24,15 +24,37 @@
 const cipher_spec_t *cipher_specs[] = {
 	&cipher_abl4,
 	&cipher_null,
-	&cipher_cbc_large
+	&cipher_cbc_plain,
+	&cipher_cbc_essiv,
 };
 
 #define NO_CIPHERS (sizeof(cipher_specs)/sizeof(cipher_specs[0]))
 
+void cipher_open_set_and_destroy_key(gcry_cipher_hd_t *hd, const char *name,
+		const void *key, size_t key_len) {
+	size_t tmp, algo;
+
+	algo = gcry_cipher_map_name(name);
+	if (!algo) ecch_throw(ECCH_DEFAULT, "blockcipher %s not supported", name);
+
+	gcry_call(cipher_algo_info, algo,
+			GCRYCTL_GET_BLKLEN, NULL, &tmp);
+	if (tmp != 16) ecch_throw(ECCH_DEFAULT, "cipher has wrong block size");
+
+	gcry_call(cipher_algo_info, algo,
+			GCRYCTL_GET_KEYLEN, NULL, &tmp);
+	if (key_len != tmp) ecch_throw(ECCH_DEFAULT,
+			"supplied key has wrong length");
+
+	gcry_call(cipher_open, hd, algo,
+			GCRY_CIPHER_MODE_ECB, GCRY_CIPHER_SECURE);
+
+	gcry_call(cipher_setkey, *hd, key, key_len);
+}
+
 void cipher_init(cipher_t *w, const char *name, size_t size,
-		const uint8_t *key, size_t key_len) {
-	int i = 0, algo;
-	size_t block_size, bkey_len;
+		const void *key, size_t key_len) {
+	int i = 0;
 	const cipher_spec_t *mode_spec = NULL;
 	assert(w && name && size > 0);
 
@@ -60,26 +82,10 @@ void cipher_init(cipher_t *w, const char *name, size_t size,
 		i++;
 	}
 
-	algo = gcry_cipher_map_name(prim);
-	if (!algo) ecch_throw(ECCH_DEFAULT, "blockcipher %s not supported", prim);
-
-	gcry_call(cipher_algo_info, algo,
-			GCRYCTL_GET_BLKLEN, NULL, &block_size);
-	if (block_size != 16) ecch_throw(ECCH_DEFAULT, "cipher has wrong block size");
-
-	gcry_call(cipher_algo_info, algo,
-			GCRYCTL_GET_KEYLEN, NULL, &bkey_len);
-	if (key_len != bkey_len) ecch_throw(ECCH_DEFAULT, "supplied key has wrong length");
-
-	//VERBOSE("opening %s(%s), with %d cipherblocks per mesoblock",
-	//		mode, prim, size);
-
-	gcry_call(cipher_open, &w->hd, algo,
-			GCRY_CIPHER_MODE_ECB, GCRY_CIPHER_SECURE);
-	gcry_call(cipher_setkey, w->hd, key, key_len);
-
 	w->spec = mode_spec;
-	w->ctx = w->spec->init(w->hd, size);
+	w->ctx = w->spec->init(prim, size, key, key_len);
+
+	wipememory(key, key_len);
 }
 
 static void set_iv(unsigned char *iv, uint64_t iv0, uint32_t iv1) {
@@ -88,11 +94,19 @@ static void set_iv(unsigned char *iv, uint64_t iv0, uint32_t iv1) {
 	memset(iv + 12, 0, 4);
 }
 
+#if 0
 void cipher_enc_iv(cipher_t *w, uint8_t *out,
 		const uint8_t *in, const uint8_t *iv) {
 	assert(w && w->spec && w->spec->enc && w->ctx);
 	w->spec->enc(w->ctx, out, in, iv);
 }
+
+void cipher_dec_iv(cipher_t *w, uint8_t *out,
+		const uint8_t *in, const uint8_t *iv) {
+	assert(w && w->spec && w->spec->dec && w->ctx);
+	w->spec->dec(w->ctx, out, in, iv);
+}
+#endif
 
 void cipher_enc(cipher_t *w, uint8_t *out,
 		const uint8_t *in, uint64_t iv0, uint32_t iv1) {
@@ -101,12 +115,6 @@ void cipher_enc(cipher_t *w, uint8_t *out,
 	assert(w && w->spec && w->spec->enc && w->ctx);
 	set_iv(iv, iv0, iv1);
 	w->spec->enc(w->ctx, out, in, iv);
-}
-
-void cipher_dec_iv(cipher_t *w, uint8_t *out,
-		const uint8_t *in, const uint8_t *iv) {
-	assert(w && w->spec && w->spec->dec && w->ctx);
-	w->spec->dec(w->ctx, out, in, iv);
 }
 
 void cipher_dec(cipher_t *w, uint8_t *out,
@@ -122,5 +130,4 @@ void cipher_free(cipher_t *w) {
 	assert(w);
 	if (w->spec && w->spec->free && w->ctx)
 		w->spec->free(w->ctx);
-	gcry_cipher_close(w->hd);
 }

@@ -35,8 +35,6 @@
 
 #define BUF_SIZE 8192
 #define MAX_ARGC 10
-#define DEFAULT_KEEP_REVISIONS 3
-#define DEFAULT_RESERVED_MACROBLOCKS (DEFAULT_KEEP_REVISIONS + 4)
 
 int control_write_string(int s, const char *string, ssize_t len) {
 	ssize_t sent = 0, n;
@@ -123,12 +121,11 @@ typedef struct control_command {
 	char *usage;
 } control_command_t;
 
-static int control_mountpoint(int s, control_thread_priv_t *priv, char *argv[]) {
-	return control_write_complete(s, 0, "%s", priv->mountpoint);
-}
-
-static int control_version(int s, control_thread_priv_t *priv, char *argv[]) {
-	return control_write_complete(s, 0, "%s", VERSION);
+static int control_static_info(int s, control_thread_priv_t *priv, char *argv[]) {
+	return control_write_complete(s, 0, "%s\n%d\n%s",
+			priv->mountpoint,
+			priv->b->no_macroblocks,
+			VERSION);
 }
 
 static int control_exit(int s, control_thread_priv_t *priv, char *argv[]) {
@@ -326,6 +323,28 @@ static int control_set_close_on_release(int s,
 	return control_write_silent_success(s);
 }
 
+static int control_info(int s, control_thread_priv_t *priv, char *argv[]) {
+	fuse_io_entry_t *entry = hashtbl_find_element_bykey(priv->h, argv[0]);
+	if (!entry) return control_write_complete(s, 1,
+			"partition \"%s\" not found", argv[0]);
+
+
+	if (control_write_status(s, 0)) return -1;
+
+	if (control_write_line(s, "no_macroblocks=%d\n",
+				entry->d.no_macroblocks)) return -1;
+
+	if (control_write_line(s, "keep_revisions=%d\n",
+				entry->d.keep_revisions)) return -1;
+
+	if (control_write_line(s, "reserved_macroblocks=%d\n",
+				entry->d.reserved_macroblocks)) return -1;
+
+	hashtbl_unlock_element_byptr(entry);
+
+	return control_write_terminate(s);
+}
+
 static int control_stats(int s, control_thread_priv_t *priv, char *argv[]) {
 	fuse_io_entry_t *entry = hashtbl_find_element_bykey(priv->h, argv[0]);
 	if (!entry) return control_write_complete(s, 1,
@@ -361,10 +380,23 @@ static int control_close(int s, control_thread_priv_t *priv, char *argv[]) {
 	return control_write_silent_success(s);
 }
 
+static int parse_int(int s, int *r, const char *in) {
+        char *end;
+        int ret = strtol(in, &end, 10);
+
+        if (errno && (ret == LONG_MIN || ret == LONG_MAX))
+		return control_write_complete(s, 1, "integer out of range\n");
+
+        if (*end != '\0') 
+                return control_write_complete(s, 1, "unable to parse ->%s<-\n", in);
+
+        *r = ret;
+
+	return 0;
+}
+
 static int control_resize(int s, control_thread_priv_t *priv, char *argv[]) {
-	long int size;
-	int err;
-	char *end = NULL;
+	int size = 0, reserved = 0, keep = 0; // shut compiler up
 	fuse_io_entry_t *entry = hashtbl_find_element_bykey(priv->h, argv[0]);
 	blockio_dev_t *dev;
 
@@ -377,18 +409,17 @@ static int control_resize(int s, control_thread_priv_t *priv, char *argv[]) {
 				"partition \"%s\" is busy", argv[0]);
 	}
 	dev = &entry->d;
-	size = strtol(argv[1], &end, 10);
-	if (errno && (size == LONG_MIN || size == LONG_MAX)) {
-		hashtbl_unlock_element_byptr(entry);
-		return control_write_complete(s, 1, "unable to parse ->%s<- "
-				"to a number: %s", argv[1], strerror(errno));
-	}
-	if (*end != '\0') {
-		hashtbl_unlock_element_byptr(entry);
-		return control_write_complete(s, 1, "unable to parse ->%s<- "
-				"to a number", argv[1]);
-	}
-	
+
+	if (parse_int(s, &size, argv[1])) return -1;
+	if (parse_int(s, &reserved, argv[2])) return -1;
+	if (parse_int(s, &keep, argv[3])) return -1;
+
+	hashtbl_unlock_element_byptr(entry);
+
+	return control_write_complete(s, 0, "size=%d, reserved=%d, keep=%d",
+			size, reserved, keep);
+
+#if 0
 	if (dev->no_macroblocks == 0 && size < DEFAULT_RESERVED_MACROBLOCKS) {
 		hashtbl_unlock_element_byptr(entry);
 		return control_write_complete(s, 1, "reserved_macroblocks "
@@ -421,7 +452,7 @@ static int control_resize(int s, control_thread_priv_t *priv, char *argv[]) {
 		return control_write_complete(s, 1, "nothing to do");
 	}
 
-	VERBOSE("need to allocate %ld additional blocks", size);
+	VERBOSE("need to allocate %d additional blocks", size);
 
 	if ((err = blockio_dev_allocate_macroblocks(dev, size))) {
 		hashtbl_unlock_element_byptr(entry);
@@ -446,20 +477,14 @@ static int control_resize(int s, control_thread_priv_t *priv, char *argv[]) {
 	scubed3_enlarge(&entry->l);
 
 	hashtbl_unlock_element_byptr(entry);
-	
-	return control_write_silent_success(s);
-	//return control_write_complete(s, 0, "succesfull resized");
+#endif	
+//	return control_write_silent_success(s);
 }
 
 static control_command_t control_commands[] = {
 	{
-		.head.key = "version",
-		.command = control_version,
-		.argc = 0,
-		.usage = ""
-	}, {
-		.head.key = "mountpoint",
-		.command = control_mountpoint,
+		.head.key = "static-info",
+		.command = control_static_info,
 		.argc = 0,
 		.usage = ""
 	}, {
@@ -488,6 +513,11 @@ static control_command_t control_commands[] = {
 		.argc = 3,
 		.usage = " NAME CIPHER_SPEC KEY"
 	}, {
+		.head.key = "info",
+		.command = control_info,
+		.argc = 1,
+		.usage = " NAME"
+	}, {
 		.head.key = "stats",
 		.command = control_stats,
 		.argc = 1,
@@ -508,10 +538,10 @@ static control_command_t control_commands[] = {
 		.argc = 1,
 		.usage = " NAME"
 	}, {
-		.head.key = "resize-force",
+		.head.key = "resize-internal",
 		.command = control_resize,
-		.argc = 2,
-		.usage = " NAME BLOCKS"
+		.argc = 4,
+		.usage = " NAME BLOCKS RESERVED KEEP"
 	}
 };
 

@@ -41,6 +41,6 @@ extern int verbose;
 #define FATAL(msg,...)            ABORT("fatal:" msg, ## __VA_ARGS__)
 void verbose_init(char*);
 
-void verbose_md5(char*);
+void verbose_md5(const char*);
 
 #endif /* INCLUDE_SCUBED3_VERBOSE_H */

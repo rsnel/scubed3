@@ -400,3 +400,53 @@ int main(int argc, char **argv) {
 
 	exit(ret);
 }
+
+#if 0
+	cipher_t c1;
+	cipher_t c2;
+	unsigned char data[32] = "0123456789ABCDEF0123456789ABCDEF";
+	unsigned char out1[32];
+	unsigned char out2[32];
+	unsigned char res1r[32];
+	unsigned char res2r[32];
+	unsigned char res1s[32];
+	unsigned char res2s[32];
+	char key1[32] = { "FEEFACEBADDECAFDEADBEEFC0FFEEEEE" };
+	char key2[32] = { "FEEFACEBADDECAFDEADBEEFC0FFEEEEE" };
+	
+	cipher_init(&c1, "CBC_PLAIN(AES256)", 2, key1, 32);
+	cipher_init(&c2, "CBC_ESSIV(AES256)", 2, key2, 32);
+	cipher_enc(&c1, out1, data, 0, 0);
+	cipher_enc(&c2, out2, data, 0, 0);
+
+	DEBUG("out1");
+	verbose_md5((char*)out1);
+	verbose_md5((char*)out1 + 16);
+
+	DEBUG("out2");
+	verbose_md5((char*)out2);
+	verbose_md5((char*)out2 + 16);
+
+	cipher_dec(&c1, res1s, out1, 0, 0);
+	cipher_dec(&c2, res2s, out2, 0, 0);
+	cipher_dec(&c2, res1r, out1, 0, 0);
+	cipher_dec(&c1, res2r, out2, 0, 0);
+
+	DEBUG("res1s");
+	verbose_md5((char*)res1s);
+	verbose_md5((char*)res1s + 16);
+
+	DEBUG("res2s");
+	verbose_md5((char*)res2s);
+	verbose_md5((char*)res2s + 16);
+
+	DEBUG("res1r");
+	verbose_md5((char*)res1r);
+	verbose_md5((char*)res1r + 16);
+
+	DEBUG("res2r");
+	verbose_md5((char*)res2r);
+	verbose_md5((char*)res2r + 16);
+
+	exit(0);
+#endif

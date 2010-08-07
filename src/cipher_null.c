@@ -20,7 +20,8 @@
 #include "cipher.h"
 #include "gcry.h"
 
-static void *null_init(gcry_cipher_hd_t hd, size_t no_blocks) {
+static void *null_init(const char *name, size_t no_blocks,
+		const void *key, size_t key_len) {
 	assert(no_blocks > 0);
 	WARNING("the NULL cipher mode should only be used for testing");
 	return (void*)no_blocks;

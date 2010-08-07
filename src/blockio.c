@@ -441,8 +441,8 @@ void blockio_dev_read_header(blockio_dev_t *dev, uint32_t no,
 
 	/* check magic */
 	if (memcmp(magic, MAGIC, sizeof(magic))) {
-		//DEBUG("magic \"%.*s\" not found in mesoblock %u",
-		//		sizeof(magic), magic, no);
+		//DEBUG("magic \"%.*s\" not found in macroblock %u",
+	//			sizeof(magic), magic, no);
 		return;
 	}
 
@@ -450,7 +450,7 @@ void blockio_dev_read_header(blockio_dev_t *dev, uint32_t no,
 	gcry_md_hash_buffer(GCRY_MD_SHA256, sha256, BASE + sizeof(sha256),
 			(1<<dev->b->mesoblk_log) - sizeof(sha256));
 	if (memcmp(INDEXBLOCK_HASH, sha256, sizeof(sha256))) {
-		DEBUG("md5sum of index block %d failed", no);
+		DEBUG("sha256 hash of index block %d failed", no);
 		return;
 	}
 

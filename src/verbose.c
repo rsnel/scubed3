@@ -30,7 +30,7 @@ void verbose_init(char *argv0) {
 	if (!exec_name++) exec_name = argv0;
 }
 
-void verbose_md5(char *md5sum_res) {
+void verbose_md5(const char *md5sum_res) {
 	DEBUG("md5: %02x %02x %02x %02x %02x %02x %02x %02x  "
 		"%02x %02x %02x %02x %02x %02x %02x %02x",
 		(unsigned char)md5sum_res[0], (unsigned char)md5sum_res[1],

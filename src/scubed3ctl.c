@@ -352,14 +352,21 @@ static int ctl_create(ctl_priv_t *priv, char *argv[]) {
 }
 
 int yesno() {
-	char answer[4];
+	//char answer[4];
+	char *answer;
 label:
-	fgets(answer, sizeof(answer), stdin);
-	if (answer[0] == '\n' || !strcmp("No\n", answer)) return 0; /* No */
+	answer = readline("");
+	//fgets(answer, sizeof(answer), stdin);
+	if (answer[0] == '\0' || !strcmp("No", answer)) {
+		free(answer);
+		return 0; /* No */
+	}
 	if (strcmp("Yes", answer)) {
 		printf("Please answer Yes or No. [No] ");
+		free(answer);
 		goto label;
 	}
+	free(answer);
 	return 1; /* Yes */
 }
 

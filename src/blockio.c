@@ -646,7 +646,7 @@ int blockio_dev_allocate_macroblocks(blockio_dev_t *dev, uint16_t size) {
 		blockio_info_t *bi;
 		no = random_custom(&dev->b->r, no_freeb);
 		select = freeb[no];
-		VERBOSE("select nr %d, %d", no, select);
+		//VERBOSE("select nr %d, %d", no, select);
 		bi = &dev->b->blockio_infos[select];
 		bi->dev = dev;
 

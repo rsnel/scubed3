@@ -397,6 +397,7 @@ static int parse_int(int s, int *r, const char *in) {
 
 static int control_resize(int s, control_thread_priv_t *priv, char *argv[]) {
 	int size = 0, reserved = 0, keep = 0; // shut compiler up
+	int err;
 	fuse_io_entry_t *entry = hashtbl_find_element_bykey(priv->h, argv[0]);
 	blockio_dev_t *dev;
 
@@ -414,25 +415,31 @@ static int control_resize(int s, control_thread_priv_t *priv, char *argv[]) {
 	if (parse_int(s, &reserved, argv[2])) return -1;
 	if (parse_int(s, &keep, argv[3])) return -1;
 
-	hashtbl_unlock_element_byptr(entry);
-
-	return control_write_complete(s, 0, "size=%d, reserved=%d, keep=%d",
-			size, reserved, keep);
-
-#if 0
-	if (dev->no_macroblocks == 0 && size < DEFAULT_RESERVED_MACROBLOCKS) {
+	if (!(reserved <= size) || !(keep <= reserved) || !(size >= 0)) {
 		hashtbl_unlock_element_byptr(entry);
-		return control_write_complete(s, 1, "reserved_macroblocks "
-				"is %d, size needs to be bigger",
-				DEFAULT_RESERVED_MACROBLOCKS);
+		return control_write_complete(s, 1,
+			"something wrong with caller");
 	}
 
-	if (size == 0) {
+	if (reserved != dev->reserved_macroblocks && dev->bi) {
 		hashtbl_unlock_element_byptr(entry);
-		return control_write_complete(s, 1, "this program can't "
-				"resize to zero; just discard the passphrase");
+		return control_write_complete(s, 1, "unable to change amount "
+				"of reserved blocks");
 	}
 
+	if (reserved <= 4 && keep != 0) {
+		hashtbl_unlock_element_byptr(entry);
+		return control_write_complete(s, 1, "if reserved < 4, then "
+				"keep revisions must be 0");
+	}
+
+	if (reserved > 4 && keep > reserved - 4) {
+		hashtbl_unlock_element_byptr(entry);
+		return control_write_complete(s, 1, "if reserved > 0, then "
+				"keep revisions must be smaller than "
+				"reserved - 4");
+	}
+	
 	if (size < dev->no_macroblocks) {
 		hashtbl_unlock_element_byptr(entry);
 		return control_write_complete(s, 1, "unable to shrink device");
@@ -461,12 +468,10 @@ static int control_resize(int s, control_thread_priv_t *priv, char *argv[]) {
 				"available for resize":"out of memory error");
 	}
 
-	if (!dev->bi) {
-		assert(!dev->bi);
-		dev->keep_revisions = DEFAULT_KEEP_REVISIONS;
-		dev->reserved_macroblocks = DEFAULT_RESERVED_MACROBLOCKS;
-		blockio_dev_select_next_macroblock(dev, 1);
-	}
+	dev->keep_revisions = keep;
+	dev->reserved_macroblocks = reserved;
+
+	if (!dev->bi) blockio_dev_select_next_macroblock(dev, 1);
 
 	dev->updated = 1;
 
@@ -477,8 +482,8 @@ static int control_resize(int s, control_thread_priv_t *priv, char *argv[]) {
 	scubed3_enlarge(&entry->l);
 
 	hashtbl_unlock_element_byptr(entry);
-#endif	
-//	return control_write_silent_success(s);
+
+	return control_write_silent_success(s);
 }
 
 static control_command_t control_commands[] = {

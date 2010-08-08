@@ -9,7 +9,7 @@ scubed3_SOURCES = scubed3.c scubed3.h cipher_abl.c binio.c binio.h \
 		  random.c random.h assert.c assert.h
 scubed3ctl_SOURCES = scubed3ctl.c verbose.c verbose.h gcry.c gcry.h \
 		     ecch.h ecch.c hashtbl.c hashtbl.h pthd.c pthd.h \
-		     util.c util.h
+		     util.c util.h assert.c assert.h
 AM_CFLAGS = -D_GNU_SOURCE -O2 -g -Wall -Werror -D_FILE_OFFSET_BITS=64
 AM_LDFLAGS = -lpthread -lfuse -lgcrypt
 scubed3ctl_LDFLAGS = -lreadline -lgcrypt -lpthread

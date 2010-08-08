@@ -1,10 +1,10 @@
-#include<stdio.h>
-#include<stdint.h>
-#include<string.h>
-#include<assert.h>
-#include<errno.h>
-#include"verbose.h"
-#include"random.h"
+#include <stdio.h>
+#include <stdint.h>
+#include <string.h>
+#include <errno.h>
+#include "assert.h"
+#include "verbose.h"
+#include "random.h"
 
 static uint16_t randint(FILE *fp, uint32_t no) {
         uint64_t rd;

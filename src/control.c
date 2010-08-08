@@ -17,7 +17,6 @@
  */
 #include <string.h>
 #include <errno.h>
-#include <assert.h>
 #include <unistd.h>
 #include <limits.h>
 #include <sys/types.h>
@@ -25,6 +24,7 @@
 #include <sys/un.h>
 #include <signal.h>
 #include <fuse.h>
+#include "assert.h"
 #include "verbose.h"
 #include "util.h"
 #include "pthd.h"
@@ -169,7 +169,7 @@ static int control_status(int s, control_thread_priv_t *priv, char *argv[]) {
         int rep(control_status_priv_t *priv, fuse_io_entry_t *entry) {
 		size_t size = ((entry->d.no_macroblocks - entry->d.reserved_macroblocks)*entry->d.mmpm);
 		priv->macroblocks_left -= entry->d.no_macroblocks;
-                return control_write_line(priv->s, "%07u blocks in %s (%ld usable bytes)\n", entry->d.no_macroblocks, entry->head.key, (entry->d.no_macroblocks >= entry->d.reserved_macroblocks)?size<<entry->d.b->mesoblk_log:0);
+                return control_write_line(priv->s, "%07u blocks in %s (%ld usable bytes)%s%s\n", entry->d.no_macroblocks, entry->head.key, (entry->d.no_macroblocks >= entry->d.reserved_macroblocks)?size<<entry->d.b->mesoblk_log:0, entry->inuse?" [IN USE]":"", entry->close_on_release?" [AUTOCLOSE]":"");
         }
 
 	if (control_write_status(s, 0)) return -1;
@@ -340,6 +340,18 @@ static int control_info(int s, control_thread_priv_t *priv, char *argv[]) {
 	if (control_write_line(s, "reserved_macroblocks=%d\n",
 				entry->d.reserved_macroblocks)) return -1;
 
+	if (control_write_line(s, "used=%d\n",
+				dllist_get_no_elts(&entry->d.used_blocks)))
+		return -1;
+
+	if (control_write_line(s, "selected=%d\n",
+				dllist_get_no_elts(&entry->d.selected_blocks)))
+		return -1;
+
+	if (control_write_line(s, "free=%d\n",
+				dllist_get_no_elts(&entry->d.free_blocks)))
+		return -1;
+
 	hashtbl_unlock_element_byptr(entry);
 
 	return control_write_terminate(s);
@@ -442,7 +454,8 @@ static int control_resize(int s, control_thread_priv_t *priv, char *argv[]) {
 	
 	if (size < dev->no_macroblocks) {
 		hashtbl_unlock_element_byptr(entry);
-		return control_write_complete(s, 1, "unable to shrink device");
+		return control_write_complete(s, 1, "unable to shrink device; "
+				"not yet supported");
 	}
 
 	if (size > dev->b->no_macroblocks) {

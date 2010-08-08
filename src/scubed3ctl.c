@@ -27,11 +27,11 @@
 #include <sys/un.h>
 #include <limits.h>
 #undef NDEBUG /* we need sanity checking */
-#include <assert.h>
 #include <readline/readline.h>
 #include <readline/history.h>
 #include <termios.h>
 
+#include "assert.h"
 #include "config.h"
 #include "verbose.h"
 #include "control.h"
@@ -480,7 +480,7 @@ static int ctl_resize(ctl_priv_t *priv, char *argv[]) {
 	}
 
 	if (new < reserved_macroblocks) {
-		printf("we need to decrease the amount of reserved "
+		printf("* we need to decrease the amount of reserved "
 				"macroblocks by %d to %d\n",
 				reserved_macroblocks - new, new);
 
@@ -491,7 +491,7 @@ static int ctl_resize(ctl_priv_t *priv, char *argv[]) {
 		int nr = reserved_macroblocks - DEFAULT_INCREMENT;
 		if (nr < 0) nr = 0;
 
-		if (keep_revisions != 0) printf("we need to decrease "
+		if (keep_revisions != 0) printf("* we need to decrease "
 				"the amount of kept revisions to %d\n", nr);
 
 		keep_revisions = nr;
@@ -503,6 +503,16 @@ static int ctl_resize(ctl_priv_t *priv, char *argv[]) {
 				"this is\n", new - no_macroblocks, argv[0]);
 		printf("only safe if ALL your scubed3 partitions "
 				"are open, continue? [No] ");
+
+		if (!yesno()) return 0;
+	} else {
+		assert(no_macroblocks > new);
+		warning();
+		printf("removing %d blocks from the end of %s, those blocks\n",
+				no_macroblocks - new, argv[0]);
+		printf("will be added to the unclaimed pool, if you have a "
+				"filesystem on it");
+		printf("you must resize it yourself continue? [No] ");
 
 		if (!yesno()) return 0;
 	}

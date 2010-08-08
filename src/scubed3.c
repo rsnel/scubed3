@@ -31,9 +31,9 @@
 #include <sys/mman.h>
 #include <sys/user.h>
 #undef NDEBUG /* we need sanity checking */
-#include <assert.h>
 #include <fuse/fuse_opt.h>
 
+#include "assert.h"
 #include "config.h"
 #include "scubed3.h"
 #include "gcry.h"
@@ -57,9 +57,10 @@ void obsolete_mesoblk(scubed3_t *l, blockio_info_t *bi, uint32_t no) {
 
 	/* if the whole block is obsolete, remove it from the active list */
 	if (!bi->no_nonobsolete) {
-		blockio_dev_set_macroblock_status(l->dev,
-				bi - l->dev->b->blockio_infos, FREE);
+		blockio_dev_change_macroblock_status(l->dev,
+				bi - l->dev->b->blockio_infos, HAS_DATA, FREE);
 		dllist_remove(&bi->elt);
+		dllist_append(&l->dev->free_blocks, &bi->elt);
 		bi->no_indices = 0;
 	}
 }

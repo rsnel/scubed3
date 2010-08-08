@@ -28,8 +28,8 @@
  * - the two drafts disagree on the order of the data and associated data in
  *   GPRF/GHASH, I chose the former convention for now.
  */
-#include <assert.h>
 #include <string.h>
+#include "assert.h"
 #include "util.h"
 #include "gcry.h"
 #include "binio.h"

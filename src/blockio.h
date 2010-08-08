@@ -62,7 +62,7 @@ typedef struct blockio_dev_s {
 	
 	uint16_t mmpm; /* max mesoblocks per macroblock */
 
-	dllist_t used_blocks;
+	dllist_t used_blocks, free_blocks, selected_blocks;
 
 	/* array, used with PRNG to select random blocks */
 	uint16_t *macroblock_ref;
@@ -122,8 +122,8 @@ typedef enum blockio_dev_macroblock_status_e {
 		NOT_ALLOCATED, HAS_DATA, FREE, SELECTFROM }
 	blockio_dev_macroblock_status_t;
 
-void blockio_dev_set_macroblock_status(blockio_dev_t*,
-		uint32_t, blockio_dev_macroblock_status_t);
+//void blockio_dev_set_macroblock_status(blockio_dev_t*,
+//		uint32_t, blockio_dev_macroblock_status_t);
 
 void blockio_dev_change_macroblock_status(blockio_dev_t*,
 		uint32_t, blockio_dev_macroblock_status_t,

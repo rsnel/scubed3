@@ -18,8 +18,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
-#include <assert.h>
 
+#include "assert.h"
 #include "verbose.h"
 #include "util.h"
 

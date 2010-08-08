@@ -16,10 +16,10 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 #include <stdint.h>
-#include <assert.h>
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include "assert.h"
 #include "verbose.h"
 #include "bitmap.h"
 #include "binio.h"

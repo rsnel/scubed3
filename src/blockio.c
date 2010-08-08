@@ -20,10 +20,10 @@
 #include <stdio.h>
 #include <errno.h>
 #include <string.h>
-#include <assert.h>
 #include <sys/ioctl.h>
 #include <sys/mount.h>
 #include <fcntl.h>
+#include "assert.h"
 #include "blockio.h"
 #include "bitmap.h"
 #include "verbose.h"
@@ -169,6 +169,8 @@ void blockio_dev_free(blockio_dev_t *dev) {
 	}
 
 	dllist_free(&dev->used_blocks);
+	dllist_free(&dev->free_blocks);
+	dllist_free(&dev->selected_blocks);
 	free(dev->tmp_macroblock);
 	free(dev->macroblock_ref);
 	free(dev->name);
@@ -207,7 +209,7 @@ static int last_diff(random_t *r, int last, int *first) {
 }
 
 void blockio_dev_select_next_macroblock(blockio_dev_t *dev, int first) {
-	int number, different = 1, tmp2 = 0;
+	int number, different = 1, tmp2 = 0, tmp3;
 	assert(!dev->bi);
 
 	dev->valid = 1;
@@ -218,24 +220,40 @@ void blockio_dev_select_next_macroblock(blockio_dev_t *dev, int first) {
 
 	if (first) assert(blockio_dev_get_macroblock_status(dev,
 				number) == FREE);
-	else blockio_dev_change_macroblock_status(dev,
+	else {
+		blockio_dev_change_macroblock_status(dev,
 			number, SELECTFROM, FREE);
+		dllist_remove(&dev->bi->elt);
+		dllist_append(&dev->free_blocks, &dev->bi->elt);
+	}
 
 	while (different <= dev->keep_revisions) {
 		tmp2++;
 		if (last_diff(&dev->r, tmp2, &dev->valid)) {
+			tmp3 = dev->macroblock_ref[random_peek(&dev->r, tmp2)];
 			if (different != dev->keep_revisions) {
-				blockio_dev_set_macroblock_status(dev,
-						dev->macroblock_ref[
-						random_peek(&dev->r, tmp2)],
-					    	SELECTFROM);
+				if (first || different == dev->keep_revisions - 1) {
+					blockio_dev_change_macroblock_status(dev,
+							tmp3,  FREE, SELECTFROM);
+					dllist_remove(&dev->b->blockio_infos[tmp3].elt);
+					dllist_append(&dev->selected_blocks,
+							&dev->b->blockio_infos[tmp3].elt);
+				} else assert(blockio_dev_get_macroblock_status(
+							dev,
+							dev->macroblock_ref[
+							random_peek(&dev->r,
+								tmp2)]) ==
+						SELECTFROM);
 			}
 			different++;
 		}
 	}
 
-	if (!dev->valid) blockio_dev_change_macroblock_status(dev,
-			number, FREE, SELECTFROM);
+	if (!dev->valid) {
+		blockio_dev_change_macroblock_status(dev, number, FREE, SELECTFROM);
+		dllist_remove(&dev->bi->elt);
+		dllist_append(&dev->selected_blocks, &dev->bi->elt);
+	}
 
 	dev->tail_macroblock_global =
 		dev->macroblock_ref[random_peek(&dev->r, tmp2)];
@@ -255,12 +273,14 @@ void blockio_dev_write_current_and_select_next_valid_macroblock(
 
 void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 		const char *name) {
-	int i, tmp = 0, tmp2 = 0, tmp3;
+	int i, tmp = 0, tmp2 = 0, tmp3, is_select_block;
 	uint64_t highest_seqno = 0;
 	assert(b && c);
 	assert(b->mesoblk_log < b->macroblock_log);
 	bitmap_init(&dev->status, 2*b->no_macroblocks);
 	dllist_init(&dev->used_blocks);
+	dllist_init(&dev->free_blocks);
+	dllist_init(&dev->selected_blocks);
 
 	dev->tmp_macroblock = ecalloc(1, 1<<b->macroblock_log);
 	dev->b = b;
@@ -290,6 +310,7 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 	/* check all macroblocks in the map */
 	for (i = 0; i < b->no_macroblocks; i++) {
 		blockio_info_t *bi = &b->blockio_infos[i];
+		is_select_block = 0;
 		switch(bitmap_getbits(&dev->status, i<<1, 2)) {
 			case NOT_ALLOCATED:
 				if (bi->dev == dev) {
@@ -318,6 +339,7 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 				//VERBOSE("found selectblock %d %d", tmp2, i);
 				assert(tmp2 < dev->random_len - 1);
 				rebuild_prng[tmp2++] = dev->no_macroblocks;
+				is_select_block = 1;
 			case FREE:
 				/* check if someone has taken it over */
 				if (bi->dev != dev) {
@@ -336,6 +358,10 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 				}
 				assert(tmp > dev->no_macroblocks);
 				dev->macroblock_ref[dev->no_macroblocks++] = i;
+				if (is_select_block)
+					dllist_append(&dev->selected_blocks,
+							&bi->elt);
+				else dllist_append(&dev->free_blocks, &bi->elt);
 
 				break;
 		}
@@ -543,6 +569,7 @@ void blockio_dev_write_current_macroblock(blockio_dev_t *dev) {
 	if (dev->bi->no_indices) {
 		blockio_dev_change_macroblock_status(dev,
 				id, FREE, HAS_DATA);
+		dllist_remove(&dev->bi->elt);
 		dllist_append(&dev->used_blocks, &dev->bi->elt);
 	}
 
@@ -594,7 +621,7 @@ void blockio_dev_write_current_macroblock(blockio_dev_t *dev) {
 	dev->bi = NULL; /* there is no current block */
 }
 
-void blockio_dev_set_macroblock_status(blockio_dev_t *dev, uint32_t raw_no,
+static void blockio_dev_set_macroblock_status(blockio_dev_t *dev, uint32_t raw_no,
 		blockio_dev_macroblock_status_t status) {
 	assert(dev);
 	assert(raw_no < dev->b->no_macroblocks);
@@ -656,6 +683,7 @@ int blockio_dev_allocate_macroblocks(blockio_dev_t *dev, uint16_t size) {
 		// mark as FREE and assert() that is was NOT_ALLOCATED
 		blockio_dev_change_macroblock_status(dev, select,
 				NOT_ALLOCATED, FREE);
+		dllist_append(&dev->free_blocks, &bi->elt);
 
 		no_freeb--;
 		memmove(&freeb[no], &freeb[no+1], sizeof(freeb[0])*(no_freeb - no));

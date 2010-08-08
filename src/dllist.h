@@ -18,14 +18,18 @@
 #ifndef INCLUDE_SCUBED3_DLLIST_H
 #define INCLUDE_SCUBED3_DLLIST_H 1
 
+#include <stdint.h>
+
 typedef struct dllist_elt_s {
 	struct dllist_elt_s *prev;
 	struct dllist_elt_s *next;
+	uint32_t *no_elts;
 } dllist_elt_t;
 
 typedef struct dllist_s {
 	dllist_elt_t head; /* oldest */
 	dllist_elt_t tail; /* newest */
+	uint32_t no_elts;
 } dllist_t;
 
 void dllist_init(dllist_t*);
@@ -47,5 +51,9 @@ void *dllist_get_head(dllist_t*);
 void *dllist_iterate(dllist_t*, int (*)(dllist_elt_t*, void*), void*);
 
 int dllist_is_empty(dllist_t*);
+
+uint32_t dllist_get_no_elts(dllist_t*);
+
+void dllist_move_append(dllist_t*, dllist_t*);
 
 #endif /* INCLUDE_SCUBED3_DLLIST_H */

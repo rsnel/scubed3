@@ -33,7 +33,7 @@
 #undef NDEBUG /* we need sanity checking */
 #include <fuse/fuse_opt.h>
 
-#include "assert.h"
+#include <assert.h>
 #include "config.h"
 #include "scubed3.h"
 #include "gcry.h"

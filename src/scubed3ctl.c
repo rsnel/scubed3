@@ -31,7 +31,7 @@
 #include <readline/history.h>
 #include <termios.h>
 
-#include "assert.h"
+#include <assert.h>
 #include "config.h"
 #include "verbose.h"
 #include "control.h"
@@ -528,7 +528,7 @@ static int ctl_resize(ctl_priv_t *priv, char *argv[]) {
 }
 
 static int ctl_mount(ctl_priv_t *priv, char *argv[]) {
-	if (do_server_command(priv->s, 0, "stats %s", argv[0])) return -1;
+	if (do_server_command(priv->s, 0, "info %s", argv[0])) return -1;
 	if (result.status) {
 		// we try to open the partition
 		do_local_command(priv, hashtbl_find_element_bykey(&priv->c, "open"), "%s", argv[0]);

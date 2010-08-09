@@ -17,7 +17,7 @@
  */
 #include <stdio.h>
 
-#include "assert.h"
+#include <assert.h>
 #include "verbose.h"
 #include "dllist.h"
 

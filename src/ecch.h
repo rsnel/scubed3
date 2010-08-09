@@ -24,7 +24,7 @@
 #include <setjmp.h>
 #include <pthread.h>
 #include <string.h>
-#include "assert.h"
+#include <assert.h>
 #include "verbose.h"
 
 /* every subsystem can have it's own exceptions, in principle they are global,

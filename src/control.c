@@ -24,7 +24,7 @@
 #include <sys/un.h>
 #include <signal.h>
 #include <fuse.h>
-#include "assert.h"
+#include <assert.h>
 #include "verbose.h"
 #include "util.h"
 #include "pthd.h"
@@ -120,6 +120,28 @@ typedef struct control_command {
 	int argc;
 	char *usage;
 } control_command_t;
+
+static int control_check_data_integrity(int s, control_thread_priv_t *priv, char *argv[]) {
+	int check_block(blockio_info_t *bi) {
+		if (blockio_check_data_hash(bi)) {
+			VERBOSE("%d %lld OK", bi - bi->dev->b->blockio_infos,
+					bi->seqno);
+		} else {
+			VERBOSE("%d %lld FAIL", bi - bi->dev->b->blockio_infos,
+					bi->seqno);
+		}
+		return 1;
+	}
+	fuse_io_entry_t *entry = hashtbl_find_element_bykey(priv->h, argv[0]);
+	if (!entry) return control_write_complete(s, 1,
+			"partition \"%s\" not found", argv[0]);
+
+	dllist_iterate(&entry->d.used_blocks, (int (*)(dllist_elt_t*, void*))check_block, NULL);
+
+	hashtbl_unlock_element_byptr(entry);
+
+	return control_write_complete(s, 0, "see debug output");
+}
 
 static int control_static_info(int s, control_thread_priv_t *priv, char *argv[]) {
 	return control_write_complete(s, 0, "%s\n%d\n%s",
@@ -352,20 +374,8 @@ static int control_info(int s, control_thread_priv_t *priv, char *argv[]) {
 				dllist_get_no_elts(&entry->d.free_blocks)))
 		return -1;
 
-	hashtbl_unlock_element_byptr(entry);
-
-	return control_write_terminate(s);
-}
-
-static int control_stats(int s, control_thread_priv_t *priv, char *argv[]) {
-	fuse_io_entry_t *entry = hashtbl_find_element_bykey(priv->h, argv[0]);
-	if (!entry) return control_write_complete(s, 1,
-			"partition \"%s\" not found", argv[0]);
-
-
-	if (control_write_status(s, 0)) return -1;
-
-	if (control_write_line(s, "writes=%d\n", entry->d.writes)) return -1;
+	if (control_write_line(s, "writes=%d\n",entry->d.writes))
+		return -1;
 
 	hashtbl_unlock_element_byptr(entry);
 
@@ -526,6 +536,11 @@ static control_command_t control_commands[] = {
 		.argc = 1,
 		.usage = " NAME"
 	}, {
+		.head.key = "check-data-integrity",
+		.command = control_check_data_integrity,
+		.argc = 1,
+		.usage = " NAME"
+	}, {
 		.head.key = "open-internal",
 		.command = control_open,
 		.argc = 3,
@@ -533,11 +548,6 @@ static control_command_t control_commands[] = {
 	}, {
 		.head.key = "info",
 		.command = control_info,
-		.argc = 1,
-		.usage = " NAME"
-	}, {
-		.head.key = "stats",
-		.command = control_stats,
 		.argc = 1,
 		.usage = " NAME"
 	}, {

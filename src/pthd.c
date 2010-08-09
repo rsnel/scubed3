@@ -18,7 +18,7 @@
 #include <stdint.h>
 #include <pthread.h>
 #include <errno.h>
-#include "assert.h"
+#include <assert.h>
 #include "verbose.h"
 #include "pthd.h"
 

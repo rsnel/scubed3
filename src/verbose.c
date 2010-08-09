@@ -30,6 +30,25 @@ void verbose_init(char *argv0) {
 	if (!exec_name++) exec_name = argv0;
 }
 
+void verbose_buffer(const char *id, const void *buf, size_t size) {
+	char tmp[strlen(id) + 2 + 2*size + 1], *ptr = tmp;
+	int ret;
+
+	ret = snprintf(ptr, strlen(id) + 2 + 1, "%s: ", id);
+	if (ret < 0 || ret >= strlen(id) + 2 + 1) FATAL("this can't happen");
+
+	ptr += ret;
+
+	while (size) {
+		ret = snprintf(ptr, 3, "%02x", *(unsigned char*)buf++);
+		if (ret < 0 || ret >= 2 + 1) FATAL("this can't happen");
+		ptr += ret;
+		size--;
+	}
+
+	VERBOSE("%s", tmp);
+}
+
 void verbose_md5(const char *md5sum_res) {
 	DEBUG("md5: %02x %02x %02x %02x %02x %02x %02x %02x  "
 		"%02x %02x %02x %02x %02x %02x %02x %02x",

@@ -19,7 +19,7 @@
 #include <string.h>
 #include <errno.h>
 
-#include "assert.h"
+#include <assert.h>
 #include "scubed3.h"
 #include "verbose.h"
 #include "ext2.h"

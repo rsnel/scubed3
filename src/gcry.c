@@ -18,7 +18,7 @@
 #include <errno.h>
 #include <stdint.h>
 #include <pthread.h>
-#include "assert.h"
+#include <assert.h>
 #include "verbose.h"
 #include "gcry.h"
 #include "ecch.h"

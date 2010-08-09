@@ -20,7 +20,7 @@
 #include <fuse.h>
 #include <string.h>
 #include <errno.h>
-#include "assert.h"
+#include <assert.h>
 #include "verbose.h"
 #include "fuse_io.h"
 #include "hashtbl.h"

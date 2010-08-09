@@ -23,7 +23,7 @@
 #include <sys/ioctl.h>
 #include <sys/mount.h>
 #include <fcntl.h>
-#include "assert.h"
+#include <assert.h>
 #include "blockio.h"
 #include "bitmap.h"
 #include "verbose.h"
@@ -227,12 +227,13 @@ void blockio_dev_select_next_macroblock(blockio_dev_t *dev, int first) {
 		dllist_append(&dev->free_blocks, &dev->bi->elt);
 	}
 
+	//VERBOSE("---start---");
 	while (different <= dev->keep_revisions) {
 		tmp2++;
+		tmp3 = dev->macroblock_ref[random_peek(&dev->r, tmp2)];
 		if (last_diff(&dev->r, tmp2, &dev->valid)) {
-			tmp3 = dev->macroblock_ref[random_peek(&dev->r, tmp2)];
 			if (different != dev->keep_revisions) {
-				if (first || different == dev->keep_revisions - 1) {
+				if (tmp2 + 1 >= dev->random_len) {
 					blockio_dev_change_macroblock_status(dev,
 							tmp3,  FREE, SELECTFROM);
 					dllist_remove(&dev->b->blockio_infos[tmp3].elt);
@@ -247,6 +248,7 @@ void blockio_dev_select_next_macroblock(blockio_dev_t *dev, int first) {
 			}
 			different++;
 		}
+		//VERBOSE("bla different=%d, tmp2=%d, tmp3=%d, status=%d, rl=%d", different, tmp2, tmp3, blockio_dev_get_macroblock_status(dev, tmp3), dev->random_len);
 	}
 
 	if (!dev->valid) {
@@ -271,10 +273,37 @@ void blockio_dev_write_current_and_select_next_valid_macroblock(
 	} while (!dev->valid);
 }
 
+struct hash_seqnos_s {
+        gcry_md_hd_t hd;
+        blockio_info_t *last;
+};
+
+uint8_t *hash_seqnos(blockio_dev_t *dev, uint8_t *hash_res, blockio_info_t *last) {
+        struct hash_seqnos_s priv = {
+                .last = last
+        };
+        int add_seqno(blockio_info_t *bi, struct hash_seqnos_s *priv) {
+                //printf(" %llu", bi->seqno);
+                gcry_md_write(priv->hd, &bi->seqno, sizeof(uint64_t));
+                return !(priv->last == bi);
+        }
+
+        //printf("sns:");
+        gcry_call(md_open, &priv.hd, GCRY_MD_SHA256, 0);
+        dllist_iterate(&dev->used_blocks,
+                        (int (*)(dllist_elt_t*, void*))add_seqno, &priv);
+        //printf("\n");
+        memcpy(hash_res, gcry_md_read(priv.hd, 0), 32);
+        gcry_md_close(priv.hd);
+
+        return hash_res;
+}
+
 void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 		const char *name) {
 	int i, tmp = 0, tmp2 = 0, tmp3, is_select_block;
 	uint64_t highest_seqno = 0;
+	uint8_t hash[32];
 	assert(b && c);
 	assert(b->mesoblk_log < b->macroblock_log);
 	bitmap_init(&dev->status, 2*b->no_macroblocks);
@@ -407,37 +436,18 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 
 	for (i = 0; i < tmp2; i++) random_push(&dev->r, rebuild_prng[i]);
 
-	VERBOSE("we have %d macroblocks in partition \"%s\"",
-			dev->no_macroblocks, dev->name);
+	blockio_info_t *latest = dllist_get_tail(&dev->used_blocks);
+	hash_seqnos(dev, hash, latest);
+	if (memcmp(hash, latest->seqnos_hash, 32)) {
+		ecch_throw(ECCH_DEFAULT, "hash of seqnos of required datablocks faild, revision %lld corrupt", latest->seqno);
+	}
+
+	VERBOSE("we have %d macroblocks in partition \"%s\", "
+			"latest revision %lld OK",
+			dev->no_macroblocks, dev->name, latest->seqno);
 
 	/* select next block */
 	blockio_dev_select_next_macroblock(dev, 0);
-}
-
-struct hash_seqnos_s {
-        gcry_md_hd_t hd;
-        blockio_info_t *last;
-};
-
-uint8_t *hash_seqnos(blockio_dev_t *dev, uint8_t *hash_res, blockio_info_t *last) {
-        struct hash_seqnos_s priv = {
-                .last = last
-        };
-        int add_seqno(blockio_info_t *bi, struct hash_seqnos_s *priv) {
-                //printf(" %llu", bi->seqno);
-                gcry_md_write(priv->hd, &bi->seqno, sizeof(uint64_t));
-                return !(priv->last == bi);
-        }
-
-        //printf("sns:");
-        gcry_call(md_open, &priv.hd, GCRY_MD_SHA256, 0);
-        dllist_iterate(&dev->used_blocks,
-                        (int (*)(dllist_elt_t*, void*))add_seqno, &priv);
-        //printf("\n");
-        memcpy(hash_res, gcry_md_read(priv.hd, 0), 32);
-        gcry_md_close(priv.hd);
-
-        return hash_res;
 }
 
 void blockio_dev_read_header(blockio_dev_t *dev, uint32_t no,
@@ -541,25 +551,24 @@ void blockio_dev_read_mesoblk(blockio_dev_t *dev,
 			no + 1);
 }
 
-#if 0
 int blockio_check_data_hash(blockio_info_t *bi) {
 	uint32_t id = bi - bi->dev->b->blockio_infos;
+	size_t size = (1<<bi->dev->b->macroblock_log) -
+		(1<<bi->dev->b->mesoblk_log);
+	char data[size];
 	char hash[32];
-	bi->dev->b->read(bi->dev->b->priv, bi->dev->tmp_macroblock +
-			(bi->dev->no_indexblocks<<bi->dev->b->mesoblk_log),
+	bi->dev->b->read(bi->dev->b->priv, data,
 			(id<<bi->dev->b->macroblock_log) +
-			(bi->dev->no_indexblocks<<bi->dev->b->mesoblk_log),
-			bi->dev->mmpm<<bi->dev->b->mesoblk_log);
+			(1<<bi->dev->b->mesoblk_log), size);
 
-	gcry_md_hash_buffer(GCRY_MD_SHA256, hash, bi->dev->tmp_macroblock +
-			(bi->dev->no_indexblocks<<bi->dev->b->mesoblk_log),
-			bi->dev->mmpm<<bi->dev->b->mesoblk_log);
+	gcry_md_hash_buffer(GCRY_MD_SHA256, hash, data, size);
 
-	if (memcmp(bi->data_hash, md5, sizeof(md5))) return 0;
+	//verbose_buffer("sha256_data", hash, 32);
+
+	if (memcmp(bi->data_hash, hash, sizeof(hash))) return 0;
 
 	return 1;
 }
-#endif
 
 void blockio_dev_write_current_macroblock(blockio_dev_t *dev) {
 	uint32_t id = dev->bi - dev->b->blockio_infos;
@@ -585,6 +594,7 @@ void blockio_dev_write_current_macroblock(blockio_dev_t *dev) {
 	gcry_md_hash_buffer(GCRY_MD_SHA256, DATABLOCKS_HASH,
 			BASE + (1<<dev->b->mesoblk_log),
 			dev->mmpm<<dev->b->mesoblk_log);
+	verbose_buffer("sha256_data", DATABLOCKS_HASH, 32);
 
 	/* calculate hash of seqnos */
 	hash_seqnos(dev, SEQNOS_HASH, dev->bi);

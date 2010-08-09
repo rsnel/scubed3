@@ -2,7 +2,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <errno.h>
-#include "assert.h"
+#include <assert.h>
 #include "verbose.h"
 #include "random.h"
 

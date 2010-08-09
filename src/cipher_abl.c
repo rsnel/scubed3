@@ -29,7 +29,7 @@
  *   GPRF/GHASH, I chose the former convention for now.
  */
 #include <string.h>
-#include "assert.h"
+#include <assert.h>
 #include "util.h"
 #include "gcry.h"
 #include "binio.h"

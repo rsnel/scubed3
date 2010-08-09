@@ -43,4 +43,7 @@ void verbose_init(char*);
 
 void verbose_md5(const char*);
 
+void verbose_buffer(const char*, const void*, size_t);
+
+
 #endif /* INCLUDE_SCUBED3_VERBOSE_H */

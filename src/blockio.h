@@ -31,6 +31,7 @@ typedef struct blockio_s blockio_t;
 typedef struct blockio_info_s {
 	dllist_elt_t elt;
 	uint64_t seqno, next_seqno;
+	uint16_t layout_revision;
 	char data_hash[32];
 	char seqnos_hash[32];
 	uint32_t no_indices;

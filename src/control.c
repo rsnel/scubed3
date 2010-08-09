@@ -191,7 +191,7 @@ static int control_status(int s, control_thread_priv_t *priv, char *argv[]) {
         int rep(control_status_priv_t *priv, fuse_io_entry_t *entry) {
 		size_t size = ((entry->d.no_macroblocks - entry->d.reserved_macroblocks)*entry->d.mmpm);
 		priv->macroblocks_left -= entry->d.no_macroblocks;
-                return control_write_line(priv->s, "%07u blocks in %s (%ld usable bytes)%s%s\n", entry->d.no_macroblocks, entry->head.key, (entry->d.no_macroblocks >= entry->d.reserved_macroblocks)?size<<entry->d.b->mesoblk_log:0, entry->inuse?" [IN USE]":"", entry->close_on_release?" [AUTOCLOSE]":"");
+                return control_write_line(priv->s, "%07u blocks in %s (%.1fMiB)%s%s%s%s%s\n", entry->d.no_macroblocks, entry->head.key, ((entry->d.no_macroblocks >= entry->d.reserved_macroblocks)?size<<entry->d.b->mesoblk_log:0)/(1024.*1024.), entry->inuse?" [U]":"", entry->close_on_release?" [C]":"", entry->mountpoint?" [MNT ":"", entry->mountpoint?entry->mountpoint:"", entry->mountpoint?"]":"");
         }
 
 	if (control_write_status(s, 0)) return -1;

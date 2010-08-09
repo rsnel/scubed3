@@ -218,6 +218,7 @@ void blockio_dev_select_next_macroblock(blockio_dev_t *dev, int first) {
 	number = dev->macroblock_ref[random_peek(&dev->r, 0)];
 	dev->bi = &dev->b->blockio_infos[number];
 	dev->bi->seqno = dev->next_seqno;
+	dev->bi->layout_revision = dev->layout_revision;
 
 	dllist_remove(&dev->bi->elt); // we don't want the current next
 				      // block on any list
@@ -375,6 +376,8 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 					if (bi->dev) ecch_throw(ECCH_DEFAULT, "unable to open partition, datablock %d is claimed by partition \"%s\"", bi - dev->b->blockio_infos, bi->dev->name);
 					/* it is our's, we just never wrote
 					 * to it */
+					bi->next_seqno = bi->seqno;
+					bi->layout_revision = dev->layout_revision;
 					assert(!bi->dev);
 					bi->dev = dev;
 					bi->indices = ecalloc(dev->mmpm,
@@ -402,8 +405,8 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 
 	tmp = 0;
 	// select tail
-	VERBOSE("select tail from %d free blocks",
-			dllist_get_no_elts(&dev->free_blocks));
+	//VERBOSE("select tail from %d free blocks",
+	//		dllist_get_no_elts(&dev->free_blocks));
 
 	dev->tail_macroblock_global = (blockio_info_t*)dllist_get_nth(&dev->free_blocks, random_custom(&dev->r, dllist_get_no_elts(&dev->free_blocks))) - dev->b->blockio_infos;
 #if 0
@@ -518,11 +521,10 @@ void blockio_dev_read_header(blockio_dev_t *dev, uint32_t no,
 	memcpy(bi->seqnos_hash, SEQNOS_HASH, 32);
 	bi->seqno = binio_read_uint64_be(SEQNO);
 	bi->next_seqno = bi->seqno + binio_read_uint32_be(NEXT_SEQNO_DIFF);
-
+	bi->layout_revision = binio_read_uint16_be(LAYOUT_REVISION);
 	if (bi->seqno > *highest_seqno) {
 		*highest_seqno = bi->seqno;
-		dev->layout_revision =
-			binio_read_uint16_be(LAYOUT_REVISION);
+		dev->layout_revision = bi->layout_revision;
 		dev->no_macroblocks = binio_read_uint16_be(NO_MACROBLOCKS);
 		dev->reserved_macroblocks =
 			binio_read_uint16_be(RESERVED_MACROBLOCKS);

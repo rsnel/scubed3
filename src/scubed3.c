@@ -155,7 +155,7 @@ void debug_stuff(scubed3_t *l) {
 }
 
 void scubed3_free(scubed3_t *l) {
-	VERBOSE("freeing scubed3 partition");
+	//VERBOSE("freeing scubed3 partition");
 	free(l->block_indices);
 }
 

@@ -25,6 +25,7 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <signal.h>
 #include <limits.h>
 #undef NDEBUG /* we need sanity checking */
 #include <readline/readline.h>
@@ -636,6 +637,8 @@ int main(int argc, char **argv) {
 		if (hashtbl_add_element(&priv.c, &ctl_commands[i]) == NULL)
 			FATAL("duplicate command");
 	}
+
+	signal(SIGPIPE, SIG_IGN);
 
 	if ((priv.s = socket(AF_UNIX, SOCK_STREAM, 0)) == -1)
 		FATAL("socket: %s", strerror(errno));

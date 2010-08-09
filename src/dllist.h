@@ -46,6 +46,8 @@ void dllist_prepend(dllist_t*, dllist_elt_t*);
 
 void *dllist_get_tail(dllist_t*);
 
+void *dllist_get_nth(dllist_t*, uint32_t);
+
 void *dllist_get_head(dllist_t*);
 
 void *dllist_iterate(dllist_t*, int (*)(dllist_elt_t*, void*), void*);

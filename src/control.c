@@ -377,6 +377,18 @@ static int control_info(int s, control_thread_priv_t *priv, char *argv[]) {
 	if (control_write_line(s, "writes=%d\n",entry->d.writes))
 		return -1;
 
+	if (control_write_line(s, "useful=%d\n",entry->d.useful))
+		return -1;
+
+	if (control_write_line(s, "wasted_keep=%d\n",entry->d.wasted_keep))
+		return -1;
+
+	if (control_write_line(s, "wasted_gc=%d\n",entry->d.wasted_gc))
+		return -1;
+
+	if (control_write_line(s, "wasted_empty=%d\n",entry->d.wasted_empty))
+		return -1;
+
 	hashtbl_unlock_element_byptr(entry);
 
 	return control_write_terminate(s);

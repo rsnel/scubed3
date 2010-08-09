@@ -62,6 +62,7 @@ void obsolete_mesoblk(scubed3_t *l, blockio_info_t *bi, uint32_t no) {
 		dllist_remove(&bi->elt);
 		dllist_append(&l->dev->free_blocks, &bi->elt);
 		bi->no_indices = 0;
+		bi->no_indices_gc = 0;
 	}
 }
 
@@ -115,6 +116,7 @@ void select_new_macroblock(scubed3_t *l) {
 	do {
 		blockio_dev_write_current_and_select_next_valid_macroblock(l->dev);
 		copy_old_block_to_current(l);
+		l->dev->bi->no_indices_gc = l->dev->bi->no_indices;
 		DEBUG("new block %u (seqno=%llu) has %u mesoblocks due "
 				"to GC of block %u",
 				id(l->dev->bi), l->dev->bi->seqno,

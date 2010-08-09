@@ -218,14 +218,13 @@ void blockio_dev_select_next_macroblock(blockio_dev_t *dev, int first) {
 	dev->bi = &dev->b->blockio_infos[number];
 	dev->bi->seqno = dev->next_seqno;
 
+	dllist_remove(&dev->bi->elt); // we don't want the current next
+				      // block on any list
+
 	if (first) assert(blockio_dev_get_macroblock_status(dev,
 				number) == FREE);
-	else {
-		blockio_dev_change_macroblock_status(dev,
+	else blockio_dev_change_macroblock_status(dev,
 			number, SELECTFROM, FREE);
-		dllist_remove(&dev->bi->elt);
-		dllist_append(&dev->free_blocks, &dev->bi->elt);
-	}
 
 	//VERBOSE("---start---");
 	while (different <= dev->keep_revisions) {
@@ -253,7 +252,6 @@ void blockio_dev_select_next_macroblock(blockio_dev_t *dev, int first) {
 
 	if (!dev->valid) {
 		blockio_dev_change_macroblock_status(dev, number, FREE, SELECTFROM);
-		dllist_remove(&dev->bi->elt);
 		dllist_append(&dev->selected_blocks, &dev->bi->elt);
 	}
 
@@ -304,6 +302,8 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 	int i, tmp = 0, tmp2 = 0, tmp3, is_select_block;
 	uint64_t highest_seqno = 0;
 	uint8_t hash[32];
+	uint16_t tail_macroblock_global;
+
 	assert(b && c);
 	assert(b->mesoblk_log < b->macroblock_log);
 	bitmap_init(&dev->status, 2*b->no_macroblocks);
@@ -384,6 +384,7 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 				if (bi->no_indices) {
 				       	bi->no_indices = 0;
 					bi->no_nonobsolete = 0;
+					bi->no_indices_gc = 0;
 				}
 				assert(tmp > dev->no_macroblocks);
 				dev->macroblock_ref[dev->no_macroblocks++] = i;
@@ -399,6 +400,12 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 	assert(tmp == dev->no_macroblocks);
 
 	tmp = 0;
+	// select tail
+	VERBOSE("select tail from %d free blocks",
+			dllist_get_no_elts(&dev->free_blocks));
+
+	/*dev->*/tail_macroblock_global = (blockio_info_t*)dllist_get_nth(&dev->free_blocks, random_custom(&dev->r, dllist_get_no_elts(&dev->free_blocks))) - dev->b->blockio_infos;
+	VERBOSE("guess %d, actual %d", tail_macroblock_global, dev->tail_macroblock_global);
 	if (blockio_dev_get_macroblock_status(dev,
 				dev->tail_macroblock_global) == NOT_ALLOCATED) {
 		//FIXME, make this non-fatal
@@ -437,14 +444,16 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 	for (i = 0; i < tmp2; i++) random_push(&dev->r, rebuild_prng[i]);
 
 	blockio_info_t *latest = dllist_get_tail(&dev->used_blocks);
-	hash_seqnos(dev, hash, latest);
-	if (memcmp(hash, latest->seqnos_hash, 32)) {
-		ecch_throw(ECCH_DEFAULT, "hash of seqnos of required datablocks faild, revision %lld corrupt", latest->seqno);
+	if (latest) {
+		hash_seqnos(dev, hash, latest);
+		if (memcmp(hash, latest->seqnos_hash, 32)) {
+			ecch_throw(ECCH_DEFAULT, "hash of seqnos of required datablocks faild, revision %lld corrupt", latest->seqno);
+		}
 	}
 
 	VERBOSE("we have %d macroblocks in partition \"%s\", "
 			"latest revision %lld OK",
-			dev->no_macroblocks, dev->name, latest->seqno);
+			dev->no_macroblocks, dev->name, (latest)?latest->seqno:0);
 
 	/* select next block */
 	blockio_dev_select_next_macroblock(dev, 0);
@@ -575,11 +584,18 @@ void blockio_dev_write_current_macroblock(blockio_dev_t *dev) {
 	int i;
 	assert(dev->bi && id < dev->b->no_macroblocks);
 
+	/* the current block is not on any list, put it on the correct one */
 	if (dev->bi->no_indices) {
 		blockio_dev_change_macroblock_status(dev,
 				id, FREE, HAS_DATA);
-		dllist_remove(&dev->bi->elt);
 		dllist_append(&dev->used_blocks, &dev->bi->elt);
+		dev->wasted_gc += dev->bi->no_indices_gc;
+		dev->useful += (dev->bi->no_indices - dev->bi->no_indices_gc);
+		dev->wasted_empty += dev->mmpm - dev->bi->no_indices;
+	} else {
+		if (blockio_dev_get_macroblock_status(dev, id) != SELECTFROM)
+			dllist_append(&dev->free_blocks, &dev->bi->elt);
+		dev->wasted_keep += dev->mmpm;
 	}
 
 	//DEBUG("write block %u (seqno=%llu)", id, dev->bi->seqno);
@@ -594,7 +610,7 @@ void blockio_dev_write_current_macroblock(blockio_dev_t *dev) {
 	gcry_md_hash_buffer(GCRY_MD_SHA256, DATABLOCKS_HASH,
 			BASE + (1<<dev->b->mesoblk_log),
 			dev->mmpm<<dev->b->mesoblk_log);
-	verbose_buffer("sha256_data", DATABLOCKS_HASH, 32);
+	//verbose_buffer("sha256_data", DATABLOCKS_HASH, 32);
 
 	/* calculate hash of seqnos */
 	hash_seqnos(dev, SEQNOS_HASH, dev->bi);

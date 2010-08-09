@@ -34,6 +34,7 @@ typedef struct blockio_info_s {
 	char data_hash[32];
 	char seqnos_hash[32];
 	uint32_t no_indices;
+	uint32_t no_indices_gc;
 	uint32_t no_nonobsolete;
 	uint32_t *indices;
 	struct blockio_dev_s *dev;
@@ -70,7 +71,15 @@ typedef struct blockio_dev_s {
 	uint8_t *tmp_macroblock;
 
 	/* stats */
-	uint32_t writes;
+
+	uint32_t writes; // no macroblocks
+
+	/* stats in mesoblocks */
+
+	uint64_t useful;
+	uint64_t wasted_keep;
+	uint64_t wasted_gc;
+	uint64_t wasted_empty;
 } blockio_dev_t;
 
 struct blockio_s {

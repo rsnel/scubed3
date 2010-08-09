@@ -62,6 +62,22 @@ void *dllist_get_head(dllist_t *d) {
 	return NULL;
 }
 
+void *dllist_get_nth(dllist_t *d, uint32_t n) {
+	dllist_elt_t *e = dllist_get_head(d);
+
+	assert(e);
+	
+	assert(n < d->no_elts);
+
+	while (n) {
+		e = e->next;
+		assert(e);
+		n--;
+	}
+
+	return e;
+}
+
 void *dllist_get_tail(dllist_t *d) {
 	assert(d && !d->head.prev && !d->tail.next &&
 			d->head.next && d->tail.prev);

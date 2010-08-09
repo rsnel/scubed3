@@ -600,7 +600,7 @@ int ctl_call(ctl_priv_t *priv, char *command) {
 int main(int argc, char **argv) {
 	ctl_priv_t priv;
 	socklen_t len;
-	int i;
+	int i, connections = 0;
 	int ret = -1;
 	char *line = NULL;
 	struct sockaddr_un remote;
@@ -644,9 +644,16 @@ int main(int argc, char **argv) {
 	if (parse_int(&priv.no_macroblocks, result.argv[1])) 
 		FATAL("unable to read the number of macroblocks from the server");
 
-	printf("scubed3ctl-" VERSION ", connected to scubed3-%s\n", result.argv[2]);
-	printf("default cipher is %s, passphrase hash is %s\n",
-			DEFAULT_CIPHER_STRING, DEFAULT_PASSPHRASE_HASH);
+	if (!connections) {
+		printf("scubed3ctl-" VERSION ", connected to scubed3-%s\n",
+				result.argv[2]);
+		printf("default cipher is %s, passphrase hash is %s\n",
+				DEFAULT_CIPHER_STRING, DEFAULT_PASSPHRASE_HASH);
+	} else {
+		printf("re-establised connection\n");
+	}
+
+	connections++;
 
 	do {
 		if (line) free(line);
@@ -673,6 +680,6 @@ int main(int argc, char **argv) {
 	free(priv.mountpoint);
 
 	close(priv.s);
-
+	
 	exit(0);
 }

@@ -28,6 +28,16 @@ void pthd_mutex_unlock(pthread_mutex_t*);
 
 void pthd_mutex_init(pthread_mutex_t*);
 
+void pthd_rwlock_destroy(pthread_rwlock_t*);
+
+void pthd_rwlock_rdlock(pthread_rwlock_t*);
+
+void pthd_rwlock_wrlock(pthread_rwlock_t*);
+
+void pthd_rwlock_unlock(pthread_rwlock_t*);
+
+void pthd_rwlock_init(pthread_rwlock_t*);
+
 void pthd_cond_init(pthread_cond_t*);
 
 void pthd_cond_signal(pthread_cond_t*);

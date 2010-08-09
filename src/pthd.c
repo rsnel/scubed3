@@ -80,6 +80,58 @@ void pthd_mutex_init(pthread_mutex_t *mutex) {
 #endif
 }
 
+void pthd_rwlock_destroy(pthread_rwlock_t *rwlock) {
+	int err;
+	//VERBOSE("DESTROY %p", rwlock);
+	if ((err = pthread_rwlock_destroy(rwlock))) {
+		if (err == EBUSY)
+			FATAL("trying to destroy locked rwlock %p", rwlock);
+		FATAL("unknown error %d trying to destroy rwlock", err);
+	}
+}
+
+void pthd_rwlock_rdlock(pthread_rwlock_t *rwlock) {
+	int err;
+	//VERBOSE("LOCK %p", rwlock);
+	if ((err = pthread_rwlock_rdlock(rwlock))) {
+		if (err == EINVAL)
+			FATAL("trying to lock uninitialized rwlock");
+		if (err == EDEADLK)
+			FATAL("trying to doubly lock an own rwlock");
+		FATAL("unknown error %d trying to lock rwlock", err);
+	}
+}
+
+void pthd_rwlock_wrlock(pthread_rwlock_t *rwlock) {
+	int err;
+	//VERBOSE("LOCK %p", rwlock);
+	if ((err = pthread_rwlock_wrlock(rwlock))) {
+		if (err == EINVAL)
+			FATAL("trying to lock uninitialized rwlock");
+		if (err == EDEADLK)
+			FATAL("trying to doubly lock an own rwlock");
+		FATAL("unknown error %d trying to lock rwlock", err);
+	}
+}
+
+void pthd_rwlock_unlock(pthread_rwlock_t *rwlock) {
+	int err;
+	//VERBOSE("UNLOCK %p", rwlock);
+	if ((err = pthread_rwlock_unlock(rwlock))) {
+		if (err == EINVAL)
+			FATAL("trying to unlock uninitialized rwlock");
+		if (err == EPERM)
+			FATAL("trying to unlock rwlock we do not own");
+		FATAL("unknown error %d trying to lock rwlock", err);
+	}
+}
+
+void pthd_rwlock_init(pthread_rwlock_t *rwlock) {
+	int err;
+	if ((err = pthread_rwlock_init(rwlock, NULL)))
+		FATAL("unknown error %d trying to initialize rwlock", err);
+}
+
 void pthd_cond_init(pthread_cond_t *cond) {
 	int err;
 	if ((err = pthread_cond_init(cond, NULL)))

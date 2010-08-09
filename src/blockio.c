@@ -75,9 +75,10 @@ static void stream_close(void *fp) {
 #define RANDOM_LEN		(BASE + 112)
 #define NO_MACROBLOCKS		(BASE + 116)
 #define RESERVED_MACROBLOCKS	(BASE + 118)
-#define TAIL_MACROBLOCK_GLOBAL	(BASE + 120)
+#define LAYOUT_REVISION		(BASE + 120)
 #define MACROBLOCK_LOG		(BASE + 122)
 #define MESOBLOCK_LOG		(BASE + 123)
+#define NEXT_SEQNO_DIFF		(BASE + 124)
 #define NO_INDICES		(BASE + 256)
 #define BITMAP			(BASE + 4096)
 
@@ -302,7 +303,6 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 	int i, tmp = 0, tmp2 = 0, tmp3, is_select_block;
 	uint64_t highest_seqno = 0;
 	uint8_t hash[32];
-	uint16_t tail_macroblock_global;
 
 	assert(b && c);
 	assert(b->mesoblk_log < b->macroblock_log);
@@ -373,6 +373,8 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 				/* check if someone has taken it over */
 				if (bi->dev != dev) {
 					if (bi->dev) ecch_throw(ECCH_DEFAULT, "unable to open partition, datablock %d is claimed by partition \"%s\"", bi - dev->b->blockio_infos, bi->dev->name);
+					/* it is our's, we just never wrote
+					 * to it */
 					assert(!bi->dev);
 					bi->dev = dev;
 					bi->indices = ecalloc(dev->mmpm,
@@ -381,11 +383,10 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 
 				/* block is free, if it contains data,
 				 * this data is obsolete... */
-				if (bi->no_indices) {
-				       	bi->no_indices = 0;
-					bi->no_nonobsolete = 0;
-					bi->no_indices_gc = 0;
-				}
+				bi->no_indices = 0;
+				bi->no_nonobsolete = 0;
+				bi->no_indices_gc = 0;
+
 				assert(tmp > dev->no_macroblocks);
 				dev->macroblock_ref[dev->no_macroblocks++] = i;
 				if (is_select_block)
@@ -404,13 +405,14 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 	VERBOSE("select tail from %d free blocks",
 			dllist_get_no_elts(&dev->free_blocks));
 
-	/*dev->*/tail_macroblock_global = (blockio_info_t*)dllist_get_nth(&dev->free_blocks, random_custom(&dev->r, dllist_get_no_elts(&dev->free_blocks))) - dev->b->blockio_infos;
-	VERBOSE("guess %d, actual %d", tail_macroblock_global, dev->tail_macroblock_global);
+	dev->tail_macroblock_global = (blockio_info_t*)dllist_get_nth(&dev->free_blocks, random_custom(&dev->r, dllist_get_no_elts(&dev->free_blocks))) - dev->b->blockio_infos;
+#if 0
 	if (blockio_dev_get_macroblock_status(dev,
 				dev->tail_macroblock_global) == NOT_ALLOCATED) {
 		//FIXME, make this non-fatal
 		ecch_throw(ECCH_DEFAULT, "designated followup not available");
 	}
+#endif
 
 	while (dev->macroblock_ref[tmp] != dev->tail_macroblock_global)  tmp++;
 	assert(tmp < dev->no_macroblocks);
@@ -515,11 +517,12 @@ void blockio_dev_read_header(blockio_dev_t *dev, uint32_t no,
 	memcpy(bi->data_hash, DATABLOCKS_HASH, 32);
 	memcpy(bi->seqnos_hash, SEQNOS_HASH, 32);
 	bi->seqno = binio_read_uint64_be(SEQNO);
+	bi->next_seqno = bi->seqno + binio_read_uint32_be(NEXT_SEQNO_DIFF);
 
 	if (bi->seqno > *highest_seqno) {
 		*highest_seqno = bi->seqno;
-		dev->tail_macroblock_global =
-			binio_read_uint16_be(TAIL_MACROBLOCK_GLOBAL);
+		dev->layout_revision =
+			binio_read_uint16_be(LAYOUT_REVISION);
 		dev->no_macroblocks = binio_read_uint16_be(NO_MACROBLOCKS);
 		dev->reserved_macroblocks =
 			binio_read_uint16_be(RESERVED_MACROBLOCKS);
@@ -617,8 +620,10 @@ void blockio_dev_write_current_macroblock(blockio_dev_t *dev) {
 
 	/* write static data */
 	binio_write_uint64_be(SEQNO, dev->bi->seqno);
+	binio_write_uint32_be(NEXT_SEQNO_DIFF, dev->bi->next_seqno -
+			dev->bi->seqno);
 	memcpy(MAGIC, magic, sizeof(magic));
-	binio_write_uint16_be(TAIL_MACROBLOCK_GLOBAL, dev->tail_macroblock_global);
+	binio_write_uint16_be(LAYOUT_REVISION, dev->layout_revision);
 	binio_write_uint16_be(NO_MACROBLOCKS, dev->no_macroblocks);
 	binio_write_uint16_be(RESERVED_MACROBLOCKS, dev->reserved_macroblocks);
 	binio_write_uint32_be(RANDOM_LEN, dev->random_len);

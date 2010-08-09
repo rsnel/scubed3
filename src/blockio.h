@@ -30,7 +30,7 @@ typedef struct blockio_s blockio_t;
 
 typedef struct blockio_info_s {
 	dllist_elt_t elt;
-	uint64_t seqno;
+	uint64_t seqno, next_seqno;
 	char data_hash[32];
 	char seqnos_hash[32];
 	uint32_t no_indices;
@@ -55,6 +55,7 @@ typedef struct blockio_dev_s {
 	int valid;
 
 	/* state of prng */
+	uint16_t layout_revision;
 	uint16_t tail_macroblock_global;
 	uint32_t random_len;
 	random_t r;

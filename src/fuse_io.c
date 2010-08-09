@@ -95,10 +95,7 @@ static int fuse_io_open(const char *path, struct fuse_file_info *fi) {
 			entries, path + 1);
 	if (!entry) return -ENOENT;
 
-//	// FIXME: disallow opening
-//	hashtbl_unlock_element_byptr(entry);
-//	return -EBUSY;
-	//VERBOSE("attempt to openen \"%s\"", path + 1);
+	//VERBOSE("attempt to open \"%s\"", path + 1);
 
 	if (entry->inuse || entry->to_be_deleted) {
 		hashtbl_unlock_element_byptr(entry);
@@ -122,6 +119,9 @@ static int fuse_io_release(const char *path, struct fuse_file_info *fi) {
 	/* we should do some kind of cleanup here */
 	//VERBOSE("release called on %s", path);
 	entry->inuse--;
+	free(entry->mountpoint);
+	entry->mountpoint = NULL;
+
 	if (entry->close_on_release) {
 		delete = 1;
 		entry->to_be_deleted = 1;
@@ -212,7 +212,8 @@ static struct fuse_operations fuse_io_operations = {
 
 static void freer(fuse_io_entry_t *entry) {
 	free(entry->head.key);
-	//scubed3_free(&entry->l);
+	free(entry->mountpoint);
+	scubed3_free(&entry->l);
 	blockio_dev_free(&entry->d);
 	cipher_free(&entry->c);
 	if (entry->ids) {
@@ -239,7 +240,12 @@ static int fuse_main_custom(int argc, char *argv[],
 
 	if (!fuse) return 1;
 
-	res = multithreaded?fuse_loop_mt(fuse):fuse_loop(fuse);
+	if (*priv->control_thread_priv.mountpoint == '/') 
+		res = multithreaded?fuse_loop_mt(fuse):fuse_loop(fuse);
+	else {
+		ERROR("the mountpoint must start with a /");
+		res = -1;
+	}
 
 	fuse_teardown(fuse, priv->control_thread_priv.mountpoint);
 

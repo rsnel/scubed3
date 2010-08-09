@@ -323,6 +323,48 @@ static int control_check_available(int s,
 			"partition \"%s\" is in use", argv[0]);
 }
 
+static int control_set_aux(int s, control_thread_priv_t *priv, char *argv[]) {
+	fuse_io_entry_t *entry = hashtbl_find_element_bykey(priv->h, argv[0]);
+	int err = 0;
+
+	if (!entry) return control_write_complete(s, 1,
+			"partition \"%s\" not found", argv[0]);
+	if (!strcmp(argv[1], "mountpoint")) {
+		if (entry->mountpoint) free(entry->mountpoint);
+		entry->mountpoint = strdup(argv[2]);
+		if (!entry->mountpoint) {
+			hashtbl_unlock_element_byptr(entry);
+			return control_write_complete(s, 1, "out of memory");
+		}
+	} else err = 1;
+
+	hashtbl_unlock_element_byptr(entry);
+
+	if (err) return control_write_complete(s, 1,
+			"key \"%s\" is impossible", argv[1]);
+
+	return control_write_silent_success(s);
+}
+
+static int control_get_aux(int s, control_thread_priv_t *priv, char *argv[]) {
+	fuse_io_entry_t *entry = hashtbl_find_element_bykey(priv->h, argv[0]);
+	char *ans = NULL;
+
+	if (!entry) return control_write_complete(s, 1,
+			"partition \"%s\" not found", argv[0]);
+
+	if (!strcmp(argv[1], "mountpoint")) {
+		ans = entry->mountpoint;
+	}
+
+	hashtbl_unlock_element_byptr(entry);
+
+	if (!ans) return control_write_complete(s, 1,
+			"key \"%s\" not found", argv[1]);
+
+	return control_write_complete(s, 0, "%s", ans);
+}
+
 static int control_set_close_on_release(int s,
 		control_thread_priv_t *priv, char *argv[]) {
 	fuse_io_entry_t *entry = hashtbl_find_element_bykey(priv->h, argv[0]);
@@ -387,6 +429,9 @@ static int control_info(int s, control_thread_priv_t *priv, char *argv[]) {
 		return -1;
 
 	if (control_write_line(s, "wasted_empty=%d\n",entry->d.wasted_empty))
+		return -1;
+
+	if (control_write_line(s, "layout_revision=%d\n",entry->d.layout_revision))
 		return -1;
 
 	hashtbl_unlock_element_byptr(entry);
@@ -516,6 +561,8 @@ static int control_resize(int s, control_thread_priv_t *priv, char *argv[]) {
 				entry->d.b->mesoblk_log)*entry->d.mmpm;
 	scubed3_enlarge(&entry->l);
 
+	entry->d.layout_revision++;
+
 	hashtbl_unlock_element_byptr(entry);
 
 	return control_write_silent_success(s);
@@ -562,6 +609,16 @@ static control_command_t control_commands[] = {
 		.command = control_info,
 		.argc = 1,
 		.usage = " NAME"
+	}, {
+		.head.key = "get-aux",
+		.command = control_get_aux,
+		.argc = 2,
+		.usage = " NAME KEY"
+	}, {
+		.head.key = "set-aux",
+		.command = control_set_aux,
+		.argc = 3,
+		.usage = " NAME KEY VALUE"
 	}, {
 		.head.key = "create-internal",
 		.command = control_create,

@@ -31,6 +31,7 @@ typedef struct fuse_io_entry_s {
         int inuse;
 	int to_be_deleted;
 	int close_on_release;
+	char *mountpoint;
 	cipher_t c;
 	blockio_dev_t d;
         scubed3_t l;

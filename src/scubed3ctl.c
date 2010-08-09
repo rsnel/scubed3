@@ -528,6 +528,10 @@ static int ctl_resize(ctl_priv_t *priv, char *argv[]) {
 }
 
 static int ctl_mount(ctl_priv_t *priv, char *argv[]) {
+	if (*argv[1] != '/') {
+		printf("mountpoint must start with a slash");
+		return 0;
+	}
 	if (do_server_command(priv->s, 0, "info %s", argv[0])) return -1;
 	if (result.status) {
 		// we try to open the partition
@@ -539,13 +543,23 @@ static int ctl_mount(ctl_priv_t *priv, char *argv[]) {
 		if (result.status) return 0;
 	} 
 
-	var_system("mount -o loop %s/%s %s", priv->mountpoint, argv[0], argv[1]);
+	if (!var_system("mount -o loop %s/%s %s", priv->mountpoint,
+				argv[0], argv[1])) { // ok
+		if (do_server_command(priv->s, 0, "set-aux %s mountpoint %s",
+					argv[0], argv[1])) return -1;
+	}
 
 	return 0;
 }
 
 static int ctl_umount(ctl_priv_t *priv, char *argv[]) {
-	var_system("umount %s", argv[0]);
+	if (*argv[0] != '/') { // figure out mountpoint
+		if (do_server_command(priv->s, 0, "get-aux %s mountpoint",
+					argv[0])) return -1;
+		var_system("umount %s", result.argv[0]);
+		
+
+	} else var_system("umount %s", argv[0]);
 	return 0;
 }
 
@@ -601,7 +615,7 @@ int main(int argc, char **argv) {
 	ctl_priv_t priv;
 	socklen_t len;
 	int i, connections = 0;
-	int ret = -1;
+	int ret = -1;//, set = 1;
 	char *line = NULL;
 	struct sockaddr_un remote;
 	assert(!strcmp("SHA256", DEFAULT_PASSPHRASE_HASH));
@@ -625,6 +639,8 @@ int main(int argc, char **argv) {
 
 	if ((priv.s = socket(AF_UNIX, SOCK_STREAM, 0)) == -1)
 		FATAL("socket: %s", strerror(errno));
+
+	//setsockopt(priv.s, SOL_SOCKET, SO_NOSIGPIPE, (void *)&set, sizeof(int));
 
 	remote.sun_family = AF_UNIX;
 	strcpy(remote.sun_path, CONTROL_SOCKET);

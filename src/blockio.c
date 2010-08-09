@@ -610,7 +610,7 @@ void blockio_dev_write_current_macroblock(blockio_dev_t *dev) {
 	for (i = 1; i <= dev->mmpm; i++)
 		cipher_enc(dev->c, BASE + (i<<dev->b->mesoblk_log),
 			BASE + (i<<dev->b->mesoblk_log), dev->bi->seqno, i);
-	
+
 	/* calculate hash of data, store in index */
 	gcry_md_hash_buffer(GCRY_MD_SHA256, DATABLOCKS_HASH,
 			BASE + (1<<dev->b->mesoblk_log),

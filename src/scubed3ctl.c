@@ -352,18 +352,20 @@ static int ctl_create(ctl_priv_t *priv, char *argv[]) {
 	return ctl_open_create_common(priv, argv, 1);
 }
 
-int yesno() {
+int yesno(const char *prompt) {
 	//char answer[4];
 	char *answer;
 label:
-	answer = readline("");
+	answer = readline(prompt);
+	while (*answer == ' ') answer++;
+
 	//fgets(answer, sizeof(answer), stdin);
 	if (answer[0] == '\0' || !strcmp("No", answer)) {
 		free(answer);
 		return 0; /* No */
 	}
 	if (strcmp("Yes", answer)) {
-		printf("Please answer Yes or No. [No] ");
+		prompt = "Please answer Yes or No. [No] ";
 		free(answer);
 		goto label;
 	}
@@ -499,23 +501,27 @@ static int ctl_resize(ctl_priv_t *priv, char *argv[]) {
 	}
 
 	if (new > no_macroblocks) {
+		char *prompt = "\
+only safe if ALL your scubed3 partitions are open, continue? [No] ";
 		warning();
 		printf("allocating %d blocks for %s from the unclaimed pool, "
 				"this is\n", new - no_macroblocks, argv[0]);
-		printf("only safe if ALL your scubed3 partitions "
-				"are open, continue? [No] ");
+		//printf("only safe if ALL your scubed3 partitions "
+	//			"are open, continue? [No] ");
 
-		if (!yesno()) return 0;
+		if (!yesno(prompt)) return 0;
 	} else {
+		char *prompt = "\
+you must resize it yourself continue? [No] ";
 		assert(no_macroblocks > new);
 		warning();
 		printf("removing %d blocks from the end of %s, those blocks\n",
 				no_macroblocks - new, argv[0]);
 		printf("will be added to the unclaimed pool, if you have a "
 				"filesystem on it");
-		printf("you must resize it yourself continue? [No] ");
+		//printf("you must resize it yourself continue? [No] ");
 
-		if (!yesno()) return 0;
+		if (!yesno(prompt)) return 0;
 	}
 
 	if (new < no_macroblocks) {
@@ -526,6 +532,23 @@ static int ctl_resize(ctl_priv_t *priv, char *argv[]) {
 	return do_server_command(priv->s, 1, "resize-internal %s %d %d %d",
 			argv[0], new, reserved_macroblocks,
 			keep_revisions);
+}
+
+static int ctl_mke2fs(ctl_priv_t *priv, char *argv[]) {
+	if (do_server_command(priv->s, 0, "info %s", argv[0])) return -1;
+	if (result.status) {
+		printf(result.argv[0]);
+		return 0;
+	}
+	if (do_server_command(priv->s, 0, "get-aux %s mountpoint",
+					argv[0])) return -1;
+	if (!result.status) {
+		printf("partition \"%s\" is mounted on %s",
+				argv[0], result.argv[0]);
+		return 0;
+	}
+	var_system("mke2fs -F %s/%s", priv->mountpoint, argv[0]);
+	return 0;
 }
 
 static int ctl_mount(ctl_priv_t *priv, char *argv[]) {
@@ -584,6 +607,11 @@ static ctl_command_t ctl_commands[] = {
 		.command = ctl_resize,
 		.argc = 2,
 		.usage = " NAME MACROBLOCKS"
+	}, {
+		.head.key = "mke2fs",
+		.command = ctl_mke2fs,
+		.argc = 1,
+		.usage = " NAME"
 	}, {
 		.head.key = "mount",
 		.command = ctl_mount,
@@ -681,17 +709,14 @@ int main(int argc, char **argv) {
 	do {
 		if (line) free(line);
 		line = readline("s3> ");
-
-		if (!line) {
-			printf("\nEOF\n");
-			exit(1);
-		}
+		//if (line && *line) add_history(line);
 
 		/* exit is a special case */
-		if (!strcmp(line, "exit") || !strcmp(line, "quit") ||
+		if (!line || !strcmp(line, "exit") || !strcmp(line, "quit") ||
 				!strcmp(line, "q") || !strcmp(line, "x") ||
 				!strcmp(line, "bye") || !strcmp(line, "kthxbye") ||
 				!strcmp(line, "thanks")) {
+			if (!line) printf("^D\n");
 			ret = do_server_command(priv.s, 1, "exit");
 			break;
 		} 

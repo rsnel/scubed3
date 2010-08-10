@@ -495,6 +495,13 @@ static int control_resize(int s, control_thread_priv_t *priv, char *argv[]) {
 	if (parse_int(s, &reserved, argv[2])) return -1;
 	if (parse_int(s, &keep, argv[3])) return -1;
 
+	if (entry->d.layout_revision) {
+		hashtbl_unlock_element_byptr(entry);
+		return control_write_complete(s, 1,
+				"FIXME layout change after set "
+				"not possibe for now");
+	}
+
 	if (!(reserved <= size) || !(keep <= reserved) || !(size >= 0)) {
 		hashtbl_unlock_element_byptr(entry);
 		return control_write_complete(s, 1,

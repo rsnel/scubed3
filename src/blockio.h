@@ -25,6 +25,7 @@
 #include "cipher.h"
 #include "bitmap.h"
 #include "random.h"
+#include "pthd.h"
 
 typedef struct blockio_s blockio_t;
 

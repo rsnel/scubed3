@@ -29,7 +29,8 @@
 typedef struct blockio_s blockio_t;
 
 typedef struct blockio_info_s {
-	dllist_elt_t elt;
+	dllist_elt_t elt; // for used, free and selected lists
+	dllist_elt_t elt2; // for ordered
 	uint64_t seqno, next_seqno;
 	uint16_t layout_revision;
 	char data_hash[32];
@@ -66,6 +67,7 @@ typedef struct blockio_dev_s {
 	uint16_t mmpm; /* max mesoblocks per macroblock */
 
 	dllist_t used_blocks, free_blocks, selected_blocks;
+	dllist_t ordered;
 
 	/* array, used with PRNG to select random blocks */
 	uint16_t *macroblock_ref;

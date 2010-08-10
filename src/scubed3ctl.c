@@ -557,6 +557,10 @@ static int ctl_umount(ctl_priv_t *priv, char *argv[]) {
 	if (*argv[0] != '/') { // figure out mountpoint
 		if (do_server_command(priv->s, 0, "get-aux %s mountpoint",
 					argv[0])) return -1;
+		if (result.status) {
+			printf("%s\n", result.argv[0]);
+			return 0;
+		}
 		var_system("umount %s", result.argv[0]);
 		
 

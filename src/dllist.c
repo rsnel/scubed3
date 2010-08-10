@@ -89,6 +89,9 @@ void *dllist_get_tail(dllist_t *d) {
 
 void dllist_insert_before(dllist_elt_t *here, dllist_elt_t *e) {
 	assert(e && !e->next && !e->prev);
+	assert(here);
+	assert(here->prev);
+	assert(here->prev->next);
 	here->prev->next = e;
 	e->prev = here->prev;
 	e->next = here;

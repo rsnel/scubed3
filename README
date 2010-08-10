@@ -129,7 +129,8 @@ Layout of macroblock:
 0x00007A uint8_t macroblock_log
 0x00007B uint8_t mesoblock_log
 0x00007C uint32_t next_seqno
-0x000080 - 0x0000FF reserved
+0x000080 uint16_t tail_macroblock_global
+0x000082 - 0x0000FF reserved
 0x000100 uint32_t no_indices
 0x000104 uint32_t idx0x01
 0x000108 uint32_t idx0x02

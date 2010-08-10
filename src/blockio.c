@@ -79,6 +79,7 @@ static void stream_close(void *fp) {
 #define MACROBLOCK_LOG		(BASE + 122)
 #define MESOBLOCK_LOG		(BASE + 123)
 #define NEXT_SEQNO_DIFF		(BASE + 124)
+#define TAIL_MACROBLOCK_GLOBAL	(BASE + 128)
 #define NO_INDICES		(BASE + 256)
 #define BITMAP			(BASE + 4096)
 
@@ -165,6 +166,8 @@ void blockio_dev_free(blockio_dev_t *dev) {
 			&dev->b->blockio_infos[dev->macroblock_ref[i]];
 		bi->elt.prev = NULL;
 		bi->elt.next = NULL;
+		bi->elt2.prev = NULL;
+		bi->elt2.next = NULL;
 		bi->dev = NULL;
 		free(bi->indices);
 	}
@@ -183,7 +186,7 @@ static void verbose_ordered(dllist_t *u) {
 	int verbose_ding(void *i, int *count) {
 		blockio_info_t *bi = i - offsetof(blockio_info_t, elt2); 
 
-		VERBOSE("i=%d, id=%d, rev=%d, seq=%lld, nseq=%lld", *count,
+		VERBOSE("i=%3d, id=%3d, rev=%d, seq=%4lld, nseq=%4lld", *count,
 				bi - bi->dev->b->blockio_infos,
 				bi->layout_revision,
 				bi->seqno, bi->next_seqno);
@@ -198,9 +201,9 @@ static void verbose_ordered(dllist_t *u) {
 static void add_to_ordered(dllist_t *u, blockio_info_t *bi) {
 	int compare_rev_nseq(void *o, blockio_info_t *new) {
 		blockio_info_t *old = o - offsetof(blockio_info_t, elt2); 
-		VERBOSE("compareth old: rev=%d, nseq=%lld, new: rev=%d, nseq=%lld",
-				old->layout_revision, old->next_seqno,
-				new->layout_revision, new->next_seqno);
+		//VERBOSE("compareth old: rev=%d, nseq=%lld, new: rev=%d, nseq=%lld",
+		//		old->layout_revision, old->next_seqno,
+		//		new->layout_revision, new->next_seqno);
 		if (old->layout_revision == new->layout_revision &&
 				old->next_seqno < new->next_seqno) return 1;
 		if (old->layout_revision < new->layout_revision) return 1;
@@ -209,9 +212,9 @@ static void add_to_ordered(dllist_t *u, blockio_info_t *bi) {
 
 	dllist_elt_t *tmp;
 
-	VERBOSE("insert %d seq=%lld, nseq=%lld in ordered",
-			bi - bi->dev->b->blockio_infos, bi->seqno,
-			bi->next_seqno);
+	//VERBOSE("insert %d seq=%lld, nseq=%lld in ordered",
+	//		bi - bi->dev->b->blockio_infos, bi->seqno,
+	//		bi->next_seqno);
 
 	tmp = dllist_iterate(u, (int (*)(dllist_elt_t*, void*))
 			compare_rev_nseq, bi);
@@ -354,7 +357,9 @@ uint8_t *hash_seqnos(blockio_dev_t *dev, uint8_t *hash_res, blockio_info_t *last
 
 void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 		const char *name) {
-	int i, tmp = 0, tmp2 = 0, tmp3, is_select_block;
+	int tail_macroblock = 0;
+	int i, tmp_no_macroblocks = 0, tmp2 = 0;
+	int no_different_selectblocks, is_select_block;
 	uint64_t highest_seqno = 0;
 	uint8_t hash[32];
 
@@ -388,7 +393,7 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 
 	dev->macroblock_ref = ecalloc(dev->no_macroblocks, sizeof(uint16_t));
 
-	tmp = dev->no_macroblocks;
+	tmp_no_macroblocks = dev->no_macroblocks;
 	dev->no_macroblocks = 0;
 
 	/* check all macroblocks in the map */
@@ -413,7 +418,7 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 					 * a bug */
 					ecch_throw(ECCH_DEFAULT, "unable to open partition, datablock %s", (bi->dev != dev)?"missing":"is empty");
 				}
-				assert(tmp > dev->no_macroblocks);
+				assert(tmp_no_macroblocks > dev->no_macroblocks);
 				dev->macroblock_ref[dev->no_macroblocks++] = i;
 				add_to_used(&dev->used_blocks, bi);
 				add_to_ordered(&dev->ordered, bi);
@@ -445,7 +450,7 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 				bi->no_nonobsolete = 0;
 				bi->no_indices_gc = 0;
 
-				assert(tmp > dev->no_macroblocks);
+				assert(tmp_no_macroblocks > dev->no_macroblocks);
 				dev->macroblock_ref[dev->no_macroblocks++] = i;
 				if (is_select_block)
 					dllist_append(&dev->selected_blocks,
@@ -459,41 +464,30 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 		}
 	}
 	
-	assert(tmp == dev->no_macroblocks);
-
-	tmp = 0;
-	// select tail
-	//VERBOSE("select tail from %d free blocks",
-	//		dllist_get_no_elts(&dev->free_blocks));
+	assert(tmp_no_macroblocks == dev->no_macroblocks);
 
 	verbose_ordered(&dev->ordered);
-	dev->tail_macroblock_global = (blockio_info_t*)dllist_get_nth(&dev->free_blocks, random_custom(&dev->r, dllist_get_no_elts(&dev->free_blocks))) - dev->b->blockio_infos;
+
 #if 0
-	if (blockio_dev_get_macroblock_status(dev,
-				dev->tail_macroblock_global) == NOT_ALLOCATED) {
-		//FIXME, make this non-fatal
-		ecch_throw(ECCH_DEFAULT, "designated followup not available");
-	}
+	dev->tail_macroblock_global = (blockio_info_t*)dllist_get_nth(&dev->free_blocks, random_custom(&dev->r, dllist_get_no_elts(&dev->free_blocks))) - dev->b->blockio_infos;
 #endif
 
-	while (dev->macroblock_ref[tmp] != dev->tail_macroblock_global)  tmp++;
-	assert(tmp < dev->no_macroblocks);
+	while (dev->macroblock_ref[tail_macroblock] !=
+			dev->tail_macroblock_global)  tail_macroblock++;
 
-	//VERBOSE("tail_macroblock=%d, tail_macroblock_global=%d",
-	//		dev->tail_macroblock, dev->tail_macroblock_global);
-	
+	assert(tail_macroblock < dev->no_macroblocks);
+
 	assert(tmp2 <= dev->random_len - 1);
 	//VERBOSE("we have %d different blocks to rebuild prng", tmp2);
 	dev->keep_revisions += tmp2 + 1;
 	//VERBOSE("keep_revisions = %d", dev->keep_revisions);
-	tmp3 = tmp2;
+	no_different_selectblocks = tmp2;
 	random_rescale(&dev->r, dev->no_macroblocks);
-	random_push(&dev->r, tmp);
 	
 	/* first: fill in the blanks in rebuild_prng (if any) with random
 	 * choices of the filled in argument */
 	while (tmp2 < dev->random_len - 1)
-		rebuild_prng[tmp2++] = rebuild_prng[random_custom(&dev->r, tmp3)];
+		rebuild_prng[tmp2++] = rebuild_prng[random_custom(&dev->r, no_different_selectblocks)];
 	
 	/* shuffle */
 	for (i = 0; i < tmp2 - 1; i++) {
@@ -505,6 +499,8 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 		//VERBOSE("swapped %d and %d", i, index);
 	}
 
+	/* push all generated data to the PRNG */
+	random_push(&dev->r, tail_macroblock);
 	for (i = 0; i < tmp2; i++) random_push(&dev->r, rebuild_prng[i]);
 
 	blockio_info_t *latest = dllist_get_tail(&dev->used_blocks);
@@ -580,6 +576,7 @@ void blockio_dev_read_header(blockio_dev_t *dev, uint32_t no,
 	memcpy(bi->seqnos_hash, SEQNOS_HASH, 32);
 	bi->seqno = binio_read_uint64_be(SEQNO);
 	bi->next_seqno = bi->seqno + binio_read_uint32_be(NEXT_SEQNO_DIFF);
+	bi->tail_macroblock_global = binio_read_uint16_be(TAIL_MACROBLOCK_GLOBAL);
 	bi->layout_revision = binio_read_uint16_be(LAYOUT_REVISION);
 	if (bi->seqno > *highest_seqno) {
 		*highest_seqno = bi->seqno;
@@ -686,6 +683,7 @@ void blockio_dev_write_current_macroblock(blockio_dev_t *dev) {
 	binio_write_uint32_be(NEXT_SEQNO_DIFF, dev->bi->next_seqno -
 			dev->bi->seqno);
 	memcpy(MAGIC, magic, sizeof(magic));
+	binio_write_uint16_be(TAIL_MACROBLOCK_GLOBAL, dev->tail_macroblock_global);
 	binio_write_uint16_be(LAYOUT_REVISION, dev->layout_revision);
 	binio_write_uint16_be(NO_MACROBLOCKS, dev->no_macroblocks);
 	binio_write_uint16_be(RESERVED_MACROBLOCKS, dev->reserved_macroblocks);

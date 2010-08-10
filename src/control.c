@@ -280,7 +280,7 @@ static int control_open_create_common(int s, control_thread_priv_t *priv, char *
 		entry->size = 0;
 		if (entry->d.no_macroblocks > entry->d.reserved_macroblocks) entry->size = ((entry->d.no_macroblocks-entry->d.reserved_macroblocks)<<entry->d.b->mesoblk_log)*entry->d.mmpm;
 		scubed3_init(&entry->l, &entry->d);
-		ecch_throw(ECCH_DEFAULT, "break off, we're testing");
+		//ecch_throw(ECCH_DEFAULT, "break off, we're testing");
 	}
 	ecch_catch_all {
 		entry->to_be_deleted = 1;

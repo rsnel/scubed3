@@ -62,6 +62,14 @@ static void stream_close(void *fp) {
 	fclose(fp);
 }
 
+static void *stream_open(const char *path) {
+	void *ret;
+	if (!(ret = fopen(path, "r+")))
+		ecch_throw(ECCH_DEFAULT, "fopening %s: %s", path, strerror(errno));
+
+	return ret;
+}
+
 /* end stream stuff */
 
 #define MAX_MACROBLOCKS		(3*4096*4)
@@ -86,7 +94,6 @@ static void stream_close(void *fp) {
 void blockio_free(blockio_t *b) {
 	assert(b);
 	random_free(&b->r);
-	if (b->close) b->close(b->priv);
 	free(b->blockio_infos);
 }
 
@@ -96,28 +103,31 @@ void blockio_init_file(blockio_t *b, const char *path, uint8_t macroblock_log,
 	struct stat stat_info;
 	struct flock lock;
 	uint64_t tmp;
+	void *priv;
 	assert(b);
 	assert(sizeof(off_t)==8);
 	assert(macroblock_log < 8*sizeof(uint32_t));
 
+	b->open_priv = strdup(path);
+	if (!b->open_priv) FATAL("out of memory");
 	b->macroblock_log = macroblock_log;
 	b->macroblock_size = 1<<macroblock_log;
 	b->mesoblk_log = mesoblk_log;
 
+	b->open = (void* (*)(const void*))stream_open;
 	b->read = stream_read;
 	b->write = stream_write;
 	b->close = stream_close;
 
-	if (!(b->priv = fopen(path, "r+")))
-		FATAL("fopening %s: %s", path, strerror(errno));
+	priv = stream_open(b->open_priv);
 
 	lock.l_type = F_WRLCK;
 	lock.l_whence = SEEK_SET;
 	lock.l_start = 0;
 	lock.l_len = 0;  /* whole file */
 
-	if (fcntl(fileno(b->priv), F_SETLK, &lock) == -1) {
-		if (fcntl(fileno(b->priv), F_GETLK, &lock) == -1) assert(0);
+	if (fcntl(fileno(priv), F_SETLK, &lock) == -1) {
+		if (fcntl(fileno(priv), F_GETLK, &lock) == -1) assert(0);
 
 		FATAL("process with PID %d has already locked %s",
 				lock.l_pid, path);
@@ -134,7 +144,7 @@ void blockio_init_file(blockio_t *b, const char *path, uint8_t macroblock_log,
 		b->no_macroblocks = stat_info.st_size>>b->macroblock_log;
 	} else if (S_ISBLK(stat_info.st_mode)) {
 		DEBUG("%s is a block device", path);
-		if (ioctl(fileno(b->priv), BLKGETSIZE64, &tmp))
+		if (ioctl(fileno(priv), BLKGETSIZE64, &tmp))
 			FATAL("error querying size of blockdevice %s", path);
 
 	} else FATAL("%s is not a regular file", path);
@@ -149,6 +159,7 @@ void blockio_init_file(blockio_t *b, const char *path, uint8_t macroblock_log,
 
 	b->blockio_infos = ecalloc(sizeof(blockio_info_t), b->no_macroblocks);
 	random_init(&b->r, b->no_macroblocks);
+	stream_close(priv);
 }
 
 static const char magic[8] = "SSS3v0.1";
@@ -179,17 +190,32 @@ void blockio_dev_free(blockio_dev_t *dev) {
 	free(dev->tmp_macroblock);
 	free(dev->macroblock_ref);
 	free(dev->name);
+	if (dev->b->close) dev->b->close(dev->io);
 }
 
 static void verbose_ordered(dllist_t *u) {
 	int count = 0;
 	int verbose_ding(void *i, int *count) {
 		blockio_info_t *bi = i - offsetof(blockio_info_t, elt2); 
+		int id = bi - bi->dev->b->blockio_infos;
+		char *state;
+		switch (blockio_dev_get_macroblock_status(bi->dev, id)) {
+			case HAS_DATA:
+				state = "HAS DATA";
+				break;
+			case FREE:
+				state = "FREE";
+				break;
+			case SELECTFROM:
+				state = "SELECT";
+				break;
+			default:
+				assert(0);
+		}
 
-		VERBOSE("i=%3d, id=%3d, rev=%d, seq=%4lld, nseq=%4lld", *count,
-				bi - bi->dev->b->blockio_infos,
-				bi->layout_revision,
-				bi->seqno, bi->next_seqno);
+		VERBOSE("i=%3d, id=%3d, rev=%d, seq=%4lld, nseq=%4lld %s", *count,
+				id, bi->layout_revision,
+				bi->seqno, bi->next_seqno, state);
 		(*count)++;
 		return 1;
 	}
@@ -198,7 +224,6 @@ static void verbose_ordered(dllist_t *u) {
 			verbose_ding, &count);
 }
 
-#if 0
 static blockio_info_t *find_ordered_equal_or_first_after(dllist_t *u, uint16_t rev,
 		uint64_t seqno, uint32_t *index) {
 	struct priv_s {
@@ -240,7 +265,6 @@ static blockio_info_t *find_ordered_equal_or_first_after(dllist_t *u, uint16_t r
 
 	return (blockio_info_t*)(tmp - offsetof(blockio_info_t, elt2));
 }
-#endif
 
 static void add_to_ordered(dllist_t *u, blockio_info_t *bi) {
 	int compare_rev_nseq(void *o, blockio_info_t *new) {
@@ -308,9 +332,9 @@ void blockio_dev_select_next_macroblock(blockio_dev_t *dev, int first) {
 
 	number = dev->macroblock_ref[random_peek(&dev->r, 0)];
 	dev->bi = &dev->b->blockio_infos[number];
-	//VERBOSE("select next: id=%d next_seqno=%lld, bi->seqno=%lld, bi->next_seqno=%lld", number, dev->next_seqno, dev->bi->seqno, dev->bi->next_seqno);
-	//assert(((dev->bi->seqno == dev->bi->next_seqno) && dev->bi->seqno == 0) ||
-	//		dev->next_seqno == dev->bi->next_seqno);
+	VERBOSE("select next: id=%d next_seqno=%lld, bi->seqno=%lld, bi->next_seqno=%lld", number, dev->next_seqno, dev->bi->seqno, dev->bi->next_seqno);
+	assert(((dev->bi->seqno == dev->bi->next_seqno) && dev->bi->seqno == 0) ||
+			dev->next_seqno == dev->bi->next_seqno);
 	dev->bi->seqno = dev->next_seqno;
 	dev->bi->layout_revision = dev->layout_revision;
 
@@ -418,6 +442,9 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 	dllist_init(&dev->selected_blocks);
 	dllist_init(&dev->ordered);
 
+	assert(b->open);
+	dev->io = (b->open)(b->open_priv);
+
 	dev->tmp_macroblock = ecalloc(1, 1<<b->macroblock_log);
 	dev->b = b;
 	dev->c = c;
@@ -499,13 +526,11 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 
 				assert(tmp_no_macroblocks > dev->no_macroblocks);
 				dev->macroblock_ref[dev->no_macroblocks++] = i;
-				if (is_select_block)
+				if (is_select_block) {
 					dllist_append(&dev->selected_blocks,
 							&bi->elt);
-				else {
+				} else {
 					dllist_append(&dev->free_blocks, &bi->elt);
-					bi->layout_revision = 0;
-					bi->next_seqno = bi->seqno = 0;
 				}
 				add_to_ordered(&dev->ordered, bi);
 				break;
@@ -544,9 +569,11 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 		//VERBOSE("swapped %d and %d", i, index);
 	}
 
-#if 0
+#if 1
 	uint64_t walking_seqno = dev->next_seqno;
 	for (i = dev->random_len - 2; i >= 0; i--) {
+		blockio_info_t *bi = &dev->b->blockio_infos[dev->macroblock_ref[rebuild_prng[i]]];
+		if (bi->next_seqno == 0) bi->next_seqno = walking_seqno;
 		VERBOSE("reconstruct %3d(%3d) %4lld",
 				dev->macroblock_ref[rebuild_prng[i]],
 				rebuild_prng[i],
@@ -562,17 +589,17 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 	next_ordered = find_ordered_equal_or_first_after(&dev->ordered, 1, walking_seqno, &index);
 	if (next_ordered) {
 		assert(index < dev->no_macroblocks);
-		VERBOSE("next ordered %3d %4lld rev=%d, choose from %d", next_ordered - dev->b->blockio_infos, next_ordered->next_seqno, next_ordered->layout_revision, index);
+		//VERBOSE("next ordered %3d %4lld rev=%d, choose from %d", next_ordered - dev->b->blockio_infos, next_ordered->next_seqno, next_ordered->layout_revision, index);
 	} else {
 		assert(index == dev->no_macroblocks);
-		VERBOSE("there is no next ordered");
+		//VERBOSE("there is no next ordered");
 	}
 
 	if (next_ordered == &dev->b->blockio_infos[dev->tail_macroblock_global]) {
 		assert(next_ordered->next_seqno == walking_seqno);
 		next_ordered = (void*)next_ordered->elt2.next;
 		index++;
-		if (next_ordered) {
+		if ((dllist_elt_t*)next_ordered != &dev->ordered.tail) {
 			assert(index < dev->no_macroblocks);
 			next_ordered = (void*)next_ordered - offsetof(blockio_info_t, elt2);
 		} else {
@@ -624,6 +651,7 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 			while (dev->macroblock_ref[internal] !=
 				bi - dev->b->blockio_infos) internal++;
 			more_data[--to_generate] = internal;
+			if (bi->next_seqno == 0) bi->next_seqno = walking_seqno;
 			VERBOSE("reconstruct %3d(%3d) %4lld",
 					bi - dev->b->blockio_infos,
 					internal,
@@ -675,7 +703,7 @@ void blockio_dev_read_header(blockio_dev_t *dev, uint32_t no,
 		return;
 	}
 
-	dev->b->read(dev->b->priv, BASE, no<<dev->b->macroblock_log,
+	dev->b->read(dev->io, BASE, no<<dev->b->macroblock_log,
 			1<<dev->b->mesoblk_log);
 	
 	// decrypt indexblock with IV=0: ciphertext is unique due to
@@ -759,7 +787,7 @@ void blockio_dev_read_mesoblk_part(blockio_dev_t *dev, void *buf, uint32_t id,
 
 void blockio_dev_read_mesoblk(blockio_dev_t *dev,
 		void *buf, uint32_t id, uint32_t no) {
-	dev->b->read(dev->b->priv, buf, (id<<dev->b->macroblock_log) +
+	dev->b->read(dev->io, buf, (id<<dev->b->macroblock_log) +
 			((no + 1)<<dev->b->mesoblk_log) +
 			0, 1<<dev->b->mesoblk_log);
 	cipher_dec(dev->c, buf, buf, dev->b->blockio_infos[id].seqno,
@@ -772,7 +800,7 @@ int blockio_check_data_hash(blockio_info_t *bi) {
 		(1<<bi->dev->b->mesoblk_log);
 	char data[size];
 	char hash[32];
-	bi->dev->b->read(bi->dev->b->priv, data,
+	bi->dev->b->read(bi->dev->io, data,
 			(id<<bi->dev->b->macroblock_log) +
 			(1<<bi->dev->b->mesoblk_log), size);
 
@@ -849,7 +877,7 @@ void blockio_dev_write_current_macroblock(blockio_dev_t *dev) {
 	/* encrypt index */
 	cipher_enc(dev->c, BASE, BASE, 0, 0);
 
-	dev->b->write(dev->b->priv, BASE, id<<dev->b->macroblock_log,
+	dev->b->write(dev->io, BASE, id<<dev->b->macroblock_log,
 			1<<dev->b->macroblock_log);
 
 	dev->next_seqno = dev->bi->seqno + 1;

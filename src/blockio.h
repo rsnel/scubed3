@@ -85,6 +85,8 @@ typedef struct blockio_dev_s {
 	uint64_t wasted_keep;
 	uint64_t wasted_gc;
 	uint64_t wasted_empty;
+
+	void *io;
 } blockio_dev_t;
 
 struct blockio_s {
@@ -98,10 +100,11 @@ struct blockio_s {
 
 	random_t r;
 
+	void *(*open)(const void*);
+	void *open_priv;
 	void (*read)(void*, void*, uint64_t, uint32_t);
 	void (*write)(void*, const void*, uint64_t, uint32_t);
 	void (*close)(void*);
-	void *priv;
 };
 
 void blockio_init_file(blockio_t*, const char*, uint8_t, uint8_t);

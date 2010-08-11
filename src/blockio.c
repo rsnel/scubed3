@@ -199,9 +199,12 @@ static void verbose_ordered(dllist_t *u) {
 		blockio_info_t *bi = i - offsetof(blockio_info_t, elt2); 
 		int id = bi - bi->dev->b->blockio_infos;
 		char *state;
+		char buf[16];
 		switch (blockio_dev_get_macroblock_status(bi->dev, id)) {
 			case HAS_DATA:
-				state = "HAS DATA";
+				//state = "DATA";
+				snprintf(buf, 16, "DATA %d", bi->no_indices);
+				state = buf;
 				break;
 			case FREE:
 				state = "FREE";
@@ -213,9 +216,11 @@ static void verbose_ordered(dllist_t *u) {
 				assert(0);
 		}
 
-		VERBOSE("i=%3d, id=%3d, rev=%d, seq=%4lld, nseq=%4lld %s", *count,
+		VERBOSE("i=%3d, id=%3d, rev=%d, seq=%4lld, nseq=%4lld %s%s", *count,
 				id, bi->layout_revision,
-				bi->seqno, bi->next_seqno, state);
+				bi->seqno, bi->next_seqno, state,
+				(id == bi->dev->tail_macroblock_global)?
+				" >TAIL<":"");
 		(*count)++;
 		return 1;
 	}
@@ -523,9 +528,7 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 				assert(tmp_no_macroblocks > dev->no_macroblocks);
 				dev->macroblock_ref[dev->no_macroblocks++] = i;
 				if (is_select_block) {
-					//bi->seqno = 0;
 					bi->next_seqno = 0;
-					//bi->layout_revision = 0;
 					dllist_append(&dev->selected_blocks,
 							&bi->elt);
 				} else {
@@ -568,15 +571,14 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 		//VERBOSE("swapped %d and %d", i, index);
 	}
 
-#if 1
 	uint64_t walking_seqno = dev->next_seqno;
 	for (i = dev->random_len - 2; i >= 0; i--) {
 		blockio_info_t *bi = &dev->b->blockio_infos[dev->macroblock_ref[rebuild_prng[i]]];
 		if (bi->next_seqno == 0) {
-			VERBOSE("assign seqno");
+			//VERBOSE("assign seqno");
 			bi->next_seqno = walking_seqno;
 		} else {
-			VERBOSE("not assign seqno");
+			//VERBOSE("not assign seqno");
 		}
 		VERBOSE("reconstruct %3d(%3d) %4lld",
 				dev->macroblock_ref[rebuild_prng[i]],
@@ -613,10 +615,10 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 		}
 	} else {
 		if (dev->b->blockio_infos[dev->tail_macroblock_global].next_seqno == 0) {
-			VERBOSE("assign seqno");
+			//VERBOSE("assign seqno");
 			dev->b->blockio_infos[dev->tail_macroblock_global].next_seqno = walking_seqno;
 		} else {
-			VERBOSE("not assign seqno");
+			//VERBOSE("not assign seqno");
 		}
 	}
 
@@ -669,13 +671,13 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 					bi->next_seqno);
 			bi->next_seqno = walking_seqno;
 		} else {
-			VERBOSE("not assign seqno %lld, we already have %lld",
-					walking_seqno, bi->next_seqno);
+			//VERBOSE("not assign seqno %lld, we already have %lld",
+			//		walking_seqno, bi->next_seqno);
 		}
-			VERBOSE("recon (rand) %3d(%3d) %4lld",
-					bi - dev->b->blockio_infos,
-					internal,
-					walking_seqno);
+			//VERBOSE("recon (rand) %3d(%3d) %4lld",
+			//		bi - dev->b->blockio_infos,
+			//		internal,
+			//		walking_seqno);
 
 		}
 		walking_seqno++;
@@ -689,7 +691,7 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 		//VERBOSE("pushing %d", more_data[i]);
 		random_push(&dev->r, more_data[i]);
 	}
-#endif
+
 	random_push(&dev->r, tail_macroblock);
 	for (i = 0; i < tmp2; i++) random_push(&dev->r, rebuild_prng[i]);
 

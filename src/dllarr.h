@@ -61,11 +61,15 @@ void *dllarr_iterate(dllarr_t*, dllarr_iterator_t, void*);
 
 void *dllarr_insert(dllarr_t*, void*, void*);
 
+void *dllarr_append(dllarr_t*, void*, void*);
+
 void *dllarr_remove(dllarr_t*, void*);
 
 /* array interface */
 
 void *dllarr_nth(dllarr_t*, int);
+
+int dllarr_index(dllarr_t*, void*);
 
 int dllarr_count(dllarr_t*);
 

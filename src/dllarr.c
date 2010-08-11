@@ -210,6 +210,12 @@ void *dllarr_nth(dllarr_t *a, int n) {
 	return access_ptr(a, a->array[n]);
 }
 
+int dllarr_index(dllarr_t *a, void *at) {
+	dllarr_assert(a);
+	dllarr_elt_t *at_elt = access_elt(a, at);
+	return at_elt->index;
+}
+
 int dllarr_count(dllarr_t *a) {
 	dllarr_assert(a);
 	return a->tail.index;

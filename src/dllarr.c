@@ -179,6 +179,10 @@ void *dllarr_insert(dllarr_t *a, void *new, void *at) {
 	return new;
 }
 
+void *dllarr_append(dllarr_t *a, void *new) {
+	return dllarr_insert(a, new, NULL);
+}
+
 void *dllarr_remove(dllarr_t *a, void *at) {
 	dllarr_assert(a);
 	assert(at);

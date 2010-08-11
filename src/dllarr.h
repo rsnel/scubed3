@@ -61,7 +61,7 @@ void *dllarr_iterate(dllarr_t*, dllarr_iterator_t, void*);
 
 void *dllarr_insert(dllarr_t*, void*, void*);
 
-void *dllarr_append(dllarr_t*, void*, void*);
+void *dllarr_append(dllarr_t*, void*);
 
 void *dllarr_remove(dllarr_t*, void*);
 

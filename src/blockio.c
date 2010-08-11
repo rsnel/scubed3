@@ -194,8 +194,7 @@ void blockio_dev_free(blockio_dev_t *dev) {
 
 void blockio_verbose_ordered(dllist_t *u) {
 	int count = 0;
-	int verbose_ding(void *i, int *count) {
-		blockio_info_t *bi = i - offsetof(blockio_info_t, elt2); 
+	int verbose_ding(blockio_info_t *bi, int *count) {
 		int id = bi - bi->dev->b->blockio_infos;
 		char *state;
 		char buf[16];
@@ -241,8 +240,7 @@ static blockio_info_t *find_ordered_equal_or_first_after(dllist_t *u, uint16_t r
 	
 	};
 	*index = 0;
-	int compare_rev_nseq(void *e, struct priv_s *p) {
-		blockio_info_t *bi = e - offsetof(blockio_info_t, elt2);
+	int compare_rev_nseq(blockio_info_t *bi, struct priv_s *p) {
 		if (bi->layout_revision == p->rev && bi->next_seqno < seqno) {
 			(*p->index)++;
 			return 1;
@@ -261,12 +259,11 @@ static blockio_info_t *find_ordered_equal_or_first_after(dllist_t *u, uint16_t r
 
 	if (!tmp) return NULL;
 
-	return (blockio_info_t*)(tmp - offsetof(blockio_info_t, elt2));
+	return (blockio_info_t*)tmp;
 }
 
 static void add_to_ordered(dllist_t *u, blockio_info_t *bi) {
-	int compare_rev_nseq(void *o, blockio_info_t *new) {
-		blockio_info_t *old = o - offsetof(blockio_info_t, elt2); 
+	int compare_rev_nseq(blockio_info_t *old, blockio_info_t *new) {
 		//VERBOSE("compareth old: rev=%d, nseq=%lld, new: rev=%d, nseq=%lld",
 		//		old->layout_revision, old->next_seqno,
 		//		new->layout_revision, new->next_seqno);
@@ -612,7 +609,7 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 		index++;
 		if ((dllist_elt_t*)next_ordered != &dev->ordered.tail) {
 			assert(index < dev->no_macroblocks);
-			next_ordered = (void*)next_ordered - offsetof(blockio_info_t, elt2);
+			//next_ordered = (void*)next_ordered - offsetof(blockio_info_t, elt2);
 		} else {
 			assert(index == dev->no_macroblocks);
 		}
@@ -630,10 +627,10 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 	walking_seqno++;
 
 
-	void *temper = dllist_get_tail(&dev->ordered);
+	blockio_info_t *temper = dllist_get_tail(&dev->ordered);
 	uint64_t temperder = walking_seqno - 1;
 	if (temper) {
-		temperder = ((blockio_info_t*)(temper - offsetof(blockio_info_t, elt2)))->next_seqno;
+		temperder = temper->next_seqno;
 	}
 
 	VERBOSE("highest next_seqno=%lld", temperder);
@@ -655,17 +652,17 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 			index++;
 			if ((dllist_elt_t*)next_ordered != &dev->ordered.tail) {
 				assert(index < dev->no_macroblocks);
-				next_ordered = (void*)next_ordered - offsetof(blockio_info_t, elt2);
+				//next_ordered = (void*)next_ordered - offsetof(blockio_info_t, elt2);
 			} else {
 				assert(index == dev->no_macroblocks);
 				next_ordered = NULL;
 			}
 		} else {
 			// select next random allowed block
-			void *bla;
+			//void *bla;
 			blockio_info_t *bi;
-			bla = dllist_get_nth(&dev->ordered, random_custom(&dev->r, index));
-			bi = bla - offsetof(blockio_info_t, elt2);
+			bi = dllist_get_nth(&dev->ordered, random_custom(&dev->r, index));
+			//bi = bla - offsetof(blockio_info_t, elt2);
 			while (dev->macroblock_ref[internal] !=
 				bi - dev->b->blockio_infos) internal++;
 			more_data[--to_generate] = internal;

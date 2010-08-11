@@ -136,8 +136,6 @@ void *dllarr_insert(dllarr_t *a, void *new, void *at) {
 	assert(new);
 	dllarr_elt_t *new_elt = (void*)(new + a->offset);
 	dllarr_elt_t *at_elt = at?access_elt(a, at):NULL;
-	VERBOSE("%p %p %d prev=%p, next=%p, index=%d", new, new_elt, a->offset,
-			new_elt->prev, new_elt->next, new_elt->index);
 	assert(!new_elt->prev && !new_elt->next && !new_elt->index);
 
 	if (a->tail.index == a->size) {

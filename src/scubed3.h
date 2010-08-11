@@ -19,7 +19,6 @@
 #define INCLUDE_SCUBED3_H 1
 
 #include <stdint.h>
-#include "dllist.h"
 
 typedef enum scubed3_io_e {
 	SCUBED3_READ,

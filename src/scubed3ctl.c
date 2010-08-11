@@ -576,6 +576,22 @@ static int ctl_mount(ctl_priv_t *priv, char *argv[]) {
 	return 0;
 }
 
+static int ctl_chown(ctl_priv_t *priv, char *argv[]) {
+	if (*argv[1] == '/') {
+		printf("only partition name is allowed\n");
+		return 0;
+	}
+	if (do_server_command(priv->s, 0, "get-aux %s mountpoint",
+				argv[1])) return -1;
+	if (result.status) {
+		printf("no mountpount known for \"%s\"\n", argv[1]);
+		return 0;
+	}
+	var_system("chown %s %s", argv[0], result.argv[0]);
+
+	return 0;
+}
+
 static int ctl_umount(ctl_priv_t *priv, char *argv[]) {
 	if (*argv[0] != '/') { // figure out mountpoint
 		if (do_server_command(priv->s, 0, "get-aux %s mountpoint",
@@ -585,7 +601,6 @@ static int ctl_umount(ctl_priv_t *priv, char *argv[]) {
 			return 0;
 		}
 		var_system("umount %s", result.argv[0]);
-		
 
 	} else var_system("umount %s", argv[0]);
 	return 0;
@@ -617,6 +632,11 @@ static ctl_command_t ctl_commands[] = {
 		.command = ctl_mount,
 		.argc = 2,
 		.usage = " NAME MOUNTPOINT"
+	}, {
+		.head.key = "chown",
+		.command = ctl_chown,
+		.argc = 2,
+		.usage = " OWNER.GROUP NAME|MOUNTPOINT"
 	}, {
 		.head.key = "umount",
 		.command = ctl_umount,

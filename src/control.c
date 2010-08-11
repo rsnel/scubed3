@@ -126,7 +126,7 @@ static int control_verbose_ordered(int s, control_thread_priv_t *priv, char *arg
 	if (!entry) return control_write_complete(s, 1,
 			"partition \"%s\" not found", argv[0]);
 
-	blockio_verbose_ordered(&entry->d.ordered);
+	blockio_verbose_ordered(&entry->d);
 
 	hashtbl_unlock_element_byptr(entry);
 
@@ -446,6 +446,13 @@ static int control_info(int s, control_thread_priv_t *priv, char *argv[]) {
 
 	if (control_write_line(s, "layout_revision=%d\n",entry->d.layout_revision))
 		return -1;
+
+	if (entry->d.bi) {
+		if (control_write_line(s, "no_indices=%d\n",
+					entry->d.bi->no_indices)) return -1;
+	}
+
+	if (control_write_line(s, "updated=%d\n", entry->d.updated)) return -1;
 
 	hashtbl_unlock_element_byptr(entry);
 

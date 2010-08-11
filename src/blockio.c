@@ -190,9 +190,8 @@ void blockio_dev_free(blockio_dev_t *dev) {
 	if (dev->b->close) dev->b->close(dev->io);
 }
 
-void blockio_verbose_ordered(dllarr_t *u) {
-	int count = 0;
-	void *verbose_ding(blockio_info_t *bi, int *count) {
+void blockio_verbose_ordered(blockio_dev_t *dev) {
+	void *verbose_ding(blockio_info_t *bi) {
 		int id = bi - bi->dev->b->blockio_infos;
 		char *state;
 		char buf[16];
@@ -212,16 +211,16 @@ void blockio_verbose_ordered(dllarr_t *u) {
 				assert(0);
 		}
 
-		VERBOSE("i=%3d, id=%3d, rev=%d, seq=%4lld, nseq=%4lld %s%s", *count,
-				id, bi->layout_revision,
+		VERBOSE("i=%3d, id=%3d, rev=%d, seq=%4lld, nseq=%4lld %s%s",
+				bi->ord.index, id, bi->layout_revision,
 				bi->seqno, bi->next_seqno, state,
 				(id == bi->dev->tail_macroblock_global)?
-				" >TAIL<":"");
-		(*count)++;
+				" >TAIL<":(bi->dev->next_seqno - 1 == bi->seqno)?
+				" >NEWEST<":"");
 		return NULL;
 	}
 
-	dllarr_iterate(u, (dllarr_iterator_t)verbose_ding, &count);
+	dllarr_iterate(&dev->ordered, (dllarr_iterator_t)verbose_ding, NULL);
 }
 
 static blockio_info_t *find_ordered_equal_or_first_after(dllarr_t *u, uint16_t rev,
@@ -252,7 +251,7 @@ static blockio_info_t *find_ordered_equal_or_first_after(dllarr_t *u, uint16_t r
 	return dllarr_iterate(u, (dllarr_iterator_t)compare_rev_nseq, &priv);
 }
 
-static void add_to_ordered(dllarr_t *u, blockio_info_t *bi) {
+static void add_to_ordered(blockio_info_t *bi) {
 	void *compare_rev_nseq(blockio_info_t *old, blockio_info_t *new) {
 		if (old->layout_revision == new->layout_revision &&
 				old->next_seqno < new->next_seqno) return NULL;
@@ -260,19 +259,18 @@ static void add_to_ordered(dllarr_t *u, blockio_info_t *bi) {
 		return old;
 	}
 
-	void *tmp;
-
-	tmp = dllarr_iterate(u, (dllarr_iterator_t)compare_rev_nseq, bi);
+	void *tmp = dllarr_iterate(&bi->dev->ordered,
+			(dllarr_iterator_t)compare_rev_nseq, bi);
 
 	//VERBOSE("insert %p %d seq=%lld, nseq=%lld in ordered, at %p",
 	//		bi, bi - bi->dev->b->blockio_infos, bi->seqno,
 	//		bi->next_seqno, tmp);
 
-	dllarr_insert(u, bi, tmp);
+	dllarr_insert(&bi->dev->ordered, bi, tmp);
 }
 
 /* put block in the 'in use' list, sort with sequence number */
-static void add_to_used(dllarr_t *u, blockio_info_t *bi) {
+static void add_to_used(blockio_info_t *bi) {
 	void *compare_seqno(blockio_info_t *bi, uint64_t *seqno) {
 		//VERBOSE("checking %d: goal %llu <= %llu",
 		//		bi - bi->dev->b->blockio_infos,
@@ -283,9 +281,9 @@ static void add_to_used(dllarr_t *u, blockio_info_t *bi) {
 	assert(bi->no_indices);
 
 	dllarr_insert(&bi->dev->used_blocks, bi,
-			dllarr_iterate(u, (dllarr_iterator_t)compare_seqno,
+			dllarr_iterate(&bi->dev->used_blocks,
+				(dllarr_iterator_t)compare_seqno,
 				&bi->seqno));
-
 }
 
 static int last_diff(random_t *r, int last, int *first) {
@@ -301,6 +299,21 @@ static int last_diff(random_t *r, int last, int *first) {
         return 1;
 }
 
+static void update_ordered(blockio_dev_t *dev, blockio_info_t *bi,
+		uint64_t next_seqno, uint16_t layout_revision) {
+	bi->next_seqno = next_seqno;
+	bi->layout_revision = dev->layout_revision;
+	add_to_ordered(dllarr_remove(&dev->ordered, bi));
+}
+
+static void update_ordered_if_needed(blockio_dev_t *dev, blockio_info_t *bi,
+		uint64_t next_seqno, uint16_t layout_revision) {
+	assert(bi->next_seqno < next_seqno);
+	if (bi->next_seqno == 0) update_ordered(dev, bi,
+			next_seqno, layout_revision);
+	else assert(bi->layout_revision == layout_revision);
+}
+
 void blockio_dev_select_next_macroblock(blockio_dev_t *dev, int first) {
 	int number, different = 1, tmp2 = 0, tmp3;
 	uint32_t next_seqno_diff = 0;
@@ -314,13 +327,15 @@ void blockio_dev_select_next_macroblock(blockio_dev_t *dev, int first) {
 	VERBOSE("select next: id=%d next_seqno=%lld, bi->seqno=%lld, bi->next_seqno=%lld", number, dev->next_seqno, dev->bi->seqno, dev->bi->next_seqno);
 	assert(((dev->bi->seqno == dev->bi->next_seqno) && dev->bi->seqno == 0) ||
 			dev->next_seqno == dev->bi->next_seqno);
-	dev->bi->seqno = dev->next_seqno;
+	dev->bi->seqno = dev->next_seqno++;
 	dev->bi->layout_revision = dev->layout_revision;
 
 	do next_seqno_diff++;
 	while (random_peek(&dev->r, next_seqno_diff) != random_peek(&dev->r, 0));
 
-	dev->bi->next_seqno = dev->bi->seqno + next_seqno_diff;
+	update_ordered(dev, dev->bi, dev->bi->seqno +
+			next_seqno_diff, dev->layout_revision);
+
 #if 0
 	VERBOSE("new block %d (local_id=%d) seqno=%lld next_seqno=%lld",
 			number, random_peek(&dev->r, 0),
@@ -330,8 +345,7 @@ void blockio_dev_select_next_macroblock(blockio_dev_t *dev, int first) {
 	if (first) {
 		assert(blockio_dev_get_macroblock_status(dev, number) == FREE);
 		dllarr_remove(&dev->free_blocks, dev->bi); 
-	}
-	else {
+	} else {
 		blockio_dev_change_macroblock_status(dev, number, SELECTFROM, FREE);
 		dllarr_remove(&dev->selected_blocks, dev->bi); 
 	}
@@ -348,10 +362,8 @@ void blockio_dev_select_next_macroblock(blockio_dev_t *dev, int first) {
 							tmp3,  FREE, SELECTFROM);
 					dllarr_move(&dev->selected_blocks,
 							&dev->free_blocks,
-							&dev->b->blockio_infos[tmp3]);
-					//dllarr_remove(&dev->free_blocks, &dev->b->blockio_infos[tmp3]);
-					//dllarr_append(&dev->selected_blocks,
-					//		&dev->b->blockio_infos[tmp3]);
+							&dev->b->blockio_infos[
+							tmp3]);
 				} else assert(blockio_dev_get_macroblock_status(
 							dev,
 							dev->macroblock_ref[
@@ -486,8 +498,8 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 						name, i);
 				assert(tmp_no_macroblocks > dev->no_macroblocks);
 				dev->macroblock_ref[dev->no_macroblocks++] = i;
-				add_to_used(&dev->used_blocks, bi);
-				add_to_ordered(&dev->ordered, bi);
+				add_to_used(bi);
+				add_to_ordered(bi);
 				break;
 
 			case SELECTFROM:
@@ -520,14 +532,14 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 				assert(tmp_no_macroblocks > dev->no_macroblocks);
 				dev->macroblock_ref[dev->no_macroblocks++] = i;
 				dllarr_append(fos, bi);
-				add_to_ordered(&dev->ordered, bi);
+				add_to_ordered(bi);
 				break;
 		}
 	}
 	
 	assert(tmp_no_macroblocks == dev->no_macroblocks);
 
-	blockio_verbose_ordered(&dev->ordered);
+	blockio_verbose_ordered(dev);
 
 	/* find internal number of tail_macroblock */
 	while (dev->macroblock_ref[tail_macroblock] !=
@@ -559,13 +571,11 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 
 	uint64_t walking_seqno = dev->next_seqno;
 	for (i = dev->random_len - 2; i >= 0; i--) {
-		blockio_info_t *bi = &dev->b->blockio_infos[dev->macroblock_ref[rebuild_prng[i]]];
-		if (bi->next_seqno == 0) {
-			//VERBOSE("assign seqno");
-			bi->next_seqno = walking_seqno;
-		} else {
-			//VERBOSE("not assign seqno");
-		}
+		blockio_info_t *bi = &dev->b->blockio_infos[
+			dev->macroblock_ref[rebuild_prng[i]]];
+		update_ordered_if_needed(dev, bi, walking_seqno, 
+				dev->layout_revision);
+
 		VERBOSE("reconstruct %3d(%3d) %4lld",
 				dev->macroblock_ref[rebuild_prng[i]],
 				rebuild_prng[i],
@@ -573,21 +583,23 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 		walking_seqno++;
 	}
 
-	blockio_verbose_ordered(&dev->ordered);
-
 	uint16_t next;
 	uint32_t index = 0;
 	blockio_info_t *next_ordered;
-	
+
+	blockio_verbose_ordered(dev);
 	next = dev->tail_macroblock_global;
 	next_ordered = find_ordered_equal_or_first_after(&dev->ordered, 1, walking_seqno, &index);
 	if (next_ordered) {
+		VERBOSE("accessing ordered %d %d", index, dllarr_index(&dev->ordered, next_ordered));
 		assert(index < dev->no_macroblocks);
 		//VERBOSE("next ordered %3d %4lld rev=%d, choose from %d", next_ordered - dev->b->blockio_infos, next_ordered->next_seqno, next_ordered->layout_revision, index);
 	} else {
 		assert(index == dev->no_macroblocks);
 		//VERBOSE("there is no next ordered");
 	}
+
+	VERBOSE("dev->random_len=%d", dev->random_len);
 
 	if (next_ordered == &dev->b->blockio_infos[dev->tail_macroblock_global]) {
 		assert(next_ordered->next_seqno == walking_seqno);
@@ -598,14 +610,9 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 		} else {
 			assert(index == dev->no_macroblocks);
 		}
-	} else {
-		if (dev->b->blockio_infos[dev->tail_macroblock_global].next_seqno == 0) {
-			//VERBOSE("assign seqno");
-			dev->b->blockio_infos[dev->tail_macroblock_global].next_seqno = walking_seqno;
-		} else {
-			//VERBOSE("not assign seqno");
-		}
-	}
+	} else update_ordered_if_needed(dev,
+			&dev->b->blockio_infos[dev->tail_macroblock_global],
+			walking_seqno, dev->layout_revision);
 
 	VERBOSE("reconstruct %3d(%3d) %4lld",
 			dev->tail_macroblock_global, tail_macroblock, walking_seqno);
@@ -613,13 +620,14 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 
 
 	blockio_info_t *temper = dllarr_last(&dev->ordered);
-	uint64_t temperder = walking_seqno - 1;
-	if (temper) {
-		temperder = temper->next_seqno;
-	}
+	uint64_t temperder = temper?temper->next_seqno:walking_seqno - 1;
 
 	VERBOSE("highest next_seqno=%lld", temperder);
 	int generated = 0;
+	VERBOSE("walking_seqno=%llu", walking_seqno);
+	VERBOSE("random_len=%d", dev->random_len);
+	VERBOSE("temperder=%llu", temperder);
+	VERBOSE("highest_seqno=%llu", highest_seqno);
 	uint32_t to_generate = (uint32_t)(temperder - highest_seqno) - dev->random_len;
 	VERBOSE("to generate=%d", to_generate);
 	uint16_t more_data[to_generate];
@@ -642,25 +650,20 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 			}
 		} else {
 			// select next random allowed block
-			//void *bla;
 			blockio_info_t *bi;
 			bi = dllarr_nth(&dev->ordered,
 					random_custom(&dev->r, index));
 			while (dev->macroblock_ref[internal] !=
 				bi - dev->b->blockio_infos) internal++;
 			more_data[--to_generate] = internal;
-		if (bi->next_seqno == 0) {
-			VERBOSE("assign seqno %lld, prevnext=%lld", walking_seqno,
-					bi->next_seqno);
-			bi->next_seqno = walking_seqno;
-		} else {
-			//VERBOSE("not assign seqno %lld, we already have %lld",
-			//		walking_seqno, bi->next_seqno);
-		}
-			//VERBOSE("recon (rand) %3d(%3d) %4lld",
-			//		bi - dev->b->blockio_infos,
-			//		internal,
-			//		walking_seqno);
+
+			update_ordered_if_needed(dev, bi, walking_seqno, 
+					dev->layout_revision);
+
+			VERBOSE("recon (rand) %3d(%3d) %4lld",
+					bi - dev->b->blockio_infos,
+					internal,
+					walking_seqno);
 
 		}
 		walking_seqno++;
@@ -885,7 +888,7 @@ void blockio_dev_write_current_macroblock(blockio_dev_t *dev) {
 	dev->b->write(dev->io, BASE, id<<dev->b->macroblock_log,
 			1<<dev->b->macroblock_log);
 
-	dev->next_seqno = dev->bi->seqno + 1;
+	//dev->next_seqno = dev->bi->seqno + 1;
 	dev->bi = NULL; /* there is no current block */
 }
 
@@ -952,6 +955,8 @@ int blockio_dev_allocate_macroblocks(blockio_dev_t *dev, uint16_t size) {
 		blockio_dev_change_macroblock_status(dev, select,
 				NOT_ALLOCATED, FREE);
 		dllarr_append(&dev->free_blocks, bi);
+
+		add_to_ordered(bi);
 
 		no_freeb--;
 		memmove(&freeb[no], &freeb[no+1], sizeof(freeb[0])*(no_freeb - no));

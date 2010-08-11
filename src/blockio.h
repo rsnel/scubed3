@@ -152,6 +152,6 @@ blockio_dev_macroblock_status_t blockio_dev_get_macroblock_status(
 // returns errors -1: not enough blocks available, -2 out of memory
 int blockio_dev_allocate_macroblocks(blockio_dev_t*, uint16_t);
 
-void blockio_verbose_ordered(dllarr_t*);
+void blockio_verbose_ordered(blockio_dev_t*);
 
 #endif /* INCLUDE_SCUBED3_BLOCKIO_H */

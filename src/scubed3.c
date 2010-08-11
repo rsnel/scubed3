@@ -230,18 +230,7 @@ void do_cow(scubed3_t *l, uint32_t index, uint32_t muoff,
 				(1<<l->dev->b->mesoblk_log) - size - muoff);
 }
 
-int do_write(scubed3_t *l, uint32_t mesoff, uint32_t muoff, uint32_t size,
-		char *in) {
-	uint32_t index = l->block_indices[mesoff];
-	assert(muoff + size <= 1<<l->dev->b->mesoblk_log);
-	void *addr;
-	/* three possibilities:
-	 * 1. the block is currently in RAM, we update it
-	 * 2. the block was never written, we add it to RAM
-	 * 3. the block is on disk, we obsolete it and add it to RAM */
-
-	l->dev->updated = 1;
-
+void initialize_output(scubed3_t *l) {
 	if (!l->output_initialized) {
 		if (!l->dev->valid) {
 			assert(l->dev->bi->no_indices == 0);
@@ -256,6 +245,39 @@ int do_write(scubed3_t *l, uint32_t mesoff, uint32_t muoff, uint32_t size,
 
 		l->output_initialized = 1;
 	}
+}
+
+int do_write(scubed3_t *l, uint32_t mesoff, uint32_t muoff, uint32_t size,
+		char *in) {
+	uint32_t index = l->block_indices[mesoff];
+	assert(muoff + size <= 1<<l->dev->b->mesoblk_log);
+	void *addr;
+	/* three possibilities:
+	 * 1. the block is currently in RAM, we update it
+	 * 2. the block was never written, we add it to RAM
+	 * 3. the block is on disk, we obsolete it and add it to RAM */
+
+	l->dev->updated = 1;
+
+	initialize_output(l);
+#if 0
+	if (!l->output_initialized) {
+
+		if (!l->dev->valid) {
+			assert(l->dev->bi->no_indices == 0);
+			select_new_macroblock(l);
+		} else {
+			copy_old_block_to_current(l);
+			DEBUG("new block %u (seqno=%llu) has %u mesoblocks due "
+					"to GC of block %u",
+					id(l->dev->bi), l->dev->bi->seqno,
+					l->dev->bi->no_indices, l->dev->tail_macroblock_global);
+		}
+
+		l->output_initialized = 1;
+
+	}
+#endif
 
 	if (ID != id(l->dev->bi)) {
 		/* could be that the new block is full after

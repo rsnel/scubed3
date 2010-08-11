@@ -186,23 +186,23 @@ void *dllarr_append(dllarr_t *a, void *new) {
 void *dllarr_remove(dllarr_t *a, void *at) {
 	dllarr_assert(a);
 	assert(at);
-	dllarr_elt_t *at_elt = access_elt(a, at);
+	dllarr_elt_t *tmp, *at_elt = access_elt(a, at);
 	assert(at_elt->prev);
 	assert(at_elt->prev->next == at_elt);
 	assert(at_elt->next->prev == at_elt);
-
-	at_elt->next->prev = at_elt->prev;
-	at_elt->prev->next = at_elt->next;
-	at_elt->next = at_elt->prev = NULL;
 
 	if (at_elt->next != &a->tail)
 		memmove(&a->array[at_elt->index],
 			&a->array[at_elt->index + 1],
 			(a->tail.index - at_elt->index - 1)*sizeof(*a->array));
-		
-	at_elt->index = 0;
 
-	while ((at_elt = at_elt->next)) at_elt->index--;
+	tmp = at_elt;
+	while ((tmp = tmp->next)) tmp->index--;
+
+	at_elt->next->prev = at_elt->prev;
+	at_elt->prev->next = at_elt->next;
+	at_elt->next = at_elt->prev = NULL;
+	at_elt->index = 0;
 
 	return at;
 }

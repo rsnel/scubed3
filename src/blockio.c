@@ -327,8 +327,6 @@ void blockio_dev_select_next_macroblock(blockio_dev_t *dev, int first) {
 			dev->bi->seqno, dev->bi->next_seqno);
 #endif
 
-
-
 	if (first) {
 		assert(blockio_dev_get_macroblock_status(dev, number) == FREE);
 		dllarr_remove(&dev->free_blocks, dev->bi); 
@@ -348,9 +346,12 @@ void blockio_dev_select_next_macroblock(blockio_dev_t *dev, int first) {
 				if (tmp2 + 1 >= dev->random_len) {
 					blockio_dev_change_macroblock_status(dev,
 							tmp3,  FREE, SELECTFROM);
-					dllarr_remove(&dev->free_blocks, &dev->b->blockio_infos[tmp3]);
-					dllarr_insert(&dev->selected_blocks,
-							&dev->b->blockio_infos[tmp3], NULL);
+					dllarr_move(&dev->selected_blocks,
+							&dev->free_blocks,
+							&dev->b->blockio_infos[tmp3]);
+					//dllarr_remove(&dev->free_blocks, &dev->b->blockio_infos[tmp3]);
+					//dllarr_append(&dev->selected_blocks,
+					//		&dev->b->blockio_infos[tmp3]);
 				} else assert(blockio_dev_get_macroblock_status(
 							dev,
 							dev->macroblock_ref[
@@ -365,7 +366,7 @@ void blockio_dev_select_next_macroblock(blockio_dev_t *dev, int first) {
 
 	if (!dev->valid) {
 		blockio_dev_change_macroblock_status(dev, number, FREE, SELECTFROM);
-		dllarr_insert(&dev->selected_blocks, dev->bi, NULL);
+		dllarr_append(&dev->selected_blocks, dev->bi);
 	}
 
 	dev->tail_macroblock_global =
@@ -518,7 +519,7 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 
 				assert(tmp_no_macroblocks > dev->no_macroblocks);
 				dev->macroblock_ref[dev->no_macroblocks++] = i;
-				dllarr_insert(fos, bi, NULL);
+				dllarr_append(fos, bi);
 				add_to_ordered(&dev->ordered, bi);
 				break;
 		}
@@ -826,13 +827,13 @@ void blockio_dev_write_current_macroblock(blockio_dev_t *dev) {
 	if (dev->bi->no_indices) {
 		blockio_dev_change_macroblock_status(dev,
 				id, FREE, HAS_DATA);
-		dllarr_insert(&dev->used_blocks, dev->bi, NULL);
+		dllarr_append(&dev->used_blocks, dev->bi);
 		dev->wasted_gc += dev->bi->no_indices_gc;
 		dev->useful += (dev->bi->no_indices - dev->bi->no_indices_gc);
 		dev->wasted_empty += dev->mmpm - dev->bi->no_indices;
 	} else {
 		if (blockio_dev_get_macroblock_status(dev, id) != SELECTFROM)
-			dllarr_insert(&dev->free_blocks, dev->bi, NULL);
+			dllarr_append(&dev->free_blocks, dev->bi);
 		dev->wasted_keep += dev->mmpm;
 	}
 
@@ -950,7 +951,7 @@ int blockio_dev_allocate_macroblocks(blockio_dev_t *dev, uint16_t size) {
 		// mark as FREE and assert() that is was NOT_ALLOCATED
 		blockio_dev_change_macroblock_status(dev, select,
 				NOT_ALLOCATED, FREE);
-		dllarr_insert(&dev->free_blocks, bi, NULL);
+		dllarr_append(&dev->free_blocks, bi);
 
 		no_freeb--;
 		memmove(&freeb[no], &freeb[no+1], sizeof(freeb[0])*(no_freeb - no));

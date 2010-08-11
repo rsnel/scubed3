@@ -59,8 +59,9 @@ void obsolete_mesoblk(scubed3_t *l, blockio_info_t *bi, uint32_t no) {
 	if (!bi->no_nonobsolete) {
 		blockio_dev_change_macroblock_status(l->dev,
 				bi - l->dev->b->blockio_infos, HAS_DATA, FREE);
-		dllarr_remove(&l->dev->used_blocks, bi);
-		dllarr_insert(&l->dev->free_blocks, bi, NULL);
+		dllarr_move(&l->dev->free_blocks, &l->dev->used_blocks, bi);
+		//dllarr_remove(&l->dev->used_blocks, bi);
+		//dllarr_append(&l->dev->free_blocks, bi);
 		bi->no_indices = 0;
 		bi->no_indices_gc = 0;
 	}

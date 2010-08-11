@@ -20,6 +20,8 @@
 
 #include <stdint.h>
 
+#define dllarr_move(dest,src,at) dllarr_append(dest, dllarr_remove(src, at))
+
 #define DLLARR_MAGIC 0x37B82A6074110287ULL
 
 struct dllarr_s;

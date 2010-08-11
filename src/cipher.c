@@ -88,10 +88,10 @@ void cipher_init(cipher_t *w, const char *name, size_t size,
 	wipememory(key, key_len);
 }
 
-static void set_iv(unsigned char *iv, uint64_t iv0, uint32_t iv1) {
+static void set_iv(unsigned char *iv, uint64_t iv0, uint32_t iv1, uint32_t iv2) {
 	binio_write_uint64_be(iv, iv0);
 	binio_write_uint32_be(iv + 8, iv1);
-	memset(iv + 12, 0, 4);
+	binio_write_uint32_be(iv + 12, iv2);
 }
 
 #if 0
@@ -113,7 +113,7 @@ void cipher_enc(cipher_t *w, uint8_t *out,
 	unsigned char iv[16];
 
 	assert(w && w->spec && w->spec->enc && w->ctx);
-	set_iv(iv, iv0, iv1);
+	set_iv(iv, iv0, iv1, 0);
 	w->spec->enc(w->ctx, out, in, iv);
 }
 
@@ -122,7 +122,7 @@ void cipher_dec(cipher_t *w, uint8_t *out,
 	unsigned char iv[16];
 
 	assert(w && w->spec && w->spec->dec && w->ctx);
-	set_iv(iv, iv0, iv1);
+	set_iv(iv, iv0, iv1, 0);
 	w->spec->dec(w->ctx, out, in, iv);
 }
 

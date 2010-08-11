@@ -621,7 +621,7 @@ static ctl_command_t ctl_commands[] = {
 		.head.key = "umount",
 		.command = ctl_umount,
 		.argc = 1,
-		.usage = " NAME"
+		.usage = " NAME|MOUNTPOINT"
 	}
 };
 

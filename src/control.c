@@ -121,8 +121,20 @@ typedef struct control_command {
 	char *usage;
 } control_command_t;
 
+static int control_verbose_ordered(int s, control_thread_priv_t *priv, char *argv[]) {
+	fuse_io_entry_t *entry = hashtbl_find_element_bykey(priv->h, argv[0]);
+	if (!entry) return control_write_complete(s, 1,
+			"partition \"%s\" not found", argv[0]);
+
+	blockio_verbose_ordered(&entry->d.ordered);
+
+	hashtbl_unlock_element_byptr(entry);
+
+	return control_write_complete(s, 0, "see debug output");
+}
+
 static int control_check_data_integrity(int s, control_thread_priv_t *priv, char *argv[]) {
-	int check_block(blockio_info_t *bi) {
+	void *check_block(blockio_info_t *bi) {
 		if (blockio_check_data_hash(bi)) {
 			VERBOSE("%d %lld OK", bi - bi->dev->b->blockio_infos,
 					bi->seqno);
@@ -130,13 +142,13 @@ static int control_check_data_integrity(int s, control_thread_priv_t *priv, char
 			VERBOSE("%d %lld FAIL", bi - bi->dev->b->blockio_infos,
 					bi->seqno);
 		}
-		return 1;
+		return NULL;
 	}
 	fuse_io_entry_t *entry = hashtbl_find_element_bykey(priv->h, argv[0]);
 	if (!entry) return control_write_complete(s, 1,
 			"partition \"%s\" not found", argv[0]);
 
-	dllist_iterate(&entry->d.used_blocks, (int (*)(dllist_elt_t*, void*))check_block, NULL);
+	dllarr_iterate(&entry->d.used_blocks, (dllarr_iterator_t)check_block, NULL);
 
 	hashtbl_unlock_element_byptr(entry);
 
@@ -406,15 +418,15 @@ static int control_info(int s, control_thread_priv_t *priv, char *argv[]) {
 				entry->d.reserved_macroblocks)) return -1;
 
 	if (control_write_line(s, "used=%d\n",
-				dllist_get_no_elts(&entry->d.used_blocks)))
+				dllarr_count(&entry->d.used_blocks)))
 		return -1;
 
 	if (control_write_line(s, "selected=%d\n",
-				dllist_get_no_elts(&entry->d.selected_blocks)))
+				dllarr_count(&entry->d.selected_blocks)))
 		return -1;
 
 	if (control_write_line(s, "free=%d\n",
-				dllist_get_no_elts(&entry->d.free_blocks)))
+				dllarr_count(&entry->d.free_blocks)))
 		return -1;
 
 	if (control_write_line(s, "writes=%d\n",entry->d.writes))
@@ -600,6 +612,11 @@ static control_command_t control_commands[] = {
 	}, {
 		.head.key = "check-available",
 		.command = control_check_available,
+		.argc = 1,
+		.usage = " NAME"
+	}, {
+		.head.key = "verbose-ordered",
+		.command = control_verbose_ordered,
 		.argc = 1,
 		.usage = " NAME"
 	}, {

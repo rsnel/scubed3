@@ -28,6 +28,7 @@
 #include "bitmap.h"
 #include "verbose.h"
 #include "binio.h"
+#include "dllarr.h"
 #include "util.h"
 #include "gcry.h"
 #include "ecch.h"
@@ -175,17 +176,15 @@ void blockio_dev_free(blockio_dev_t *dev) {
 	for (i = 0; i < dev->no_macroblocks; i++) {
 		blockio_info_t *bi =
 			&dev->b->blockio_infos[dev->macroblock_ref[i]];
-		bi->elt.prev = NULL;
-		bi->elt.next = NULL;
+		free(bi->indices);
+		bi->dev = NULL;
 		bi->elt2.prev = NULL;
 		bi->elt2.next = NULL;
-		bi->dev = NULL;
-		free(bi->indices);
 	}
 
-	dllist_free(&dev->used_blocks);
-	dllist_free(&dev->free_blocks);
-	dllist_free(&dev->selected_blocks);
+	dllarr_free(&dev->used_blocks);
+	dllarr_free(&dev->free_blocks);
+	dllarr_free(&dev->selected_blocks);
 	dllist_free(&dev->ordered);
 	free(dev->tmp_macroblock);
 	free(dev->macroblock_ref);
@@ -193,7 +192,7 @@ void blockio_dev_free(blockio_dev_t *dev) {
 	if (dev->b->close) dev->b->close(dev->io);
 }
 
-static void verbose_ordered(dllist_t *u) {
+void blockio_verbose_ordered(dllist_t *u) {
 	int count = 0;
 	int verbose_ding(void *i, int *count) {
 		blockio_info_t *bi = i - offsetof(blockio_info_t, elt2); 
@@ -290,21 +289,23 @@ static void add_to_ordered(dllist_t *u, blockio_info_t *bi) {
 	else dllist_append(u, &bi->elt2);
 }
 
-static void add_to_used(dllist_t *u, blockio_info_t *bi) {
-	int compare_seqno(blockio_info_t *bi, uint64_t *seqno) {
-		return *seqno > bi->seqno;
+static void add_to_used(dllarr_t *u, blockio_info_t *bi) {
+	void *compare_seqno(blockio_info_t *bi, uint64_t *seqno) {
+		//VERBOSE("checking %d: goal %llu <= %llu",
+		//		bi - bi->dev->b->blockio_infos,
+		//		*seqno, bi->seqno);
+		if (*seqno > bi->seqno) return NULL;
+		else return bi;
 	}
 	blockio_info_t *tmp;
 
 	/* put block in the 'in use' list, if it contains data */
 	/* sort with sequence number */
 	if (bi->no_indices) {
-		tmp = dllist_iterate(u,
-				(int (*)(dllist_elt_t*, void*))compare_seqno,
+		tmp = dllarr_iterate(u, (dllarr_iterator_t)compare_seqno,
 				&bi->seqno);
 
-		if (tmp) dllist_insert_before(&tmp->elt, &bi->elt);
-		else dllist_append(u, &bi->elt);
+		dllarr_insert(&bi->dev->used_blocks, bi, tmp);
 	}
 }
 
@@ -348,13 +349,16 @@ void blockio_dev_select_next_macroblock(blockio_dev_t *dev, int first) {
 #endif
 
 
-	dllist_remove(&dev->bi->elt); // we don't want the current next
-				      // block on any list
 
-	if (first) assert(blockio_dev_get_macroblock_status(dev,
-				number) == FREE);
-	else blockio_dev_change_macroblock_status(dev,
-			number, SELECTFROM, FREE);
+	if (first) {
+		assert(blockio_dev_get_macroblock_status(dev, number) == FREE);
+		dllarr_remove(&dev->free_blocks, dev->bi); 
+	}
+	else {
+		blockio_dev_change_macroblock_status(dev, number, SELECTFROM, FREE);
+		dllarr_remove(&dev->selected_blocks, dev->bi); 
+	}
+
 
 	//VERBOSE("---start---");
 	while (different <= dev->keep_revisions) {
@@ -365,9 +369,9 @@ void blockio_dev_select_next_macroblock(blockio_dev_t *dev, int first) {
 				if (tmp2 + 1 >= dev->random_len) {
 					blockio_dev_change_macroblock_status(dev,
 							tmp3,  FREE, SELECTFROM);
-					dllist_remove(&dev->b->blockio_infos[tmp3].elt);
-					dllist_append(&dev->selected_blocks,
-							&dev->b->blockio_infos[tmp3].elt);
+					dllarr_remove(&dev->free_blocks, &dev->b->blockio_infos[tmp3]);
+					dllarr_insert(&dev->selected_blocks,
+							&dev->b->blockio_infos[tmp3], NULL);
 				} else assert(blockio_dev_get_macroblock_status(
 							dev,
 							dev->macroblock_ref[
@@ -382,7 +386,7 @@ void blockio_dev_select_next_macroblock(blockio_dev_t *dev, int first) {
 
 	if (!dev->valid) {
 		blockio_dev_change_macroblock_status(dev, number, FREE, SELECTFROM);
-		dllist_append(&dev->selected_blocks, &dev->bi->elt);
+		dllarr_insert(&dev->selected_blocks, dev->bi, NULL);
 	}
 
 	dev->tail_macroblock_global =
@@ -413,13 +417,12 @@ uint8_t *hash_seqnos(blockio_dev_t *dev, uint8_t *hash_res, blockio_info_t *last
         int add_seqno(blockio_info_t *bi, struct hash_seqnos_s *priv) {
                 //printf(" %llu", bi->seqno);
                 gcry_md_write(priv->hd, &bi->seqno, sizeof(uint64_t));
-                return !(priv->last == bi);
+                return (priv->last == bi);
         }
 
         //printf("sns:");
         gcry_call(md_open, &priv.hd, GCRY_MD_SHA256, 0);
-        dllist_iterate(&dev->used_blocks,
-                        (int (*)(dllist_elt_t*, void*))add_seqno, &priv);
+        dllarr_iterate(&dev->used_blocks, (dllarr_iterator_t)add_seqno, &priv);
         //printf("\n");
         memcpy(hash_res, gcry_md_read(priv.hd, 0), 32);
         gcry_md_close(priv.hd);
@@ -438,9 +441,9 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 	assert(b && c);
 	assert(b->mesoblk_log < b->macroblock_log);
 	bitmap_init(&dev->status, 2*b->no_macroblocks);
-	dllist_init(&dev->used_blocks);
-	dllist_init(&dev->free_blocks);
-	dllist_init(&dev->selected_blocks);
+	dllarr_init(&dev->used_blocks, offsetof(blockio_info_t, elt));
+	dllarr_init(&dev->free_blocks, offsetof(blockio_info_t,elt));
+	dllarr_init(&dev->selected_blocks, offsetof(blockio_info_t, elt));
 	dllist_init(&dev->ordered);
 
 	assert(b->open);
@@ -529,10 +532,10 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 				dev->macroblock_ref[dev->no_macroblocks++] = i;
 				if (is_select_block) {
 					bi->next_seqno = 0;
-					dllist_append(&dev->selected_blocks,
-							&bi->elt);
+					dllarr_insert(&dev->selected_blocks,
+							bi, NULL);
 				} else {
-					dllist_append(&dev->free_blocks, &bi->elt);
+					dllarr_insert(&dev->free_blocks, bi, NULL);
 				}
 				add_to_ordered(&dev->ordered, bi);
 				break;
@@ -541,7 +544,7 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 	
 	assert(tmp_no_macroblocks == dev->no_macroblocks);
 
-	verbose_ordered(&dev->ordered);
+	blockio_verbose_ordered(&dev->ordered);
 
 	/* find internal number of tail_macroblock */
 	while (dev->macroblock_ref[tail_macroblock] !=
@@ -587,7 +590,7 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 		walking_seqno++;
 	}
 
-	verbose_ordered(&dev->ordered);
+	blockio_verbose_ordered(&dev->ordered);
 
 	uint16_t next;
 	uint32_t index = 0;
@@ -695,7 +698,7 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 	random_push(&dev->r, tail_macroblock);
 	for (i = 0; i < tmp2; i++) random_push(&dev->r, rebuild_prng[i]);
 
-	blockio_info_t *latest = dllist_get_tail(&dev->used_blocks);
+	blockio_info_t *latest = dllarr_last(&dev->used_blocks);
 	if (latest) {
 		hash_seqnos(dev, hash, latest);
 		if (memcmp(hash, latest->seqnos_hash, 32)) {
@@ -844,13 +847,13 @@ void blockio_dev_write_current_macroblock(blockio_dev_t *dev) {
 	if (dev->bi->no_indices) {
 		blockio_dev_change_macroblock_status(dev,
 				id, FREE, HAS_DATA);
-		dllist_append(&dev->used_blocks, &dev->bi->elt);
+		dllarr_insert(&dev->used_blocks, dev->bi, NULL);
 		dev->wasted_gc += dev->bi->no_indices_gc;
 		dev->useful += (dev->bi->no_indices - dev->bi->no_indices_gc);
 		dev->wasted_empty += dev->mmpm - dev->bi->no_indices;
 	} else {
 		if (blockio_dev_get_macroblock_status(dev, id) != SELECTFROM)
-			dllist_append(&dev->free_blocks, &dev->bi->elt);
+			dllarr_insert(&dev->free_blocks, dev->bi, NULL);
 		dev->wasted_keep += dev->mmpm;
 	}
 
@@ -968,7 +971,7 @@ int blockio_dev_allocate_macroblocks(blockio_dev_t *dev, uint16_t size) {
 		// mark as FREE and assert() that is was NOT_ALLOCATED
 		blockio_dev_change_macroblock_status(dev, select,
 				NOT_ALLOCATED, FREE);
-		dllist_append(&dev->free_blocks, &bi->elt);
+		dllarr_insert(&dev->free_blocks, bi, NULL);
 
 		no_freeb--;
 		memmove(&freeb[no], &freeb[no+1], sizeof(freeb[0])*(no_freeb - no));

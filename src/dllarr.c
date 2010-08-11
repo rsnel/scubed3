@@ -39,6 +39,21 @@ static void dllarr_assert(dllarr_t *a) {
 	}
 }
 
+static void *access_ptr(dllarr_t *a, dllarr_elt_t *elt) {
+	assert(a && elt);
+	if (elt == &a->head || elt == &a->tail) return NULL;
+	return (void*)elt - a->offset;
+}
+
+static dllarr_elt_t *access_elt(dllarr_t *a, void *at) {
+	dllarr_elt_t *at_elt;
+	assert(a && at);
+	at_elt = at + a->offset;
+	assert(at_elt->magic == DLLARR_MAGIC);
+	assert(at_elt != &a->head || at_elt != &a->tail);
+	return at + a->offset;
+}
+
 void dllarr_init(dllarr_t *a, int offset) {
 	assert(a && offset >= 0);
 
@@ -63,35 +78,18 @@ void dllarr_init(dllarr_t *a, int offset) {
 }
 
 void dllarr_free(dllarr_t *a) {
-	dllarr_elt_t *elt;
+	dllarr_elt_t *elt, *del;
 	dllarr_assert(a);
-
-	free(a->array);
 
 	// remove backwards to avoid array copying 
 	elt = a->tail.prev;
 
-	while (elt != &a->head) {
-		//FIXME implement
-		//dllarr_remove(a, elt);
-		elt = elt->prev;
+	while ((del = elt) != &a->head) {
+		elt = del->prev;
+		dllarr_remove(a, access_ptr(a, del));
 	}
-}
 
-static void *access_ptr(dllarr_t *a, dllarr_elt_t *elt) {
-	assert(a && elt);
-	if (elt == &a->head || elt == &a->tail) return NULL;
-
-	return (void*)elt - a->offset;
-}
-
-static dllarr_elt_t *access_elt(dllarr_t *a, void *at) {
-	dllarr_elt_t *at_elt;
-	assert(a && at);
-	at_elt = at + a->offset;
-	assert(at_elt->magic == DLLARR_MAGIC);
-	assert(at_elt != &a->head || at_elt != &a->tail);
-	return at + a->offset;
+	free(a->array);
 }
 
 void *dllarr_first(dllarr_t *a) {
@@ -119,11 +117,14 @@ void *dllarr_prev(dllarr_t *a, void *at) {
 }
 
 void *dllarr_iterate(dllarr_t *a, dllarr_iterator_t func, void *priv) {
-	void *at = dllarr_first(a), *ret;
+	dllarr_assert(a);
+	assert(func);
+	dllarr_elt_t *at_elt = a->head.next;
+	void *ret;
 
-	while (at) {
-		if ((ret = func(at, priv))) return ret;
-		at = dllarr_next(a, at);
+	while (at_elt != &a->tail) {
+		if ((ret = func(access_ptr(a, at_elt), priv))) return ret;
+		at_elt = at_elt->next;
 	}
 
 	return NULL;
@@ -133,8 +134,10 @@ void *dllarr_iterate(dllarr_t *a, dllarr_iterator_t func, void *priv) {
 void *dllarr_insert(dllarr_t *a, void *new, void *at) {
 	dllarr_assert(a);
 	assert(new);
-	dllarr_elt_t *new_elt = access_elt(a, new);
-	dllarr_elt_t *at_elt = access_elt(a, at);
+	dllarr_elt_t *new_elt = (void*)(new + a->offset);
+	dllarr_elt_t *at_elt = at?access_elt(a, at):NULL;
+	VERBOSE("%p %p %d prev=%p, next=%p, index=%d", new, new_elt, a->offset,
+			new_elt->prev, new_elt->next, new_elt->index);
 	assert(!new_elt->prev && !new_elt->next && !new_elt->index);
 
 	if (a->tail.index == a->size) {
@@ -148,13 +151,16 @@ void *dllarr_insert(dllarr_t *a, void *new, void *at) {
 
 	/* insert at NULL means append (insert at tail) */
 	if (!at) at_elt = &a->tail;
-	else memmove(&a->array[at_elt->index + 1],
+	else {
+		memmove(&a->array[at_elt->index + 1],
 			&a->array[at_elt->index],
 			(a->tail.index - at_elt->index)*sizeof(*a->array));
+		assert(at_elt->next);
+		assert(at_elt->next->prev == at_elt);
+	}
 
 	assert(at_elt->prev);
 	assert(at_elt->prev->next == at_elt);
-	assert(at_elt->next->prev == at_elt);
 
 	new_elt->index = at_elt->index;
 	a->array[new_elt->index] = new_elt;
@@ -169,6 +175,8 @@ void *dllarr_insert(dllarr_t *a, void *new, void *at) {
 		at_elt->index++;
 		at_elt = at_elt->next;
 	}
+
+	new_elt->magic = DLLARR_MAGIC;
 
 	return new;
 }

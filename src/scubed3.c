@@ -60,8 +60,8 @@ void obsolete_mesoblk(scubed3_t *l, blockio_info_t *bi, uint32_t no) {
 	if (!bi->no_nonobsolete) {
 		blockio_dev_change_macroblock_status(l->dev,
 				bi - l->dev->b->blockio_infos, HAS_DATA, FREE);
-		dllist_remove(&bi->elt);
-		dllist_append(&l->dev->free_blocks, &bi->elt);
+		dllarr_remove(&l->dev->used_blocks, bi);
+		dllarr_insert(&l->dev->free_blocks, bi, NULL);
 		bi->no_indices = 0;
 		bi->no_indices_gc = 0;
 	}
@@ -126,7 +126,7 @@ void select_new_macroblock(scubed3_t *l) {
 	} while (l->dev->bi->no_indices == l->dev->mmpm);
 }
 
-int replay(blockio_info_t *bi, scubed3_t *l) {
+void *replay(blockio_info_t *bi, scubed3_t *l) {
 	uint32_t k, index;
 
 	//VERBOSE("replay at seqno=%lld (%d indices)", bi->seqno, bi->no_indices);
@@ -139,19 +139,18 @@ int replay(blockio_info_t *bi, scubed3_t *l) {
 		update_block_indices(l, bi->indices[k], id(bi), k);
 	}
 
-	return 1;
+	return NULL;
 }
 
 void debug_stuff(scubed3_t *l) {
-	int que(blockio_info_t *b) {
+	void *que(blockio_info_t *b) {
 		VERBOSE("block %u owned by \"%s\" (seqno %llu) has %u used "
 				"mesoblocks", id(b), b->dev->name,
 				b->seqno, b->no_nonobsolete);
-		return 1;
+		return NULL;
 	}
 	VERBOSE("debug stuff-----");
-	dllist_iterate(&l->dev->used_blocks,
-			(int (*)(dllist_elt_t*, void*))que, NULL);
+	dllarr_iterate(&l->dev->used_blocks, (dllarr_iterator_t)que, NULL);
 	VERBOSE("end-------------");
 }
 
@@ -208,8 +207,7 @@ void scubed3_init(scubed3_t *l, blockio_dev_t *dev) {
 	for (i = 0; i < l->no_block_indices; i++) l->block_indices[i] = 0xFFFFFFFF;
 
 	//debug_stuff(l);
-	dllist_iterate(&dev->used_blocks,
-		(int (*)(dllist_elt_t*, void*))replay, l);
+	dllarr_iterate(&dev->used_blocks, (dllarr_iterator_t)replay, l);
 }
 
 void blockio_dev_fake_mesoblk_part(blockio_dev_t *dev, void *addr,

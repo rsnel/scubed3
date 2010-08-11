@@ -22,6 +22,7 @@
 
 #include "scubed3.h"
 #include "dllist.h"
+#include "dllarr.h"
 #include "cipher.h"
 #include "bitmap.h"
 #include "random.h"

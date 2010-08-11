@@ -29,6 +29,8 @@ static void dllarr_assert(dllarr_t *a) {
 	assert(a && !a->head.prev && !a->tail.next);
 	if (a->head.index) {
 		assert(a->head.index == -1);
+		assert(a->array);
+		assert(a->offset >= 0);
 		assert(a->size > 0);
 		assert(a->size >= a->tail.index);
 		if (!a->tail.index) assert(a->head.next == &a->tail &&
@@ -37,25 +39,27 @@ static void dllarr_assert(dllarr_t *a) {
 	}
 }
 
-void dllarr_init(dllarr_t *a) {
-	assert(a);
+void dllarr_init(dllarr_t *a, int offset) {
+	assert(a && offset >= 0);
 
 	assert(!a->head.prev && !a->tail.next);
-	a->head = {
-		.next = &a->tail;
-		.magic = DLLARR_MAGIC,
-		.index = -1
-	};
-	a->tail = {
-		.prev = &a->head;
-		.magic = DLLARR_MAGIC,
-		.index = 0 
-	};
+
+	a->head.next = &a->tail;
+	a->head.magic = DLLARR_MAGIC;
+	a->head.index = -1;
+
+	a->tail.prev = &a->head;
+	a->tail.magic = DLLARR_MAGIC;
+	a->tail.index = 0;
 
 	a->size = DLLARR_START_SIZE;
 	a->array = calloc(DLLARR_START_SIZE, sizeof(*a->array));
 	if (!a->array) FATAL("calloc(%d, %d): %s", DLLARR_START_SIZE,
 			sizeof(*a->array), strerror(errno));
+
+	a->offset = offset;
+
+	dllarr_assert(a);
 }
 
 void dllarr_free(dllarr_t *a) {
@@ -74,67 +78,133 @@ void dllarr_free(dllarr_t *a) {
 	}
 }
 
-#if 0
-void *dllarr_first(dllarr_t *d) {
-	assert(d && !d->head.prev && !d->tail.next &&
-			d->head.next && d->tail.prev);
+static void *access_ptr(dllarr_t *a, dllarr_elt_t *elt) {
+	assert(a && elt);
+	if (elt == &a->head || elt == &a->tail) return NULL;
 
-	if (d->head.next != &d->tail) return d->head.next;
-
-	return NULL;
+	return (void*)elt - a->offset;
 }
 
-void *dllarr_get_last(dllarr_t *d) {
-	assert(d && !d->head.prev && !d->tail.next &&
-			d->head.next && d->tail.prev);
-
-	if (d->tail.prev != &d->head) return d->tail.prev;
-
-	return NULL;
+static dllarr_elt_t *access_elt(dllarr_t *a, void *at) {
+	dllarr_elt_t *at_elt;
+	assert(a && at);
+	at_elt = at + a->offset;
+	assert(at_elt->magic == DLLARR_MAGIC);
+	assert(at_elt != &a->head || at_elt != &a->tail);
+	return at + a->offset;
 }
 
-void dllarr_insert_at(dllarr_elt_t *here, dllarr_elt_t *e) {
-	assert(e && !e->next && !e->prev);
-	assert(here);
-	assert(here->prev);
-	assert(here->prev->next);
-	here->prev->next = e;
-	e->prev = here->prev;
-	e->next = here;
-	here->prev = e;
-	e->no_elts = here->no_elts;
-	*e->no_elts += 1;
-
+void *dllarr_first(dllarr_t *a) {
+	dllarr_assert(a);
+	return access_ptr(a, a->head.next);
 }
 
-void dllarr_remove(dllarr_elt_t *e) {
-	assert(e);
-	assert(e->next);
-	assert(e->prev);
-	e->next->prev = e->prev;
-	e->prev->next = e->next;
-	*e->no_elts -= 1;
-	e->next = e->prev = NULL;
-	e->no_elts = NULL;
+void *dllarr_next(dllarr_t *a, void *at) {
+	dllarr_assert(a);
+	assert(at);
+	dllarr_elt_t *at_elt = access_elt(a, at);
+	return access_ptr(a, at_elt->next);
 }
 
-void *dllarr_iterate(dllarr_t *d,
-		int (*func)(dllarr_elt_t*, void*), void *arg) {
-	dllarr_elt_t *cur, *next;
-	assert(d && !d->head.prev && !d->tail.next &&
-			d->head.next && d->tail.prev && func);
+void *dllarr_last(dllarr_t *a) {
+	dllarr_assert(a);
+	return access_ptr(a, a->tail.prev);
+}
 
-	cur = d->head.next;
+void *dllarr_prev(dllarr_t *a, void *at) {
+	dllarr_assert(a);
+	assert(at);
+	dllarr_elt_t *at_elt = access_elt(a, at);
+	return access_ptr(a, at_elt->prev);
+}
 
-	while ((next = cur->next)) {
-		if (!func(cur, arg)) return cur;
-		cur = next;
+void *dllarr_iterate(dllarr_t *a, dllarr_iterator_t func, void *priv) {
+	void *at = dllarr_first(a), *ret;
+
+	while (at) {
+		if ((ret = func(at, priv))) return ret;
+		at = dllarr_next(a, at);
 	}
 
 	return NULL;
 }
 
-int dllarr_count(dllarr_t *d) {
-	return d->no_elts;
+
+void *dllarr_insert(dllarr_t *a, void *new, void *at) {
+	dllarr_assert(a);
+	assert(new);
+	dllarr_elt_t *new_elt = access_elt(a, new);
+	dllarr_elt_t *at_elt = access_elt(a, at);
+	assert(!new_elt->prev && !new_elt->next && !new_elt->index);
+
+	if (a->tail.index == a->size) {
+		a->size *= 2;
+		if (a->size*sizeof(*a->array) < 0) FATAL("dllarr too full");
+		if (!(a->array = realloc(a->array, sizeof(*a->array)*a->size)))
+			FATAL("realloc to %d bytes: %s",
+					sizeof(*a->array)*a->size,
+					strerror(errno));
+	}
+
+	/* insert at NULL means append (insert at tail) */
+	if (!at) at_elt = &a->tail;
+	else memmove(&a->array[at_elt->index + 1],
+			&a->array[at_elt->index],
+			(a->tail.index - at_elt->index)*sizeof(*a->array));
+
+	assert(at_elt->prev);
+	assert(at_elt->prev->next == at_elt);
+	assert(at_elt->next->prev == at_elt);
+
+	new_elt->index = at_elt->index;
+	a->array[new_elt->index] = new_elt;
+
+	at_elt->prev->next = new_elt;
+	new_elt->prev = at_elt->prev;
+	new_elt->next = at_elt;
+	at_elt->prev = new_elt;
+
+	// all elements (including tail), must have their index updated
+	while (at_elt) {
+		at_elt->index++;
+		at_elt = at_elt->next;
+	}
+
+	return new;
 }
-#endif
+
+void *dllarr_remove(dllarr_t *a, void *at) {
+	dllarr_assert(a);
+	assert(at);
+	dllarr_elt_t *at_elt = access_elt(a, at);
+	assert(at_elt->prev);
+	assert(at_elt->prev->next == at_elt);
+	assert(at_elt->next->prev == at_elt);
+
+	at_elt->next->prev = at_elt->prev;
+	at_elt->prev->next = at_elt->next;
+	at_elt->next = at_elt->prev = NULL;
+
+	if (at_elt->next != &a->tail)
+		memmove(&a->array[at_elt->index],
+			&a->array[at_elt->index + 1],
+			(a->tail.index - at_elt->index - 1)*sizeof(*a->array));
+		
+	at_elt->index = 0;
+
+	while ((at_elt = at_elt->next)) at_elt->index--;
+
+	return at;
+}
+
+void *dllarr_nth(dllarr_t *a, int n) {
+	dllarr_assert(a);
+	assert(n >= 0 && n < a->tail.index);
+
+	return access_ptr(a, a->array[n]);
+}
+
+int dllarr_count(dllarr_t *a) {
+	dllarr_assert(a);
+	return a->tail.index;
+}

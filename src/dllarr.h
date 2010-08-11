@@ -1,6 +1,6 @@
-/* dllist.h - doubly linked lists
+/* dllarr.h - doubly linked (list and) array
  *
- * Copyright (C) 2009  Rik Snel <rik@snel.it>
+ * Copyright (C) 2010  Rik Snel <rik@snel.it>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -15,47 +15,58 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
-#ifndef INCLUDE_SCUBED3_DLLIST_H
-#define INCLUDE_SCUBED3_DLLIST_H 1
+#ifndef INCLUDE_SCUBED3_DLLARR_H
+#define INCLUDE_SCUBED3_DLLARR_H 1
 
 #include <stdint.h>
 
-typedef struct dllist_elt_s {
-	struct dllist_elt_s *prev;
-	struct dllist_elt_s *next;
-	uint32_t *no_elts;
-} dllist_elt_t;
+#define DLLARR_MAGIC 0x37B82A6074110287ULL
 
-typedef struct dllist_s {
-	dllist_elt_t head; /* oldest */
-	dllist_elt_t tail; /* newest */
-	uint32_t no_elts;
-} dllist_t;
+struct dllarr_s;
 
-void dllist_init(dllist_t*);
+typedef struct dllarr_elt_s {
+	uint64_t magic;
+	struct dllarr_elt_s *prev, *next;
+	int index;
+} dllarr_elt_t;
 
-void dllist_free(dllist_t*);
+typedef struct dllarr_s {
+	dllarr_elt_t head; 
+	dllarr_elt_t tail; 
+	dllarr_elt_t **array;
+	int size, offset;
+} dllarr_t;
 
-void dllist_insert_before(dllist_elt_t*, dllist_elt_t*);
+void dllarr_init(dllarr_t*, int);
 
-void dllist_remove(dllist_elt_t*);
+void dllarr_free(dllarr_t*);
 
-void dllist_append(dllist_t*, dllist_elt_t*);
+/* double linked list access interface */
 
-void dllist_prepend(dllist_t*, dllist_elt_t*);
+void *dllarr_first(dllarr_t*);
 
-void *dllist_get_tail(dllist_t*);
+void *dllarr_next(dllarr_t*, void*);
 
-void *dllist_get_nth(dllist_t*, uint32_t);
+void *dllarr_last(dllarr_t*);
 
-void *dllist_get_head(dllist_t*);
+void *dllarr_prev(dllarr_t*, void*);
 
-void *dllist_iterate(dllist_t*, int (*)(dllist_elt_t*, void*), void*);
+/* iterator head->tail */
 
-int dllist_is_empty(dllist_t*);
+typedef void *(*dllarr_iterator_t)(void*, void*);
 
-uint32_t dllist_get_no_elts(dllist_t*);
+void *dllarr_iterate(dllarr_t*, dllarr_iterator_t, void*);
 
-void dllist_move_append(dllist_t*, dllist_t*);
+/* double linked list management interface */
 
-#endif /* INCLUDE_SCUBED3_DLLIST_H */
+void *dllarr_insert(dllarr_t*, void*, void*);
+
+void *dllarr_remove(dllarr_t*, void*);
+
+/* array interface */
+
+void *dllarr_nth(dllarr_t*, int);
+
+int dllarr_count(dllarr_t*);
+
+#endif /* INCLUDE_SCUBED3_DLLARR_H */

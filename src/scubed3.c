@@ -40,6 +40,7 @@
 #include "blockio.h"
 #include "verbose.h"
 #include "dllist.h"
+#include "dllarr.h"
 #include "util.h"
 #include "cipher.h"
 #include "hashtbl.h"

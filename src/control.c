@@ -150,7 +150,6 @@ static int control_cycle(int s, control_thread_priv_t *priv, char *argv[]) {
 				"integer must be positive");
 	}
 
-	VERBOSE("cycle \"%s\" %s times", argv[0], argv[1]);
 	while (times--) scubed3_cycle(&entry->l);
 
 	hashtbl_unlock_element_byptr(entry);

@@ -819,7 +819,7 @@ void blockio_dev_write_current_macroblock(blockio_dev_t *dev) {
 		dev->wasted_keep += dev->mmpm;
 	}
 
-	DEBUG("write block %u (seqno=%llu)", id, dev->bi->seqno);
+	//DEBUG("write block %u (seqno=%llu)", id, dev->bi->seqno);
 	dev->writes++;
 
 	/* encrypt datablocks (also the unused ones) */

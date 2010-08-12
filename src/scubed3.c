@@ -144,8 +144,8 @@ void initialize_output(scubed3_t *l) {
 
 void scubed3_cycle(scubed3_t *l) {
 	blockio_info_t *bi;
-	VERBOSE("cycle... we have %d free mesoblocks in dev->bi",
-			l->dev->mmpm - l->dev->bi->no_indices);
+	//VERBOSE("cycle... we have %d free mesoblocks in dev->bi",
+	//		l->dev->mmpm - l->dev->bi->no_indices);
 	initialize_output(l);
 #if 0
 	VERBOSE("we have already cleaned up %d, next_seqno=%llu",

@@ -1,3 +1,12 @@
+Copyright
+~~~~~~~~~
+
+GPL v3 or (at your option) any later version
+This program includes the Mersenne Twister implementation of Geoff Kuenning,
+see mtwist.*, the license of those files is LGPL v2 or (at your option) any
+later version.
+
+
 Terminoloy
 ~~~~~~~~~~
 

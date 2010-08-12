@@ -126,6 +126,34 @@ void select_new_macroblock(scubed3_t *l) {
 	} while (l->dev->bi->no_indices == l->dev->mmpm);
 }
 
+void initialize_output(scubed3_t *l) {
+	if (!l->output_initialized) {
+		if (!l->dev->valid) {
+			assert(l->dev->bi->no_indices == 0);
+			select_new_macroblock(l);
+		} else {
+			copy_old_block_to_current(l);
+			DEBUG("new block %u (seqno=%llu) has %u mesoblocks due "
+					"to GC of block %u",
+					id(l->dev->bi), l->dev->bi->seqno,
+					l->dev->bi->no_indices, l->dev->tail_macroblock_global);
+		}
+
+		l->output_initialized = 1;
+	}
+}
+
+void scubed3_cycle(scubed3_t *l) {
+	VERBOSE("cycle... we have %d free mesoblocks in dev->bi",
+			l->dev->mmpm - l->dev->bi->no_indices);
+	initialize_output(l);
+	VERBOSE("we have already cleaned up %d, next_seqno=%llu",
+			l->dev->tail_macroblock_global,
+			l->dev->b->blockio_infos[
+			l->dev->tail_macroblock_global].next_seqno);
+	select_new_macroblock(l);
+}
+
 void *replay(blockio_info_t *bi, scubed3_t *l) {
 	uint32_t k, index;
 
@@ -230,23 +258,6 @@ void do_cow(scubed3_t *l, uint32_t index, uint32_t muoff,
 				(1<<l->dev->b->mesoblk_log) - size - muoff);
 }
 
-void initialize_output(scubed3_t *l) {
-	if (!l->output_initialized) {
-		if (!l->dev->valid) {
-			assert(l->dev->bi->no_indices == 0);
-			select_new_macroblock(l);
-		} else {
-			copy_old_block_to_current(l);
-			DEBUG("new block %u (seqno=%llu) has %u mesoblocks due "
-					"to GC of block %u",
-					id(l->dev->bi), l->dev->bi->seqno,
-					l->dev->bi->no_indices, l->dev->tail_macroblock_global);
-		}
-
-		l->output_initialized = 1;
-	}
-}
-
 int do_write(scubed3_t *l, uint32_t mesoff, uint32_t muoff, uint32_t size,
 		char *in) {
 	uint32_t index = l->block_indices[mesoff];
@@ -260,24 +271,6 @@ int do_write(scubed3_t *l, uint32_t mesoff, uint32_t muoff, uint32_t size,
 	l->dev->updated = 1;
 
 	initialize_output(l);
-#if 0
-	if (!l->output_initialized) {
-
-		if (!l->dev->valid) {
-			assert(l->dev->bi->no_indices == 0);
-			select_new_macroblock(l);
-		} else {
-			copy_old_block_to_current(l);
-			DEBUG("new block %u (seqno=%llu) has %u mesoblocks due "
-					"to GC of block %u",
-					id(l->dev->bi), l->dev->bi->seqno,
-					l->dev->bi->no_indices, l->dev->tail_macroblock_global);
-		}
-
-		l->output_initialized = 1;
-
-	}
-#endif
 
 	if (ID != id(l->dev->bi)) {
 		/* could be that the new block is full after

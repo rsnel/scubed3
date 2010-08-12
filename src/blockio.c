@@ -198,7 +198,7 @@ void blockio_verbose_ordered(blockio_dev_t *dev) {
 		switch (blockio_dev_get_macroblock_status(bi->dev, id)) {
 			case HAS_DATA:
 				//state = "DATA";
-				snprintf(buf, 16, "DATA %d", bi->no_indices);
+				snprintf(buf, 16, "DATA %d", bi->no_nonobsolete);
 				state = buf;
 				break;
 			case FREE:
@@ -576,10 +576,10 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 		update_ordered_if_needed(dev, bi, walking_seqno, 
 				dev->layout_revision);
 
-		VERBOSE("reconstruct %3d(%3d) %4lld",
-				dev->macroblock_ref[rebuild_prng[i]],
-				rebuild_prng[i],
-				walking_seqno);
+		//VERBOSE("reconstruct %3d(%3d) %4lld",
+		//		dev->macroblock_ref[rebuild_prng[i]],
+		//		rebuild_prng[i],
+		//		walking_seqno);
 		walking_seqno++;
 	}
 
@@ -614,22 +614,22 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 			&dev->b->blockio_infos[dev->tail_macroblock_global],
 			walking_seqno, dev->layout_revision);
 
-	VERBOSE("reconstruct %3d(%3d) %4lld",
-			dev->tail_macroblock_global, tail_macroblock, walking_seqno);
+	//VERBOSE("reconstruct %3d(%3d) %4lld",
+	//		dev->tail_macroblock_global, tail_macroblock, walking_seqno);
 	walking_seqno++;
 
 
 	blockio_info_t *temper = dllarr_last(&dev->ordered);
 	uint64_t temperder = temper?temper->next_seqno:walking_seqno - 1;
 
-	VERBOSE("highest next_seqno=%lld", temperder);
+	//VERBOSE("highest next_seqno=%lld", temperder);
 	int generated = 0;
-	VERBOSE("walking_seqno=%llu", walking_seqno);
-	VERBOSE("random_len=%d", dev->random_len);
-	VERBOSE("temperder=%llu", temperder);
-	VERBOSE("highest_seqno=%llu", highest_seqno);
+	//VERBOSE("walking_seqno=%llu", walking_seqno);
+	//VERBOSE("random_len=%d", dev->random_len);
+	//VERBOSE("temperder=%llu", temperder);
+	//VERBOSE("highest_seqno=%llu", highest_seqno);
 	uint32_t to_generate = (uint32_t)(temperder - highest_seqno) - dev->random_len;
-	VERBOSE("to generate=%d", to_generate);
+	//VERBOSE("to generate=%d", to_generate);
 	uint16_t more_data[to_generate];
 	while (next_ordered) {
 		uint16_t internal = 0;
@@ -637,10 +637,10 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 			while (dev->macroblock_ref[internal] !=
 				next_ordered - dev->b->blockio_infos) internal++;
 			more_data[--to_generate] = internal;
-			VERBOSE("recon (list) %3d(%3d) %4lld",
-					next_ordered - dev->b->blockio_infos,
-					internal,
-					next_ordered->next_seqno);
+			//VERBOSE("recon (list) %3d(%3d) %4lld",
+			//		next_ordered - dev->b->blockio_infos,
+			//		internal,
+			//		next_ordered->next_seqno);
 			next_ordered = dllarr_next(&dev->ordered, next_ordered);
 			index++;
 			if (next_ordered) {
@@ -660,17 +660,17 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 			update_ordered_if_needed(dev, bi, walking_seqno, 
 					dev->layout_revision);
 
-			VERBOSE("recon (rand) %3d(%3d) %4lld",
-					bi - dev->b->blockio_infos,
-					internal,
-					walking_seqno);
+			//VERBOSE("recon (rand) %3d(%3d) %4lld",
+			//		bi - dev->b->blockio_infos,
+			//		internal,
+			//		walking_seqno);
 
 		}
 		walking_seqno++;
 		generated++;
 	}
 	assert(to_generate == 0);
-	VERBOSE("generated %d %lld %lld %d", generated, highest_seqno, walking_seqno - 1, (uint32_t)(walking_seqno - highest_seqno) - 1 - dev->random_len);
+	//VERBOSE("generated %d %lld %lld %d", generated, highest_seqno, walking_seqno - 1, (uint32_t)(walking_seqno - highest_seqno) - 1 - dev->random_len);
 
 	/* push all generated data to the PRNG */
 	for (i = 0; i < generated; i++) {
@@ -840,7 +840,7 @@ void blockio_dev_write_current_macroblock(blockio_dev_t *dev) {
 		dev->wasted_keep += dev->mmpm;
 	}
 
-	//DEBUG("write block %u (seqno=%llu)", id, dev->bi->seqno);
+	DEBUG("write block %u (seqno=%llu)", id, dev->bi->seqno);
 	dev->writes++;
 
 	/* encrypt datablocks (also the unused ones) */

@@ -121,6 +121,18 @@ typedef struct control_command {
 	char *usage;
 } control_command_t;
 
+static int control_cycle(int s, control_thread_priv_t *priv, char *argv[]) {
+	fuse_io_entry_t *entry = hashtbl_find_element_bykey(priv->h, argv[0]);
+	if (!entry) return control_write_complete(s, 1,
+			"partition \"%s\" not found", argv[0]);
+
+	scubed3_cycle(&entry->l);
+
+	hashtbl_unlock_element_byptr(entry);
+
+	return control_write_complete(s, 0, "see debug output");
+}
+
 static int control_verbose_ordered(int s, control_thread_priv_t *priv, char *argv[]) {
 	fuse_io_entry_t *entry = hashtbl_find_element_bykey(priv->h, argv[0]);
 	if (!entry) return control_write_complete(s, 1,
@@ -619,6 +631,11 @@ static control_command_t control_commands[] = {
 	}, {
 		.head.key = "check-available",
 		.command = control_check_available,
+		.argc = 1,
+		.usage = " NAME"
+	}, {
+		.head.key = "cycle",
+		.command = control_cycle,
 		.argc = 1,
 		.usage = " NAME"
 	}, {

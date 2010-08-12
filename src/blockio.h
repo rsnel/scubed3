@@ -39,6 +39,7 @@ typedef struct blockio_info_s {
 	uint32_t no_indices;
 	uint32_t no_indices_gc;
 	uint32_t no_nonobsolete;
+	uint32_t no_indices_preempt;
 	uint32_t *indices;
 	struct blockio_dev_s *dev;
 } blockio_info_t;
@@ -85,6 +86,7 @@ typedef struct blockio_dev_s {
 	uint64_t wasted_keep;
 	uint64_t wasted_gc;
 	uint64_t wasted_empty;
+	uint64_t pre_emptive_gc;
 
 	void *io;
 } blockio_dev_t;

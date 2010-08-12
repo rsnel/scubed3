@@ -121,12 +121,37 @@ typedef struct control_command {
 	char *usage;
 } control_command_t;
 
+static int parse_int(int s, int *r, const char *in) {
+        char *end;
+        int ret = strtol(in, &end, 10);
+
+        if (errno && (ret == LONG_MIN || ret == LONG_MAX))
+		return control_write_complete(s, 1, "integer out of range\n");
+
+        if (*end != '\0') 
+                return control_write_complete(s, 1, "unable to parse ->%s<-\n", in);
+
+        *r = ret;
+
+	return 0;
+}
+
 static int control_cycle(int s, control_thread_priv_t *priv, char *argv[]) {
 	fuse_io_entry_t *entry = hashtbl_find_element_bykey(priv->h, argv[0]);
+	int times;
 	if (!entry) return control_write_complete(s, 1,
 			"partition \"%s\" not found", argv[0]);
 
-	scubed3_cycle(&entry->l);
+	if (parse_int(s, &times, argv[1])) return -1;
+
+	if (times < 0) {
+		hashtbl_unlock_element_byptr(entry);
+		return control_write_complete(s, 1,
+				"integer must be positive");
+	}
+
+	VERBOSE("cycle \"%s\" %s times", argv[0], argv[1]);
+	while (times--) scubed3_cycle(&entry->l);
 
 	hashtbl_unlock_element_byptr(entry);
 
@@ -417,7 +442,7 @@ static int control_info(int s, control_thread_priv_t *priv, char *argv[]) {
 	if (!entry) return control_write_complete(s, 1,
 			"partition \"%s\" not found", argv[0]);
 
-
+		// UNLOCK ELEMENTS NEEDED
 	if (control_write_status(s, 0)) return -1;
 
 	if (control_write_line(s, "no_macroblocks=%d\n",
@@ -451,6 +476,9 @@ static int control_info(int s, control_thread_priv_t *priv, char *argv[]) {
 		return -1;
 
 	if (control_write_line(s, "wasted_gc=%d\n",entry->d.wasted_gc))
+		return -1;
+
+	if (control_write_line(s, "pre_emptive_gc=%d\n",entry->d.pre_emptive_gc))
 		return -1;
 
 	if (control_write_line(s, "wasted_empty=%d\n",entry->d.wasted_empty))
@@ -489,21 +517,6 @@ static int control_close(int s, control_thread_priv_t *priv, char *argv[]) {
 
 	//return control_write_complete(s, 0, "partition \"%s\" closed", argv[0]);
 	return control_write_silent_success(s);
-}
-
-static int parse_int(int s, int *r, const char *in) {
-        char *end;
-        int ret = strtol(in, &end, 10);
-
-        if (errno && (ret == LONG_MIN || ret == LONG_MAX))
-		return control_write_complete(s, 1, "integer out of range\n");
-
-        if (*end != '\0') 
-                return control_write_complete(s, 1, "unable to parse ->%s<-\n", in);
-
-        *r = ret;
-
-	return 0;
 }
 
 static int control_resize(int s, control_thread_priv_t *priv, char *argv[]) {
@@ -636,8 +649,8 @@ static control_command_t control_commands[] = {
 	}, {
 		.head.key = "cycle",
 		.command = control_cycle,
-		.argc = 1,
-		.usage = " NAME"
+		.argc = 2,
+		.usage = " NAME COUNT"
 	}, {
 		.head.key = "verbose-ordered",
 		.command = control_verbose_ordered,

@@ -202,7 +202,8 @@ void blockio_verbose_ordered(blockio_dev_t *dev) {
 				state = buf;
 				break;
 			case FREE:
-				state = "FREE";
+				if (bi->seqno) state = "FREE";
+				else state = "UNUSED";
 				break;
 			case SELECTFROM:
 				state = "SELECT";
@@ -224,25 +225,19 @@ void blockio_verbose_ordered(blockio_dev_t *dev) {
 }
 
 static blockio_info_t *find_ordered_equal_or_first_after(dllarr_t *u, uint16_t rev,
-		uint64_t seqno, uint32_t *index) {
+		uint64_t seqno) {
 	struct priv_s {
 		uint16_t rev;
 		uint64_t seqno;
-		uint32_t *index;
 	} priv = {
 		.rev = rev,
 		.seqno = seqno,
-		.index = index,
-	
 	};
-	*index = 0;
 	void *compare_rev_nseq(blockio_info_t *bi, struct priv_s *p) {
 		if (bi->layout_revision == p->rev && bi->next_seqno < seqno) {
-			(*p->index)++;
 			return NULL;
 		}
 		if (bi->layout_revision < rev) {
-			(*p->index)++;
 			return NULL;
 		}
 		return bi;
@@ -324,7 +319,7 @@ void blockio_dev_select_next_macroblock(blockio_dev_t *dev, int first) {
 
 	number = dev->macroblock_ref[random_peek(&dev->r, 0)];
 	dev->bi = &dev->b->blockio_infos[number];
-	VERBOSE("select next: id=%d next_seqno=%lld, bi->seqno=%lld, bi->next_seqno=%lld", number, dev->next_seqno, dev->bi->seqno, dev->bi->next_seqno);
+	//VERBOSE("select next: id=%d next_seqno=%lld, bi->seqno=%lld, bi->next_seqno=%lld", number, dev->next_seqno, dev->bi->seqno, dev->bi->next_seqno);
 	assert(((dev->bi->seqno == dev->bi->next_seqno) && dev->bi->seqno == 0) ||
 			dev->next_seqno == dev->bi->next_seqno);
 	dev->bi->seqno = dev->next_seqno++;
@@ -454,7 +449,8 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 	dev->next_seqno = highest_seqno + 1;
 
 	if (highest_seqno == 0) {
-		VERBOSE("device \"%s\" is empty; no macroblocks found", dev->name);
+		VERBOSE("device \"%s\" is empty; no macroblocks found",
+				dev->name);
 		return;
 	}
 
@@ -503,8 +499,8 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 				break;
 
 			case SELECTFROM:
-				if (bi->seqno == highest_seqno) dev->keep_revisions--;
-				//VERBOSE("found selectblock %d %d", tmp2, i);
+				if (bi->seqno == highest_seqno)
+					dev->keep_revisions--;
 				assert(tmp2 < dev->random_len - 1);
 				rebuild_prng[tmp2++] = dev->no_macroblocks;
 				bi->next_seqno = 0;
@@ -512,7 +508,15 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 			case FREE:
 				/* check if someone has taken it over */
 				if (bi->dev != dev) {
-					if (bi->dev) ecch_throw(ECCH_DEFAULT, "unable to open partition, datablock %d is claimed by partition \"%s\"", bi - dev->b->blockio_infos, bi->dev->name);
+					if (bi->dev) ecch_throw(ECCH_DEFAULT,
+							"unable to open "
+							"partition, datablock "
+							"%d is claimed by "
+							"partition \"%s\"",
+							bi - dev->b->
+							blockio_infos,
+							bi->dev->name);
+
 					/* it is our's, we just never wrote
 					 * to it */
 					bi->next_seqno = bi->seqno = 0;
@@ -528,6 +532,7 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 				bi->no_indices = 0;
 				bi->no_nonobsolete = 0;
 				bi->no_indices_gc = 0;
+				bi->no_indices_preempt = 0;
 
 				assert(tmp_no_macroblocks > dev->no_macroblocks);
 				dev->macroblock_ref[dev->no_macroblocks++] = i;
@@ -539,7 +544,7 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 	
 	assert(tmp_no_macroblocks == dev->no_macroblocks);
 
-	blockio_verbose_ordered(dev);
+	//blockio_verbose_ordered(dev);
 
 	/* find internal number of tail_macroblock */
 	while (dev->macroblock_ref[tail_macroblock] !=
@@ -557,7 +562,8 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 	/* first: fill in the blanks in rebuild_prng (if any) with random
 	 * choices of the filled in argument */
 	while (tmp2 < dev->random_len - 1)
-		rebuild_prng[tmp2++] = rebuild_prng[random_custom(&dev->r, no_different_selectblocks)];
+		rebuild_prng[tmp2++] = rebuild_prng[
+			random_custom(&dev->r, no_different_selectblocks)];
 	
 	/* shuffle */
 	for (i = 0; i < tmp2 - 1; i++) {
@@ -584,32 +590,18 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 	}
 
 	uint16_t next;
-	uint32_t index = 0;
 	blockio_info_t *next_ordered;
 
-	blockio_verbose_ordered(dev);
+	//blockio_verbose_ordered(dev);
 	next = dev->tail_macroblock_global;
-	next_ordered = find_ordered_equal_or_first_after(&dev->ordered, 1, walking_seqno, &index);
-	if (next_ordered) {
-		VERBOSE("accessing ordered %d %d", index, dllarr_index(&dev->ordered, next_ordered));
-		assert(index < dev->no_macroblocks);
-		//VERBOSE("next ordered %3d %4lld rev=%d, choose from %d", next_ordered - dev->b->blockio_infos, next_ordered->next_seqno, next_ordered->layout_revision, index);
-	} else {
-		assert(index == dev->no_macroblocks);
-		//VERBOSE("there is no next ordered");
-	}
-
-	VERBOSE("dev->random_len=%d", dev->random_len);
+	next_ordered = find_ordered_equal_or_first_after(&dev->ordered,
+			1, walking_seqno);
+	//uint32_t index = dllarr_index(&dev->ordered, next_ordered);
 
 	if (next_ordered == &dev->b->blockio_infos[dev->tail_macroblock_global]) {
 		assert(next_ordered->next_seqno == walking_seqno);
 		next_ordered = dllarr_next(&dev->ordered, next_ordered);
-		index++;
-		if (next_ordered) {
-			assert(index < dev->no_macroblocks);
-		} else {
-			assert(index == dev->no_macroblocks);
-		}
+		//index = dllarr_index(&dev->ordered, next_ordered);
 	} else update_ordered_if_needed(dev,
 			&dev->b->blockio_infos[dev->tail_macroblock_global],
 			walking_seqno, dev->layout_revision);
@@ -622,14 +614,8 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 	blockio_info_t *temper = dllarr_last(&dev->ordered);
 	uint64_t temperder = temper?temper->next_seqno:walking_seqno - 1;
 
-	//VERBOSE("highest next_seqno=%lld", temperder);
 	int generated = 0;
-	//VERBOSE("walking_seqno=%llu", walking_seqno);
-	//VERBOSE("random_len=%d", dev->random_len);
-	//VERBOSE("temperder=%llu", temperder);
-	//VERBOSE("highest_seqno=%llu", highest_seqno);
 	uint32_t to_generate = (uint32_t)(temperder - highest_seqno) - dev->random_len;
-	//VERBOSE("to generate=%d", to_generate);
 	uint16_t more_data[to_generate];
 	while (next_ordered) {
 		uint16_t internal = 0;
@@ -642,17 +628,12 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 			//		internal,
 			//		next_ordered->next_seqno);
 			next_ordered = dllarr_next(&dev->ordered, next_ordered);
-			index++;
-			if (next_ordered) {
-				assert(index < dev->no_macroblocks);
-			} else {
-				assert(index == dev->no_macroblocks);
-			}
+			//index = dllarr_index(&dev->ordered, next_ordered);
 		} else {
-			// select next random allowed block
+			// select next random allowed blocks
 			blockio_info_t *bi;
 			bi = dllarr_nth(&dev->ordered,
-					random_custom(&dev->r, index));
+					random_custom(&dev->r, dllarr_index(&dev->ordered, next_ordered)));
 			while (dev->macroblock_ref[internal] !=
 				bi - dev->b->blockio_infos) internal++;
 			more_data[--to_generate] = internal;
@@ -673,20 +654,17 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 	//VERBOSE("generated %d %lld %lld %d", generated, highest_seqno, walking_seqno - 1, (uint32_t)(walking_seqno - highest_seqno) - 1 - dev->random_len);
 
 	/* push all generated data to the PRNG */
-	for (i = 0; i < generated; i++) {
-		//VERBOSE("pushing %d", more_data[i]);
-		random_push(&dev->r, more_data[i]);
-	}
+	for (i = 0; i < generated; i++) random_push(&dev->r, more_data[i]);
 
 	random_push(&dev->r, tail_macroblock);
 	for (i = 0; i < tmp2; i++) random_push(&dev->r, rebuild_prng[i]);
 
 	blockio_info_t *latest = dllarr_last(&dev->used_blocks);
+
 	if (latest) {
 		hash_seqnos(dev, hash, latest);
-		if (memcmp(hash, latest->seqnos_hash, 32)) {
+		if (memcmp(hash, latest->seqnos_hash, 32))
 			ecch_throw(ECCH_DEFAULT, "hash of seqnos of required datablocks faild, revision %lld corrupt", latest->seqno);
-		}
 	}
 
 	VERBOSE("we have %d macroblocks in partition \"%s\", "
@@ -832,6 +810,7 @@ void blockio_dev_write_current_macroblock(blockio_dev_t *dev) {
 				id, FREE, HAS_DATA);
 		dllarr_append(&dev->used_blocks, dev->bi);
 		dev->wasted_gc += dev->bi->no_indices_gc;
+		dev->pre_emptive_gc += dev->bi->no_indices_preempt;
 		dev->useful += (dev->bi->no_indices - dev->bi->no_indices_gc);
 		dev->wasted_empty += dev->mmpm - dev->bi->no_indices;
 	} else {

@@ -60,8 +60,6 @@ void obsolete_mesoblk(scubed3_t *l, blockio_info_t *bi, uint32_t no) {
 		blockio_dev_change_macroblock_status(l->dev,
 				bi - l->dev->b->blockio_infos, HAS_DATA, FREE);
 		dllarr_move(&l->dev->free_blocks, &l->dev->used_blocks, bi);
-		//dllarr_remove(&l->dev->used_blocks, bi);
-		//dllarr_append(&l->dev->free_blocks, bi);
 		bi->no_indices = 0;
 		bi->no_indices_gc = 0;
 	}
@@ -110,6 +108,7 @@ void copy_old_block_to_current(scubed3_t *l) {
 				obsolete_mesoblk(l, bi, k);
 			}
 		}
+
 	}
 }
 
@@ -144,13 +143,53 @@ void initialize_output(scubed3_t *l) {
 }
 
 void scubed3_cycle(scubed3_t *l) {
+	blockio_info_t *bi;
 	VERBOSE("cycle... we have %d free mesoblocks in dev->bi",
 			l->dev->mmpm - l->dev->bi->no_indices);
 	initialize_output(l);
+#if 0
 	VERBOSE("we have already cleaned up %d, next_seqno=%llu",
 			l->dev->tail_macroblock_global,
 			l->dev->b->blockio_infos[
 			l->dev->tail_macroblock_global].next_seqno);
+#endif
+
+	bi = dllarr_first(&l->dev->ordered);
+
+	while ((bi = dllarr_next(&l->dev->ordered, bi))) {
+		uint32_t ctr = 0, index;
+
+		if (bi == l->dev->bi) break;
+
+		//VERBOSE("searching %d %llu %d", bi - bi->dev->b->blockio_infos,
+		//		bi->seqno, bi->no_nonobsolete);
+
+		if (!bi->no_nonobsolete) continue;
+
+		while (ctr < bi->no_indices &&
+				l->dev->bi->no_indices < l->dev->mmpm) {
+			index = l->block_indices[bi->indices[ctr]];
+			if (ID != id(bi)) {
+				ctr++;
+				continue;
+			}
+
+			blockio_dev_read_mesoblk(l->dev, mesoblk(l,
+					l->dev->bi->no_indices), id(bi), ctr);
+
+			add_blockref(l, bi->indices[ctr]);
+
+			obsolete_mesoblk(l, bi, ctr);
+
+			//VERBOSE("pre-emptive gc of %u of %d", index, id(bi));
+			l->dev->bi->no_indices_preempt++;
+
+			ctr++;
+		}
+
+		if (l->dev->bi->no_indices == l->dev->mmpm) break;
+	}
+
 	select_new_macroblock(l);
 }
 

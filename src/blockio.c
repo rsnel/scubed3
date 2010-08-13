@@ -581,7 +581,7 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 		update_ordered_if_needed(dev, bi, walking_seqno, 
 				dev->layout_revision);
 
-		//recon(dev, "slct", rebuild_prng[i], walking_seqno);
+		recon(dev, "slct", rebuild_prng[i], walking_seqno);
 		walking_seqno++;
 	}
 
@@ -592,8 +592,8 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 	else assert(dev->b->blockio_infos[
 			dev->tail_macroblock_global].next_seqno == walking_seqno);
 
-	//recon(dev, "tail", dev->b->blockio_infos[
-	//		dev->tail_macroblock_global].internal, walking_seqno);
+	recon(dev, "tail", dev->b->blockio_infos[
+			dev->tail_macroblock_global].internal, walking_seqno);
 	walking_seqno++;
 
 	blockio_info_t *next_ordered = find_ordered_equal_or_first_after(dev,
@@ -728,7 +728,7 @@ void blockio_dev_read_header(blockio_dev_t *dev, uint32_t no,
 	for (i = 1; i <= bi->no_indices; i++)
 		bi->indices[i-1] = *(((uint32_t*)NO_INDICES) + i);
 	
-	VERBOSE("block %u (seqno=%llu) belongs to \"%s\" and has %d indices, "
+	VERBOSE("block %u (seqno=%llu) of \"%s\" has %d indices, "
 			"next_seqno=%llu",
 			no, bi->seqno, dev->name, bi->no_indices,
 			bi->next_seqno);

@@ -23,6 +23,7 @@
 #include <sys/ioctl.h>
 #include <sys/mount.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <assert.h>
 #include "blockio.h"
 #include "bitmap.h"
@@ -32,6 +33,8 @@
 #include "util.h"
 #include "gcry.h"
 #include "ecch.h"
+#include "mtwist.h"
+#include "randistrs.h"
 
 #define DM_SECTOR_LOG 9
 
@@ -224,30 +227,20 @@ void blockio_verbose_ordered(blockio_dev_t *dev) {
 	dllarr_iterate(&dev->ordered, (dllarr_iterator_t)verbose_ding, NULL);
 }
 
-static blockio_info_t *find_ordered_equal_or_first_after(
+blockio_info_t *find_ordered_equal_or_first_after(
 		blockio_dev_t *dev, uint16_t rev, uint64_t seqno) {
-	struct priv_s {
-		uint16_t rev;
-		uint64_t seqno;
-	} priv = {
-		.rev = rev,
-		.seqno = seqno,
-	};
-	void *compare_rev_nseq(blockio_info_t *bi, struct priv_s *p) {
-		if (bi->layout_revision == p->rev && bi->next_seqno < seqno) {
-			return NULL;
-		}
-		if (bi->layout_revision < rev) {
-			return NULL;
-		}
+	void *compare_rev_nseq(blockio_info_t *bi) {
+		if (bi->layout_revision < rev ||
+				(bi->layout_revision == rev &&
+				 bi->next_seqno < seqno)) return NULL;
 		return bi;
 	}
 
 	return dllarr_iterate(&dev->ordered,
-			(dllarr_iterator_t)compare_rev_nseq, &priv);
+			(dllarr_iterator_t)compare_rev_nseq, NULL);
 }
 
-static void add_to_ordered(blockio_info_t *bi) {
+void add_to_ordered(blockio_info_t *bi) {
 	void *compare_rev_nseq(blockio_info_t *old, blockio_info_t *new) {
 		if (old->layout_revision == new->layout_revision &&
 				old->next_seqno < new->next_seqno) return NULL;
@@ -320,7 +313,7 @@ void blockio_dev_select_next_macroblock(blockio_dev_t *dev, int first) {
 
 	number = dev->macroblock_ref[random_peek(&dev->r, 0)];
 	dev->bi = &dev->b->blockio_infos[number];
-	//VERBOSE("select next: id=%d next_seqno=%lld, bi->seqno=%lld, bi->next_seqno=%lld", number, dev->next_seqno, dev->bi->seqno, dev->bi->next_seqno);
+	VERBOSE("select next: id=%d next_seqno=%lld, bi->seqno=%lld, bi->next_seqno=%lld", number, dev->next_seqno, dev->bi->seqno, dev->bi->next_seqno);
 	assert(((dev->bi->seqno == dev->bi->next_seqno) && dev->bi->seqno == 0) ||
 			dev->next_seqno == dev->bi->next_seqno);
 	dev->bi->seqno = dev->next_seqno++;
@@ -358,12 +351,9 @@ void blockio_dev_select_next_macroblock(blockio_dev_t *dev, int first) {
 							&dev->free_blocks,
 							&dev->b->blockio_infos[
 							tmp3]);
-				} else assert(blockio_dev_get_macroblock_status(
-							dev,
-							dev->macroblock_ref[
-							random_peek(&dev->r,
-								tmp2)]) ==
-						SELECTFROM);
+				} 
+				assert(blockio_dev_get_macroblock_status(dev,
+							tmp3) == SELECTFROM);
 			}
 			different++;
 		}
@@ -423,11 +413,42 @@ uint8_t *hash_seqnos(blockio_dev_t *dev, uint8_t *hash_res, blockio_info_t *last
 			internal, seqno);
 }
 
+static void load_tail_of_ordered_in_prng(blockio_dev_t *dev, uint64_t walking_seqno) {
+	blockio_info_t *bi = dllarr_last(&dev->ordered);
+
+	if (bi->next_seqno < walking_seqno) return;
+
+	while (bi) {
+		//VERBOSE("iterate id=%u c=%llu n=%llu r=%d", bi - dev->b->blockio_infos,
+		//		bi->seqno, bi->next_seqno, bi->layout_revision);
+		uint32_t index = dllarr_index(&dev->ordered, bi);
+		uint64_t count = bi->next_seqno;
+
+		//VERBOSE("next_seqno of current %llu", bi->next_seqno);
+		random_push(&dev->r, bi->internal);
+
+		bi = dllarr_prev(&dev->ordered, bi);
+
+		if (bi->next_seqno < walking_seqno) {
+			count -= walking_seqno;
+			bi = NULL;
+		} else {
+			VERBOSE("next_seqno of previous %llu", bi->next_seqno);
+			count -= bi->next_seqno + 1;
+		}
+		
+		while (count--) random_push(&dev->r, 
+				((blockio_info_t*)dllarr_nth(&dev->ordered,
+					random_custom(&dev->r,
+					       	index)))->internal);
+	}
+}
+
 void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 		const char *name) {
 	int i, tmp_no_macroblocks = 0, tmp2 = 0;
 	int no_different_selectblocks;
-	uint64_t highest_seqno = 0, highest_next_seqno = 0;
+	uint64_t highest_seqno = 0;
 	uint8_t hash[32];
 
 	assert(b && c);
@@ -448,8 +469,7 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 
 	/* read macroblock headers */
 	for (i = 0; i < b->no_macroblocks; i++)
-		blockio_dev_read_header(dev, i, &highest_seqno,
-				&highest_next_seqno);
+		blockio_dev_read_header(dev, i, &highest_seqno);
 	
 	random_init(&dev->r, 0);
 	dev->next_seqno = highest_seqno + 1;
@@ -578,24 +598,51 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 	for (i = dev->random_len - 2; i >= 0; i--) {
 		blockio_info_t *bi = &dev->b->blockio_infos[
 			dev->macroblock_ref[rebuild_prng[i]]];
-		update_ordered_if_needed(dev, bi, walking_seqno, 
-				dev->layout_revision);
+		if (bi->seqno != 0) update_ordered_if_needed(dev, bi,
+				walking_seqno, dev->layout_revision);
 
-		recon(dev, "slct", rebuild_prng[i], walking_seqno);
+		//recon(dev, "slct", rebuild_prng[i], walking_seqno);
 		walking_seqno++;
 	}
 
-	if (dev->b->blockio_infos[dev->tail_macroblock_global].next_seqno == 0)
-		update_ordered(dev, &dev->b->blockio_infos[
-				dev->tail_macroblock_global],
-				walking_seqno, dev->layout_revision);
-	else assert(dev->b->blockio_infos[
-			dev->tail_macroblock_global].next_seqno == walking_seqno);
+	if (dev->b->blockio_infos[dev->tail_macroblock_global].next_seqno != 0)
+		assert(dev->b->blockio_infos[dev->tail_macroblock_global].
+				next_seqno == walking_seqno);
 
-	recon(dev, "tail", dev->b->blockio_infos[
-			dev->tail_macroblock_global].internal, walking_seqno);
+	//recon(dev, "tail", dev->b->blockio_infos[
+	//		dev->tail_macroblock_global].internal, walking_seqno);
 	walking_seqno++;
 
+	/* find first nonzero revision */
+	blockio_info_t *bi = find_ordered_equal_or_first_after(dev, 0,
+			ULLONG_MAX);
+
+	if (bi && bi->layout_revision != dev->layout_revision)
+		ecch_throw(ECCH_DEFAULT, "unable to translate from rev %d to rev %d",
+				bi->layout_revision, dev->layout_revision);
+
+	blockio_verbose_ordered(dev);
+	load_tail_of_ordered_in_prng(dev, walking_seqno);
+#if 0
+	bi = dllarr_last(&dev->ordered);
+	while (bi && bi - dev->b->blockio_infos !=
+		       	dev->tail_macroblock_global) {
+		uint32_t index = dllarr_index(&dev->ordered, bi);
+		uint64_t count = bi->next_seqno;
+
+		random_push(&dev->r, bi->internal);
+
+		bi = dllarr_prev(&dev->ordered, bi);
+		count -= bi->next_seqno + 1;
+		
+		while (count--) random_push(&dev->r, 
+				((blockio_info_t*)dllarr_nth(&dev->ordered,
+					random_custom(&dev->r,
+					       	index)))->internal);
+	}
+#endif
+
+#if 0
 	blockio_info_t *next_ordered = find_ordered_equal_or_first_after(dev,
 			1, walking_seqno);
 
@@ -610,9 +657,6 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 		while (walking_seqno != next_ordered->next_seqno) {
 			blockio_info_t *bi = dllarr_nth(&dev->ordered,
 					random_custom(&dev->r, index));
-
-			update_ordered_if_needed(dev, bi, walking_seqno, 
-					dev->layout_revision);
 
 			more_data[--to_generate] = bi->internal;
 			recon(dev, "rand", more_data[to_generate], walking_seqno);
@@ -630,6 +674,7 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 	/* push all generated data to the PRNG */
 	for (i = 0; i < sizeof(more_data)/sizeof(more_data[0]); i++)
 		random_push(&dev->r, more_data[i]);
+#endif
 
 	random_push(&dev->r, dev->b->blockio_infos[
 			dev->tail_macroblock_global].internal);
@@ -652,7 +697,7 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 }
 
 void blockio_dev_read_header(blockio_dev_t *dev, uint32_t no,
-		uint64_t *highest_seqno, uint64_t *highest_next_seqno) {
+		uint64_t *highest_seqno) {
 	assert(dev && dev->b && no < dev->b->no_macroblocks);
 	blockio_info_t /**tmp,*/ *bi = &dev->b->blockio_infos[no];
 	int i;
@@ -720,8 +765,6 @@ void blockio_dev_read_header(blockio_dev_t *dev, uint32_t no,
 		dev->random_len = binio_read_uint32_be(RANDOM_LEN);
 		bitmap_read(&dev->status, (uint32_t*)BITMAP);
 	}
-	if (bi->next_seqno > *highest_next_seqno) 
-		*highest_next_seqno = bi->next_seqno;
 
 	bi->no_nonobsolete = bi->no_indices = binio_read_uint32_be(NO_INDICES);
 	bi->indices = ecalloc(dev->mmpm, sizeof(uint32_t));
@@ -881,6 +924,7 @@ int blockio_dev_allocate_macroblocks(blockio_dev_t *dev, uint16_t size) {
 	assert(dev->no_macroblocks < dev->no_macroblocks + size); 
 
 	int i, no_freeb = 0;
+	blockio_info_t *bi, *next;
 	uint16_t freeb[dev->b->no_macroblocks];
 	uint16_t no, select = 0;
 	void *tmp;
@@ -898,7 +942,6 @@ int blockio_dev_allocate_macroblocks(blockio_dev_t *dev, uint16_t size) {
 	dev->macroblock_ref = tmp;
 
 	while (size) {
-		blockio_info_t *bi;
 		no = random_custom(&dev->b->r, no_freeb);
 		select = freeb[no];
 		//VERBOSE("select nr %d, %d", no, select);
@@ -924,6 +967,59 @@ int blockio_dev_allocate_macroblocks(blockio_dev_t *dev, uint16_t size) {
 	}
 
 	random_rescale(&dev->r, dev->no_macroblocks);
+
+	dev->layout_revision++;
+
+	if (dev->layout_revision == 1) return 0;
+
+	uint64_t walking_seqno, stop_below;
+	uint8_t mesoblk[1<<dev->b->mesoblk_log];
+	mt_state state = { };
+	memset(mesoblk, 0, sizeof(mesoblk));
+	assert(sizeof(state.statevec) <= sizeof(mesoblk));
+	blockio_verbose_ordered(dev);
+	stop_below = walking_seqno = dev->next_seqno + dev->random_len;
+	//VERBOSE("reconstruction starts at seqno %llu", walking_seqno);
+
+	bi = find_ordered_equal_or_first_after(dev, dev->layout_revision - 1,
+                	walking_seqno);
+
+	/* produce seed for PRNG, these actions must be reproduced
+ 	 * by the loader */
+	cipher_enc(dev->c, mesoblk, mesoblk, dev->no_macroblocks,
+			dev->layout_revision);
+	mts_seedfull(&state, (uint32_t*)mesoblk);
+
+	while (bi && bi->layout_revision < dev->layout_revision) {
+		//VERBOSE("bi->layout_revision=%d", bi->layout_revision);
+        	next = dllarr_next(&dev->ordered, bi);
+        	while (rds_iuniform(&state, 0, dev->no_macroblocks))
+                        	walking_seqno++;
+
+        	bi->next_seqno = walking_seqno;
+        	bi->layout_revision++;
+
+        	add_to_ordered(dllarr_remove(&dev->ordered, bi));
+
+        	walking_seqno++;
+        	bi = next;
+	} 
+
+	blockio_verbose_ordered(dev);
+
+	// safeguard important contents of prng
+	uint16_t random_store[dev->random_len];
+	VERBOSE("1 random_len=%d", dev->random_len);
+	while (dev->random_len--)
+		random_store[dev->random_len] = random_pop(&dev->r);
+	VERBOSE("2 random_len=%d", dev->random_len);
+
+	load_tail_of_ordered_in_prng(dev, stop_below);
+	VERBOSE("3 random_len=%d", dev->random_len);
+
+	while (2*++dev->random_len < sizeof(random_store))
+		random_push(&dev->r, random_store[dev->random_len]);
+	VERBOSE("4 random_len=%d", dev->random_len);
 
 	return 0;
 }

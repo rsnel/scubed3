@@ -65,6 +65,8 @@ void *dllarr_insert(dllarr_t*, void*, void*);
 
 void *dllarr_append(dllarr_t*, void*);
 
+void *dllarr_prepend(dllarr_t*, void*);
+
 void *dllarr_remove(dllarr_t*, void*);
 
 /* array interface */

@@ -118,7 +118,7 @@ void blockio_dev_init(blockio_dev_t*, blockio_t*, cipher_t*, const char*);
 
 void blockio_dev_free(blockio_dev_t*);
 
-void blockio_dev_read_header(blockio_dev_t*, uint32_t, uint64_t*, uint64_t*);
+void blockio_dev_read_header(blockio_dev_t*, uint32_t, uint64_t*);
 
 blockio_info_t *blockio_dev_get_new_macroblock(blockio_dev_t*);
 

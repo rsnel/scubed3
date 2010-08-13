@@ -44,6 +44,10 @@ uint16_t random_pop(random_t *r) {
 	return ret;
 }
 
+void random_flush(random_t *r) {
+	r->buffer_len = 0;
+}
+
 void random_verbose(random_t *r) {
 	int i;
 	assert(r);

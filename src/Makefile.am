@@ -12,5 +12,5 @@ scubed3ctl_SOURCES = scubed3ctl.c verbose.c verbose.h gcry.c gcry.h \
 		     ecch.h ecch.c hashtbl.c hashtbl.h pthd.c pthd.h \
 		     util.c util.h
 AM_CFLAGS = -D_GNU_SOURCE -O2 -g -Wall -Werror -D_FILE_OFFSET_BITS=64
-AM_LDFLAGS = -lpthread -lfuse -lgcrypt
+AM_LDFLAGS = -lpthread -lfuse -lgcrypt -lm
 scubed3ctl_LDFLAGS = -lreadline -lgcrypt -lpthread

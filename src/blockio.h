@@ -18,6 +18,7 @@
 #ifndef INCLUDE_SCUBED3_BLOCKIO_H
 #define INCLUDE_SCUBED3_BLOCKIO_H 1
 
+#define MACROBLOCK_HISTORY	8
 #include <stdint.h>
 
 #include "scubed3.h"
@@ -56,14 +57,16 @@ typedef struct blockio_dev_s {
 			 // respect to this device
 
 	uint64_t next_seqno;
-	uint16_t no_macroblocks; /* assigned to this device */
+	/* current macroblock count is in no_macroblocks[0] */
+	uint16_t no_macroblocks[MACROBLOCK_HISTORY];
+	uint64_t rev_seqnos[MACROBLOCK_HISTORY];
 	uint16_t reserved_macroblocks; /* visible in scubed file */
 	blockio_info_t *bi;
 	int valid;
 
 	/* state of prng */
 	uint16_t layout_revision;
-	uint16_t tail_macroblock_global;
+	uint16_t tail_macroblock;
 	uint32_t random_len;
 	random_t r;
 

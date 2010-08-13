@@ -244,7 +244,8 @@ int do_local_command(ctl_priv_t *priv, ctl_command_t *cmnd, char *format, ...) {
 		if (*argv[argc] == ' ') *argv[argc]++ = '\0';
 	}
 	
-	if (argc != cmnd->argc) {
+	if (argv[0] == '\0') argc--;
+	if (argc != cmnd->argc ) {
 		printf("usage: %s%s\n", cmnd->head.key, cmnd->usage);
 		free(args);
 		return 0;
@@ -537,7 +538,7 @@ you must resize it yourself continue? [No] ";
 static int ctl_mke2fs(ctl_priv_t *priv, char *argv[]) {
 	if (do_server_command(priv->s, 0, "info %s", argv[0])) return -1;
 	if (result.status) {
-		printf(result.argv[0]);
+		printf("%s\n", result.argv[0]);
 		return 0;
 	}
 	if (do_server_command(priv->s, 0, "get-aux %s mountpoint",

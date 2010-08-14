@@ -217,8 +217,9 @@ void blockio_verbose_ordered(blockio_dev_t *dev) {
 				assert(0);
 		}
 
-		VERBOSE("i=%3d, id=%3d, rev=%d, seq=%4lld, nseq=%4lld %s%s",
+		VERBOSE("i=%3d, id=%3d, rev=%d/%d, seq=%4lld, nseq=%4lld %s%s",
 				bi->ord.index, id, bi->layout_revision,
+				bi->orig_layout_revision,
 				bi->seqno, bi->next_seqno, state,
 				(id == bi->dev->tail_macroblock)?
 				" >TAIL<":(bi->dev->next_seqno - 1 == bi->seqno)?
@@ -297,16 +298,6 @@ static void update_ordered(blockio_dev_t *dev, blockio_info_t *bi,
 	add_to_ordered(dllarr_remove(&dev->ordered, bi));
 }
 
-#if 0
-static void update_ordered_if_needed(blockio_dev_t *dev, blockio_info_t *bi,
-		uint64_t next_seqno, uint16_t layout_revision) {
-	assert(bi->next_seqno < next_seqno);
-	if (bi->next_seqno == 0) update_ordered(dev, bi,
-			next_seqno, layout_revision);
-	else assert(bi->layout_revision == layout_revision);
-}
-#endif
-
 void blockio_dev_select_next_macroblock(blockio_dev_t *dev, int first) {
 	int number, different = 1, tmp2 = 0, tmp3;
 	uint32_t next_seqno_diff = 0;
@@ -318,8 +309,6 @@ void blockio_dev_select_next_macroblock(blockio_dev_t *dev, int first) {
 	number = dev->macroblock_ref[random_peek(&dev->r, 0)];
 	dev->bi = &dev->b->blockio_infos[number];
 	VERBOSE("select next: id=%d next_seqno=%lld, bi->seqno=%lld, bi->next_seqno=%lld", number, dev->next_seqno, dev->bi->seqno, dev->bi->next_seqno);
-	//assert(((dev->bi->seqno == dev->bi->next_seqno) && dev->bi->seqno == 0) ||
-	//		dev->next_seqno == dev->bi->next_seqno);
 	assert(dev->bi->next_seqno == 0 || dev->next_seqno == dev->bi->next_seqno);
 	dev->bi->seqno = dev->next_seqno++;
 	dev->bi->layout_revision = dev->layout_revision;
@@ -449,64 +438,52 @@ static void load_tail_of_ordered_in_prng(blockio_dev_t *dev, uint64_t walking_se
 	}
 }
 
-void uptranslate(blockio_info_t *bi, uint64_t walking_seqno,
-		uint64_t starting_seqno,
-		uint16_t new_no_macroblocks,
-		uint16_t work) {
+blockio_info_t *uptranslate(blockio_info_t *bi, uint64_t walking_seqno) {
 	assert(bi);
-	blockio_info_t *next;
+	uint16_t difference = bi->dev->layout_revision - bi->layout_revision - 1;
+	uint64_t starting_seqno = bi->dev->rev_seqnos[difference] - 1;
+	uint16_t new_no_macroblocks = bi->dev->no_macroblocks[difference];
+	uint16_t work = bi->dev->revision_work[difference];
+	blockio_info_t *next, *test;
 	blockio_dev_t *dev = bi->dev;
 	int oldrev = bi->layout_revision;
+
+	/* seed prng */
 	mt_state state = { };
 	uint8_t mesoblk[1<<dev->b->mesoblk_log];
 	memset(mesoblk, 0, sizeof(mesoblk));
 	assert(sizeof(state.statevec) <= sizeof(mesoblk));
 	cipher_enc(dev->c, mesoblk, mesoblk, 0, oldrev + 1);
 	mts_seedfull(&state, (uint32_t*)mesoblk);
+
 	VERBOSE("translating from rev %d to rev %d, first relevant next_seqno=%lld", oldrev, oldrev + 1, walking_seqno);
 	next = NULL;
 
 	while (work) {
+		starting_seqno++;
 		next = dllarr_next(&dev->ordered, bi);
 		assert(next);
-		//while (rds_iuniform(&state, 0, new_no_macroblocks) >= work ||
-		//		starting_seqno < walking_seqno)
-		//	starting_seqno++;
-		do {
-			int rd = rds_iuniform(&state, 0, new_no_macroblocks);
-			//VERBOSE("random %d, work=%d s: %llu, w: %llu", rd, work,
-			//		starting_seqno, walking_seqno);
-			if (rd < work) break;
-			//if (starting_seqno < walking_seqno) break;
+
+		while (rds_iuniform(&state, 0, new_no_macroblocks) >= work)
 			starting_seqno++;
-		} while (1);
 
 		work--;
 
-		//VERBOSE("new_next_seqno=%llu old_next_seqno=%llu", 
-		//		starting_seqno, bi->next_seqno);
+		if (starting_seqno < walking_seqno) continue;
 
-		blockio_info_t *test = find_ordered_equal_or_first_after(dev,
-				oldrev + 1, starting_seqno);
+		test = find_ordered_equal_or_first_after(dev, oldrev + 1,
+				starting_seqno);
 		if (test && test->next_seqno == starting_seqno &&
-				test->layout_revision == oldrev + 1) {
-			//VERBOSE("next seqno %lld taken, skip", starting_seqno);
-		} else {
-			if (starting_seqno >= walking_seqno) {
-				bi->next_seqno = starting_seqno;
-				bi->layout_revision++;
-				add_to_ordered(dllarr_remove(&dev->ordered, bi));
-				bi = next;
-		//		VERBOSE("accepted");
-		//	} else {
-		//		VERBOSE("ignore too-old next seqno");
-			}
-		}
+				test->layout_revision == oldrev + 1) continue;
 
-		starting_seqno++;
+		bi->next_seqno = starting_seqno;
+		bi->layout_revision++;
+		add_to_ordered(dllarr_remove(&dev->ordered, bi));
+		bi = next;
+
 	}
 
-	//blockio_verbose_ordered(bi->dev);
+	return next;
 }
 
 void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
@@ -665,47 +642,18 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 		//VERBOSE("swapped %d and %d", i, index);
 	}
 
-	uint64_t walking_seqno = dev->next_seqno;
-	for (i = dev->random_len - 2; i >= 0; i--) {
-		//blockio_info_t *bi = &dev->b->blockio_infos[
-		//	dev->macroblock_ref[rebuild_prng[i]]];
-	//	if (bi->seqno != 0) update_ordered_if_needed(dev, bi,
-	//			walking_seqno, dev->layout_revision);
-
-		//recon(dev, "slct", rebuild_prng[i], walking_seqno);
-		walking_seqno++;
-	}
-
-	//if (dev->b->blockio_infos[dev->tail_macroblock].next_seqno != 0)
-	//	assert(dev->b->blockio_infos[dev->tail_macroblock].
-	//			next_seqno == walking_seqno);
-
-	//recon(dev, "tail", dev->b->blockio_infos[
-	//		dev->tail_macroblock].internal, walking_seqno);
-	walking_seqno++;
+	uint64_t walking_seqno = dev->next_seqno + dev->random_len;
 
 	/* find first nonzero revision */
 	blockio_info_t *bi = find_ordered_equal_or_first_after(dev, 0,
 			ULLONG_MAX);
+	
+	if (bi->layout_revision + MACROBLOCK_HISTORY < dev->layout_revision)
+		ecch_throw(ECCH_DEFAULT, "not enough information available "
+				"to rebuild prng");
 
-	if (bi && bi->layout_revision != dev->layout_revision) {
-		uint16_t rev = bi->layout_revision;
-		uint16_t difference = dev->layout_revision - bi->layout_revision;
-		VERBOSE("difference: %d", difference);
-		if (difference > MACROBLOCK_HISTORY) ecch_throw(ECCH_DEFAULT,
-				"too much difference, repair not implemented");
-
-		//blockio_verbose_ordered(dev);
-
-		while (difference--) {
-		       	uptranslate(bi, walking_seqno, dev->rev_seqnos[difference],
-				dev->no_macroblocks[difference],
-			       	dev->revision_work[difference]);
-			bi = find_ordered_equal_or_first_after(dev, rev,
-					ULLONG_MAX);
-			rev = bi->layout_revision;
-		}
-	}
+	while (bi->layout_revision < dev->layout_revision)
+		bi = uptranslate(bi, walking_seqno);
 
 	load_tail_of_ordered_in_prng(dev, walking_seqno);
 
@@ -718,7 +666,10 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 	if (latest) {
 		hash_seqnos(dev, hash, latest);
 		if (memcmp(hash, latest->seqnos_hash, 32))
-			ecch_throw(ECCH_DEFAULT, "hash of seqnos of required datablocks faild, revision %lld corrupt", latest->seqno);
+			ecch_throw(ECCH_DEFAULT,
+				       	"hash of seqnos of required "
+					"datablocks failed, revision "
+					"%lld corrupt", latest->seqno);
 	}
 
 	VERBOSE("we have %d macroblocks in partition \"%s\", "
@@ -786,7 +737,8 @@ void blockio_dev_read_header(blockio_dev_t *dev, uint32_t no,
 	memcpy(bi->seqnos_hash, SEQNOS_HASH, 32);
 	bi->seqno = binio_read_uint64_be(SEQNO);
 	bi->next_seqno = bi->seqno + binio_read_uint32_be(NEXT_SEQNO_DIFF);
-	bi->layout_revision = binio_read_uint16_be(LAYOUT_REVISION);
+	bi->orig_layout_revision = 
+		bi->layout_revision = binio_read_uint16_be(LAYOUT_REVISION);
 	if (bi->seqno > *highest_seqno) {
 		*highest_seqno = bi->seqno;
 		dev->layout_revision = bi->layout_revision;

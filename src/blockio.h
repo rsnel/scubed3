@@ -34,6 +34,7 @@ typedef struct blockio_info_s {
 	dllarr_elt_t ord; // for ordered
 	dllarr_elt_t ufs; // for used, free and selected lists
 	uint64_t seqno, next_seqno;
+	uint16_t orig_layout_revision;
 	uint16_t layout_revision;
 	char data_hash[32];
 	char seqnos_hash[32];

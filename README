@@ -138,16 +138,21 @@ Layout of macroblock:
 0x00007A uint8_t macroblock_log
 0x00007B uint8_t mesoblock_log
 0x00007C uint32_t next_seqno
-0x000080 uint16_t no_macroblocks[0] (current revision)
-0x000082 uint16_t no_macroblocks[1] (previous revision, if any)
-0x000084 uint16_t no_macroblocks[2] (...etc...)
-0x000086 ..... 0x00008D  no_macroblocks[3] - no_macroblocks[6]
-0x00008E uint16_t no_macroblocks[7]
-0x000090 uint64_t seqno_of_revision[0] (prng start rev current)
-0x000098 uint64_t seqno_of_revision[1] (prng start rev previous)
-0x0000A0 ..... 0x0000C0 etc
-0x0000C8 uint64_t seqno_of_revision[7] (prng start oldest revision)
-0x0000A0 - 0x0000FF reserved
+0x000080 uint64_t seqno_of_revision[0] (prng start rev current)
+0x000088 uint64_t seqno_of_revision[1] (prng start rev previous)
+0x000090 ..... 0x0000B0 etc
+0x0000B8 uint64_t seqno_of_revision[7] (prng start oldest revision)
+0x0000C0 uint16_t no_macroblocks[0] (current revision)
+0x0000C2 uint16_t no_macroblocks[1] (previous revision, if any)
+0x0000C4 uint16_t no_macroblocks[2] (...etc...)
+0x0000C6 ..... 0x0000CD  no_macroblocks[3] - no_macroblocks[6]
+0x0000CE uint16_t no_macroblocks[7]
+0x0000D0 uint16_t revision_work[0]
+0x0000D2 uint16_t revision_work[1]
+0x0000D4 uint16_t revision_work[2]
+0x0000D6 ..... 0x0000DD revision_work[3] - no_macroblocks[6]
+0x0000DE uint16_t revision_work[7]
+0x0000E0 - 0x0000FF reserved
 0x000100 uint32_t no_indices
 0x000104 uint32_t idx0x01
 0x000108 uint32_t idx0x02

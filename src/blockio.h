@@ -58,8 +58,9 @@ typedef struct blockio_dev_s {
 
 	uint64_t next_seqno;
 	/* current macroblock count is in no_macroblocks[0] */
-	uint16_t no_macroblocks[MACROBLOCK_HISTORY];
 	uint64_t rev_seqnos[MACROBLOCK_HISTORY];
+	uint16_t no_macroblocks[MACROBLOCK_HISTORY];
+	uint16_t revision_work[MACROBLOCK_HISTORY];
 	uint16_t reserved_macroblocks; /* visible in scubed file */
 	blockio_info_t *bi;
 	int valid;

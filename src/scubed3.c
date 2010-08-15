@@ -237,7 +237,7 @@ void scubed3_enlarge(scubed3_t *l) {
 
 	tmp = l->no_block_indices;
 	
-	l->no_block_indices = (l->dev->no_macroblocks[0] -
+	l->no_block_indices = (l->dev->rev[0].no_macroblocks -
 			l->dev->reserved_macroblocks)*l->dev->mmpm;
 	
 	if (tmp == l->no_block_indices) return;
@@ -258,14 +258,14 @@ void scubed3_init(scubed3_t *l, blockio_dev_t *dev) {
 
 	l->dev = dev;
 
-	if (!dev->no_macroblocks[0]) return;
+	if (!dev->rev[0].no_macroblocks) return;
 
 	l->mesobits = (dev->b->macroblock_log - dev->b->mesoblk_log);
 	l->mesomask = 0xFFFFFFFF>>(32 - l->mesobits);
 
-	if (dev->no_macroblocks[0] <= dev->reserved_macroblocks) return;
+	if (dev->rev[0].no_macroblocks <= dev->reserved_macroblocks) return;
 
-	l->no_block_indices = (dev->no_macroblocks[0] -
+	l->no_block_indices = (dev->rev[0].no_macroblocks -
 			dev->reserved_macroblocks)*dev->mmpm;
 
 	//VERBOSE("l->no_block_indices=%d", l->no_block_indices);

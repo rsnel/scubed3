@@ -237,9 +237,9 @@ static int control_status(int s, control_thread_priv_t *priv, char *argv[]) {
 		.macroblocks_left = priv->b->no_macroblocks
 	};
         int rep(control_status_priv_t *priv, fuse_io_entry_t *entry) {
-		size_t size = ((entry->d.no_macroblocks[0] - entry->d.reserved_macroblocks)*entry->d.mmpm);
-		priv->macroblocks_left -= entry->d.no_macroblocks[0];
-                return control_write_line(priv->s, "%07u blocks in %s (%.1fMiB)%s%s%s%s%s\n", entry->d.no_macroblocks[0], entry->head.key, ((entry->d.no_macroblocks[0] >= entry->d.reserved_macroblocks)?size<<entry->d.b->mesoblk_log:0)/(1024.*1024.), entry->inuse?" [U]":"", entry->close_on_release?" [C]":"", entry->mountpoint?" [MNT ":"", entry->mountpoint?entry->mountpoint:"", entry->mountpoint?"]":"");
+		size_t size = ((entry->d.rev[0].no_macroblocks - entry->d.reserved_macroblocks)*entry->d.mmpm);
+		priv->macroblocks_left -= entry->d.rev[0].no_macroblocks;
+                return control_write_line(priv->s, "%07u blocks in %s (%.1fMiB)%s%s%s%s%s\n", entry->d.rev[0].no_macroblocks, entry->head.key, ((entry->d.rev[0].no_macroblocks >= entry->d.reserved_macroblocks)?size<<entry->d.b->mesoblk_log:0)/(1024.*1024.), entry->inuse?" [U]":"", entry->close_on_release?" [C]":"", entry->mountpoint?" [MNT ":"", entry->mountpoint?entry->mountpoint:"", entry->mountpoint?"]":"");
         }
 
 	if (control_write_status(s, 0)) return -1;
@@ -310,7 +310,7 @@ static int control_open_create_common(int s, control_thread_priv_t *priv, char *
 		
 		// encrypt zeroed buffer and hash the result
 		// the output of the hash is used to ID ciphermode + key
-		cipher_enc(&entry->c, (unsigned char*)buf, (unsigned char*)buf, 0, 0);
+		cipher_enc(&entry->c, (unsigned char*)buf, (unsigned char*)buf, 0, 0, 0);
 		gcry_md_hash_buffer(GCRY_MD_SHA256, entry->unique_id.id, buf, sizeof(buf));
 		entry->unique_id.head.key = entry->unique_id.id;
 		entry->unique_id.name = allocname;
@@ -321,12 +321,12 @@ static int control_open_create_common(int s, control_thread_priv_t *priv, char *
 		entry->ids = priv->ids;
 
 		blockio_dev_init(&entry->d, priv->b, &entry->c, argv[0]);
-		if (add && entry->d.no_macroblocks[0]) 
+		if (add && entry->d.rev[0].no_macroblocks) 
 			ecch_throw(ECCH_DEFAULT, "unable to create device: it already exists, use `open' instead");
-		if (!add & !entry->d.no_macroblocks[0])
+		if (!add & !entry->d.rev[0].no_macroblocks)
 			ecch_throw(ECCH_DEFAULT, "unable to open device: passphrase wrong?");
 		entry->size = 0;
-		if (entry->d.no_macroblocks[0] > entry->d.reserved_macroblocks) entry->size = ((entry->d.no_macroblocks[0]-entry->d.reserved_macroblocks)<<entry->d.b->mesoblk_log)*entry->d.mmpm;
+		if (entry->d.rev[0].no_macroblocks > entry->d.reserved_macroblocks) entry->size = ((entry->d.rev[0].no_macroblocks-entry->d.reserved_macroblocks)<<entry->d.b->mesoblk_log)*entry->d.mmpm;
 		scubed3_init(&entry->l, &entry->d);
 		//ecch_throw(ECCH_DEFAULT, "break off, we're testing");
 	}
@@ -445,7 +445,7 @@ static int control_info(int s, control_thread_priv_t *priv, char *argv[]) {
 	if (control_write_status(s, 0)) return -1;
 
 	if (control_write_line(s, "no_macroblocks=%d\n",
-				entry->d.no_macroblocks[0])) return -1;
+				entry->d.rev[0].no_macroblocks)) return -1;
 
 	if (control_write_line(s, "keep_revisions=%d\n",
 				entry->d.keep_revisions)) return -1;
@@ -563,7 +563,7 @@ static int control_resize(int s, control_thread_priv_t *priv, char *argv[]) {
 				"reserved - 4");
 	}
 	
-	if (size < dev->no_macroblocks[0]) {
+	if (size < dev->rev[0].no_macroblocks) {
 		hashtbl_unlock_element_byptr(entry);
 		return control_write_complete(s, 1, "unable to shrink device; "
 				"not yet supported");
@@ -576,7 +576,7 @@ static int control_resize(int s, control_thread_priv_t *priv, char *argv[]) {
 				"has only %d blocks", dev->b->no_macroblocks);
 	}
 
-	size -= dev->no_macroblocks[0];
+	size -= dev->rev[0].no_macroblocks;
 
 	if (size == 0) {
 		hashtbl_unlock_element_byptr(entry);
@@ -599,8 +599,8 @@ static int control_resize(int s, control_thread_priv_t *priv, char *argv[]) {
 
 	dev->updated = 1;
 
-	if (entry->d.no_macroblocks[0] > entry->d.reserved_macroblocks)
-		entry->size = ((entry->d.no_macroblocks[0] - 
+	if (entry->d.rev[0].no_macroblocks > entry->d.reserved_macroblocks)
+		entry->size = ((entry->d.rev[0].no_macroblocks - 
 					entry->d.reserved_macroblocks)<<
 				entry->d.b->mesoblk_log)*entry->d.mmpm;
 	scubed3_enlarge(&entry->l);

@@ -178,7 +178,7 @@ void blockio_dev_free(blockio_dev_t *dev) {
 	random_free(&dev->r);
 	bitmap_free(&dev->status);
 
-	for (i = 0; i < dev->no_macroblocks[0]; i++) {
+	for (i = 0; i < dev->rev[0].no_macroblocks; i++) {
 		blockio_info_t *bi =
 			&dev->b->blockio_infos[dev->macroblock_ref[i]];
 		free(bi->indices);
@@ -219,7 +219,7 @@ void blockio_verbose_ordered(blockio_dev_t *dev) {
 
 		VERBOSE("i=%3d, id=%3d, rev=%d/%d, seq=%4lld, nseq=%4lld %s%s",
 				bi->ord.index, id, bi->layout_revision,
-				bi->orig_layout_revision,
+				bi->hard_layout_revision,
 				bi->seqno, bi->next_seqno, state,
 				(id == bi->dev->tail_macroblock)?
 				" >TAIL<":(bi->dev->next_seqno - 1 == bi->seqno)?
@@ -438,52 +438,71 @@ static void load_tail_of_ordered_in_prng(blockio_dev_t *dev, uint64_t walking_se
 	}
 }
 
-blockio_info_t *uptranslate(blockio_info_t *bi, uint64_t walking_seqno) {
-	assert(bi);
-	uint16_t difference = bi->dev->layout_revision - bi->layout_revision - 1;
-	uint64_t starting_seqno = bi->dev->rev_seqnos[difference] - 1;
-	uint16_t new_no_macroblocks = bi->dev->no_macroblocks[difference];
-	uint16_t work = bi->dev->revision_work[difference];
-	blockio_info_t *next, *test;
-	blockio_dev_t *dev = bi->dev;
-	int oldrev = bi->layout_revision;
-
-	/* seed prng */
-	mt_state state = { };
+static void initialize_resize_prng(mt_state *state,
+	       	blockio_dev_t *dev, uint16_t rev) {
 	uint8_t mesoblk[1<<dev->b->mesoblk_log];
+	memset(state, 0, sizeof(state));
 	memset(mesoblk, 0, sizeof(mesoblk));
-	assert(sizeof(state.statevec) <= sizeof(mesoblk));
-	cipher_enc(dev->c, mesoblk, mesoblk, 0, oldrev + 1);
-	mts_seedfull(&state, (uint32_t*)mesoblk);
+	assert(sizeof(state->statevec) <= sizeof(mesoblk));
+	cipher_enc(dev->c, mesoblk, mesoblk, 0, rev, 0);
+	mts_seedfull(state, (uint32_t*)mesoblk);
+}
 
-	VERBOSE("translating from rev %d to rev %d, first relevant next_seqno=%lld", oldrev, oldrev + 1, walking_seqno);
-	next = NULL;
+blockio_info_t *uptranslate(blockio_info_t *bi) {
+	assert(bi);
+	uint8_t newrev = bi->layout_revision + 1;
+	blockio_dev_t *dev = bi->dev;
+	blockio_dev_rev_t *rev = &dev->rev[dev->layout_revision - newrev];
+	blockio_info_t *next, *test;
+	mt_state state;
+	int work = rev->work;
+	uint64_t seqno = rev->seqno - 1; // allow easy entry in while loop
+
+	initialize_resize_prng(&state, dev, newrev);
+
+	//VERBOSE("%p %d %d %llu %d %d", bi, newrev, dev->layout_revision - newrev,
+	//	       	seqno, rev->no_macroblocks, work);
+	VERBOSE("translating from rev %d to rev %d",
+		       	bi->layout_revision, newrev);
+
+	next = find_ordered_equal_or_first_after(dev, bi->layout_revision, ULLONG_MAX);
+	int count = (dllarr_index(&dev->ordered, next) - dllarr_index(&dev->ordered, bi));
+	uint64_t reindex[count];
 
 	while (work) {
-		starting_seqno++;
-		next = dllarr_next(&dev->ordered, bi);
-		assert(next);
-
-		while (rds_iuniform(&state, 0, new_no_macroblocks) >= work)
-			starting_seqno++;
+		do seqno++;
+		while (rds_iuniform(&state, 0, rev->no_macroblocks) >= work);
 
 		work--;
 
-		if (starting_seqno < walking_seqno) continue;
+		test = find_ordered_equal_or_first_after(dev, newrev, seqno);
+		if (test && test->next_seqno == seqno &&
+				test->layout_revision == newrev) {
+			VERBOSE("new seqno %llu already exists", seqno);
+			continue;
+		}
 
-		test = find_ordered_equal_or_first_after(dev, oldrev + 1,
-				starting_seqno);
-		if (test && test->next_seqno == starting_seqno &&
-				test->layout_revision == oldrev + 1) continue;
+		/* keep the last 'count' values */
+		memmove(&reindex[1], &reindex[0], sizeof(reindex[0])*(count - 1));
+		reindex[0] = seqno;
+	}
 
-		bi->next_seqno = starting_seqno;
+	while (count--) {
+		VERBOSE("update %u from %llu to %llu", bi - dev->b->blockio_infos,
+				bi->next_seqno, reindex[count]);
+		next = dllarr_next(&dev->ordered, bi);
+		assert(next);
+
+		bi->next_seqno = reindex[count];
 		bi->layout_revision++;
 		add_to_ordered(dllarr_remove(&dev->ordered, bi));
 		bi = next;
-
 	}
 
-	return next;
+	blockio_verbose_ordered(dev);
+	/* return the first block of the next revision, usually this is 'next'
+	 * but in some cases this is bi (because bi was the only one to be updated) */
+	return (next->layout_revision > bi->layout_revision)?bi:next;
 }
 
 void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
@@ -526,10 +545,10 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 	memset(&rebuild_prng[0], 0, sizeof(rebuild_prng));
 	dllarr_t *fos;
 
-	dev->macroblock_ref = ecalloc(dev->no_macroblocks[0], sizeof(uint16_t));
+	dev->macroblock_ref = ecalloc(dev->rev[0].no_macroblocks, sizeof(uint16_t));
 
-	tmp_no_macroblocks = dev->no_macroblocks[0];
-	dev->no_macroblocks[0] = 0;
+	tmp_no_macroblocks = dev->rev[0].no_macroblocks;
+	dev->rev[0].no_macroblocks = 0;
 
 	/* check all macroblocks in the map */
 	for (i = 0; i < b->no_macroblocks; i++) {
@@ -559,9 +578,9 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 						"unable to open partition "
 						"\"%s\", datablock %d is empty",
 						name, i);
-				assert(tmp_no_macroblocks > dev->no_macroblocks[0]);
-				bi->internal = dev->no_macroblocks[0];
-				dev->macroblock_ref[dev->no_macroblocks[0]++] = i;
+				assert(tmp_no_macroblocks > dev->rev[0].no_macroblocks);
+				bi->internal = dev->rev[0].no_macroblocks;
+				dev->macroblock_ref[dev->rev[0].no_macroblocks++] = i;
 				add_to_used(bi);
 				add_to_ordered(bi);
 				break;
@@ -570,7 +589,7 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 				if (bi->seqno == highest_seqno)
 					dev->keep_revisions--;
 				assert(tmp2 < dev->random_len - 1);
-				rebuild_prng[tmp2++] = dev->no_macroblocks[0];
+				rebuild_prng[tmp2++] = dev->rev[0].no_macroblocks;
 				bi->next_seqno = 0;
 				bi->layout_revision = dev->layout_revision;
 				fos = &dev->selected_blocks;
@@ -608,23 +627,23 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 					bi->layout_revision = dev->layout_revision;
 				}
 
-				assert(tmp_no_macroblocks > dev->no_macroblocks[0]);
-				bi->internal = dev->no_macroblocks[0];
-				dev->macroblock_ref[dev->no_macroblocks[0]++] = i;
+				assert(tmp_no_macroblocks > dev->rev[0].no_macroblocks);
+				bi->internal = dev->rev[0].no_macroblocks;
+				dev->macroblock_ref[dev->rev[0].no_macroblocks++] = i;
 				dllarr_append(fos, bi);
 				add_to_ordered(bi);
 				break;
 		}
 	}
 	
-	assert(tmp_no_macroblocks == dev->no_macroblocks[0]);
+	assert(tmp_no_macroblocks == dev->rev[0].no_macroblocks);
 
 	assert(tmp2 <= dev->random_len - 1);
 	//VERBOSE("we have %d different blocks to rebuild prng", tmp2);
 	dev->keep_revisions += tmp2 + 1;
 	//VERBOSE("keep_revisions = %d", dev->keep_revisions);
 	no_different_selectblocks = tmp2;
-	random_rescale(&dev->r, dev->no_macroblocks[0]);
+	random_rescale(&dev->r, dev->rev[0].no_macroblocks);
 	
 	/* first: fill in the blanks in rebuild_prng (if any) with random
 	 * choices of the filled in argument */
@@ -652,8 +671,15 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 		ecch_throw(ECCH_DEFAULT, "not enough information available "
 				"to rebuild prng");
 
-	while (bi->layout_revision < dev->layout_revision)
-		bi = uptranslate(bi, walking_seqno);
+	blockio_verbose_ordered(dev);
+#if 0
+	for (i = 0; i < MACROBLOCK_HISTORY; i++)
+		VERBOSE("bla %llu %u %u", dev->rev[i].seqno,
+				dev->rev[i].no_macroblocks,
+				dev->rev[i].work);
+#endif
+
+	while (bi->layout_revision < dev->layout_revision) bi = uptranslate(bi);
 
 	load_tail_of_ordered_in_prng(dev, walking_seqno);
 
@@ -674,7 +700,7 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 
 	VERBOSE("we have %d macroblocks in partition \"%s\", "
 			"latest revision %lld OK",
-			dev->no_macroblocks[0], dev->name, (latest)?latest->seqno:0);
+			dev->rev[0].no_macroblocks, dev->name, (latest)?latest->seqno:0);
 
 	/* select next block */
 	blockio_dev_select_next_macroblock(dev, 0);
@@ -703,7 +729,7 @@ void blockio_dev_read_header(blockio_dev_t *dev, uint32_t no,
 	//
 	// the seqno is used as IV for all the other mesoblocks
 	// in the datablock
-	cipher_dec(dev->c, BASE, BASE, 0, 0);
+	cipher_dec(dev->c, BASE, BASE, 0, 0, 0);
 
 	/* check magic */
 	if (memcmp(magic, MAGIC, sizeof(magic))) {
@@ -737,7 +763,7 @@ void blockio_dev_read_header(blockio_dev_t *dev, uint32_t no,
 	memcpy(bi->seqnos_hash, SEQNOS_HASH, 32);
 	bi->seqno = binio_read_uint64_be(SEQNO);
 	bi->next_seqno = bi->seqno + binio_read_uint32_be(NEXT_SEQNO_DIFF);
-	bi->orig_layout_revision = 
+	bi->hard_layout_revision = 
 		bi->layout_revision = binio_read_uint16_be(LAYOUT_REVISION);
 	if (bi->seqno > *highest_seqno) {
 		*highest_seqno = bi->seqno;
@@ -745,11 +771,11 @@ void blockio_dev_read_header(blockio_dev_t *dev, uint32_t no,
 		dev->tail_macroblock =
 			binio_read_uint16_be(TAIL_MACROBLOCK);
 		for (i = 0; i < MACROBLOCK_HISTORY; i++) {
-			dev->rev_seqnos[i] =
+			dev->rev[i].seqno =
 				binio_read_uint64_be(REV_SEQNOS + 8*i);
-			dev->no_macroblocks[i] = 
+			dev->rev[i].no_macroblocks = 
 				binio_read_uint16_be(NO_MACROBLOCKS + 2*i);
-			dev->revision_work[i] =
+			dev->rev[i].work =
 				binio_read_uint16_be(REVISION_WORK + 2*i);
 		}
 		dev->reserved_macroblocks =
@@ -790,7 +816,7 @@ void blockio_dev_read_mesoblk(blockio_dev_t *dev,
 			((no + 1)<<dev->b->mesoblk_log) +
 			0, 1<<dev->b->mesoblk_log);
 	cipher_dec(dev->c, buf, buf, dev->b->blockio_infos[id].seqno,
-			no + 1);
+			no + 1, 0);
 }
 
 int blockio_check_data_hash(blockio_info_t *bi) {
@@ -838,7 +864,7 @@ void blockio_dev_write_current_macroblock(blockio_dev_t *dev) {
 	/* encrypt datablocks (also the unused ones) */
 	for (i = 1; i <= dev->mmpm; i++)
 		cipher_enc(dev->c, BASE + (i<<dev->b->mesoblk_log),
-			BASE + (i<<dev->b->mesoblk_log), dev->bi->seqno, i);
+			BASE + (i<<dev->b->mesoblk_log), dev->bi->seqno, i, 0);
 
 	/* calculate hash of data, store in index */
 	gcry_md_hash_buffer(GCRY_MD_SHA256, DATABLOCKS_HASH,
@@ -856,6 +882,7 @@ void blockio_dev_write_current_macroblock(blockio_dev_t *dev) {
 	memcpy(MAGIC, magic, sizeof(magic));
 	binio_write_uint16_be(TAIL_MACROBLOCK, dev->tail_macroblock);
 	binio_write_uint16_be(LAYOUT_REVISION, dev->layout_revision);
+	dev->bi->hard_layout_revision = dev->layout_revision;
 	binio_write_uint16_be(RESERVED_MACROBLOCKS, dev->reserved_macroblocks);
 	binio_write_uint32_be(RANDOM_LEN, dev->random_len);
 	binio_write_uint8(MACROBLOCK_LOG, dev->b->macroblock_log);
@@ -863,16 +890,11 @@ void blockio_dev_write_current_macroblock(blockio_dev_t *dev) {
 
 	for (i = 0; i < MACROBLOCK_HISTORY; i++) {
 		binio_write_uint64_be(REV_SEQNOS + 8*i,
-				dev->rev_seqnos[i]);
+				dev->rev[i].seqno);
 		binio_write_uint16_be(NO_MACROBLOCKS + 2*i,
-				dev->no_macroblocks[i]);
+				dev->rev[i].no_macroblocks);
 		binio_write_uint16_be(REVISION_WORK + 2*i,
-				dev->revision_work[i]);
-#if 0
-		VERBOSE("%lld, storing %llu %d", dev->bi->seqno,
-				dev->rev_seqnos[i],
-				dev->no_macroblocks[i]);
-#endif
+				dev->rev[i].work);
 	}
 
 	dev->bi->no_nonobsolete = dev->bi->no_indices;
@@ -888,7 +910,7 @@ void blockio_dev_write_current_macroblock(blockio_dev_t *dev) {
 			(1<<dev->b->mesoblk_log) - 32 /* size of hash */);
 
 	/* encrypt index */
-	cipher_enc(dev->c, BASE, BASE, 0, 0);
+	cipher_enc(dev->c, BASE, BASE, 0, 0, 0);
 
 	dev->b->write(dev->io, BASE, id<<dev->b->macroblock_log,
 			1<<dev->b->macroblock_log);
@@ -926,7 +948,7 @@ void blockio_dev_change_macroblock_status(blockio_dev_t *dev, uint32_t no,
 
 int blockio_dev_allocate_macroblocks(blockio_dev_t *dev, uint16_t size) {
 	// 16 bit arithmetic
-	assert(dev->no_macroblocks[0] < dev->no_macroblocks[0] + size); 
+	assert(dev->rev[0].no_macroblocks < dev->rev[0].no_macroblocks + size); 
 
 	int i, no_freeb = 0;
 	blockio_info_t *bi, *next;
@@ -942,21 +964,13 @@ int blockio_dev_allocate_macroblocks(blockio_dev_t *dev, uint16_t size) {
 	if (size > no_freeb) return -1; // not enough blocks
 
 	tmp = realloc(dev->macroblock_ref,
-			sizeof(uint16_t)*(size + dev->no_macroblocks[0]));
+			sizeof(uint16_t)*(size + dev->rev[0].no_macroblocks));
 	if (!tmp) return -1; // out of memory
 	dev->macroblock_ref = tmp;
 
-	memmove(&dev->no_macroblocks[1], &dev->no_macroblocks[0],
+	memmove(&dev->rev[1], &dev->rev[0],
 		       	(MACROBLOCK_HISTORY - 1)*
-			sizeof(dev->no_macroblocks[0]));
-
-	memmove(&dev->rev_seqnos[1], &dev->rev_seqnos[0],
-		       	(MACROBLOCK_HISTORY - 1)*
-			sizeof(dev->rev_seqnos[0]));
-
-	memmove(&dev->revision_work[1], &dev->revision_work[0],
-		       	(MACROBLOCK_HISTORY - 1)*
-			sizeof(dev->revision_work[0]));
+			sizeof(dev->rev[0]));
 
 	while (size) {
 		no = random_custom(&dev->b->r, no_freeb);
@@ -966,8 +980,8 @@ int blockio_dev_allocate_macroblocks(blockio_dev_t *dev, uint16_t size) {
 		bi->dev = dev;
 
 		// add to our array
-		bi->internal = dev->no_macroblocks[0];
-		dev->macroblock_ref[dev->no_macroblocks[0]++] = select;
+		bi->internal = dev->rev[0].no_macroblocks;
+		dev->macroblock_ref[dev->rev[0].no_macroblocks++] = select;
 
 		// mark as FREE and assert() that is was NOT_ALLOCATED
 		blockio_dev_change_macroblock_status(dev, select,
@@ -985,45 +999,42 @@ int blockio_dev_allocate_macroblocks(blockio_dev_t *dev, uint16_t size) {
 
 	dev->layout_revision++;
 
-	random_rescale(&dev->r, dev->no_macroblocks[0]);
+	random_rescale(&dev->r, dev->rev[0].no_macroblocks);
 
 
 	if (dev->layout_revision == 1) return 0;
 
 	uint64_t walking_seqno, stop_below;
-	uint8_t mesoblk[1<<dev->b->mesoblk_log];
 	int work;
-	mt_state state = { };
-	memset(mesoblk, 0, sizeof(mesoblk));
-	assert(sizeof(state.statevec) <= sizeof(mesoblk));
+	mt_state state;
 
 	stop_below = walking_seqno = dev->next_seqno + dev->random_len;
 	VERBOSE("reconstruction starts at seqno %llu", walking_seqno);
-	dev->rev_seqnos[0] = walking_seqno;
+	dev->rev[0].seqno = walking_seqno;
 
 	bi = find_ordered_equal_or_first_after(dev, dev->layout_revision - 1,
                 	walking_seqno);
 
 	work = dllarr_count(&dev->ordered) - dllarr_index(&dev->ordered, bi);
 	VERBOSE("work=%d", work);
-	dev->revision_work[0] = work;
+	dev->rev[0].work = work;
 
 	/* produce seed for PRNG, these actions must be reproduced
  	 * by the loader */
-	cipher_enc(dev->c, mesoblk, mesoblk, 0, dev->layout_revision);
-	mts_seedfull(&state, (uint32_t*)mesoblk);
+
+	initialize_resize_prng(&state, dev, dev->layout_revision);
 
 	while (work) {
 		//VERBOSE("bi->layout_revision=%d", bi->layout_revision);
         	next = dllarr_next(&dev->ordered, bi);
 		do {
-			int rd = rds_iuniform(&state, 0, dev->no_macroblocks[0]);
+			int rd = rds_iuniform(&state, 0, dev->rev[0].no_macroblocks);
 			//VERBOSE("random %d, work=%d s: %llu, w: %llu", rd, work,
 			//		stop_below, walking_seqno);
 			if (rd < work) break;
 			walking_seqno++;
 		} while (1);
-        //	while (rds_iuniform(&state, 0, dev->no_macroblocks[0]) >= work)
+        //	while (rds_iuniform(&state, 0, dev->rev[0].no_macroblocks) >= work)
          //               	walking_seqno++;
 		work--;
 

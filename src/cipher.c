@@ -109,20 +109,22 @@ void cipher_dec_iv(cipher_t *w, uint8_t *out,
 #endif
 
 void cipher_enc(cipher_t *w, uint8_t *out,
-		const uint8_t *in, uint64_t iv0, uint32_t iv1) {
+		const uint8_t *in, uint64_t iv0, uint32_t iv1,
+		uint32_t iv2) {
 	unsigned char iv[16];
 
 	assert(w && w->spec && w->spec->enc && w->ctx);
-	set_iv(iv, iv0, iv1, 0);
+	set_iv(iv, iv0, iv1, iv2);
 	w->spec->enc(w->ctx, out, in, iv);
 }
 
 void cipher_dec(cipher_t *w, uint8_t *out,
-		const uint8_t *in, uint64_t iv0, uint32_t iv1) {
+		const uint8_t *in, uint64_t iv0, uint32_t iv1,
+		uint32_t iv2) {
 	unsigned char iv[16];
 
 	assert(w && w->spec && w->spec->dec && w->ctx);
-	set_iv(iv, iv0, iv1, 0);
+	set_iv(iv, iv0, iv1, iv2);
 	w->spec->dec(w->ctx, out, in, iv);
 }
 

@@ -34,7 +34,7 @@ typedef struct blockio_info_s {
 	dllarr_elt_t ord; // for ordered
 	dllarr_elt_t ufs; // for used, free and selected lists
 	uint64_t seqno, next_seqno;
-	uint16_t orig_layout_revision;
+	uint16_t hard_layout_revision;
 	uint16_t layout_revision;
 	char data_hash[32];
 	char seqnos_hash[32];
@@ -49,6 +49,12 @@ typedef struct blockio_info_s {
 	struct blockio_dev_s *dev;
 } blockio_info_t;
 
+typedef struct blockio_dev_rev_s {
+	uint64_t seqno;
+	uint16_t no_macroblocks;
+	uint16_t work;
+} blockio_dev_rev_t;
+
 typedef struct blockio_dev_s {
 	char *name;
 	blockio_t *b;
@@ -57,11 +63,9 @@ typedef struct blockio_dev_s {
 	bitmap_t status; // record status of all macroblocks with
 			 // respect to this device
 
+	/* current macroblock count is in rev[0].no_macroblocks */
+	blockio_dev_rev_t rev[MACROBLOCK_HISTORY];
 	uint64_t next_seqno;
-	/* current macroblock count is in no_macroblocks[0] */
-	uint64_t rev_seqnos[MACROBLOCK_HISTORY];
-	uint16_t no_macroblocks[MACROBLOCK_HISTORY];
-	uint16_t revision_work[MACROBLOCK_HISTORY];
 	uint16_t reserved_macroblocks; /* visible in scubed file */
 	blockio_info_t *bi;
 	int valid;

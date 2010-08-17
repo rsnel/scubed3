@@ -65,16 +65,19 @@ void cipher_init(cipher_t *w, const char *name, size_t size,
 	if (!prim) ecch_throw(ECCH_DEFAULT,
 			"no closing paren found in cipher name");
 	if (*(prim + 1) != '\0')
-		ecch_throw(ECCH_DEFAULT, "data after closing paren in cipher name");
+		ecch_throw(ECCH_DEFAULT, "data after closing paren "
+				"in cipher name");
 	*prim = '\0';
 	prim = strchr(mode, '(');
-	if (!prim) ecch_throw(ECCH_DEFAULT, "no closing paren found in cipher name");
+	if (!prim) ecch_throw(ECCH_DEFAULT, "no closing paren found "
+			"in cipher name");
 	*prim = '\0';
 	prim++;
 
 	while (!mode_spec) {
 		if (i >= NO_CIPHERS)
-			ecch_throw(ECCH_DEFAULT, "ciphermode %s not supported", mode);
+			ecch_throw(ECCH_DEFAULT, "ciphermode %s "
+					"not supported", mode);
 
 		if (!strcmp(mode, cipher_specs[i]->name))
 			mode_spec = cipher_specs[i];
@@ -93,20 +96,6 @@ static void set_iv(unsigned char *iv, uint64_t iv0, uint32_t iv1, uint32_t iv2) 
 	binio_write_uint32_be(iv + 8, iv1);
 	binio_write_uint32_be(iv + 12, iv2);
 }
-
-#if 0
-void cipher_enc_iv(cipher_t *w, uint8_t *out,
-		const uint8_t *in, const uint8_t *iv) {
-	assert(w && w->spec && w->spec->enc && w->ctx);
-	w->spec->enc(w->ctx, out, in, iv);
-}
-
-void cipher_dec_iv(cipher_t *w, uint8_t *out,
-		const uint8_t *in, const uint8_t *iv) {
-	assert(w && w->spec && w->spec->dec && w->ctx);
-	w->spec->dec(w->ctx, out, in, iv);
-}
-#endif
 
 void cipher_enc(cipher_t *w, uint8_t *out,
 		const uint8_t *in, uint64_t iv0, uint32_t iv1,

@@ -55,11 +55,7 @@ void cipher_init(cipher_t*, const char*, size_t, const void*, size_t);
 
 void cipher_enc(cipher_t*, uint8_t*, const uint8_t*, uint64_t, uint32_t, uint32_t);
 
-//void cipher_enc_iv(cipher_t*, uint8_t*, const uint8_t*, const uint8_t*);
-
 void cipher_dec(cipher_t*, uint8_t*, const uint8_t*, uint64_t, uint32_t, uint32_t);
-
-//void cipher_dec_iv(cipher_t*, uint8_t*, const uint8_t*, const uint8_t*);
 
 void cipher_free(cipher_t*);
 

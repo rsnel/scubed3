@@ -562,12 +562,15 @@ static int control_resize(int s, control_thread_priv_t *priv, char *argv[]) {
 				"keep revisions must be smaller than "
 				"reserved - 4");
 	}
-	
+
+#if 1
 	if (size < dev->rev[0].no_macroblocks) {
+		blockio_dev_free_macroblocks(dev, dev->rev[0].no_macroblocks - size);
 		hashtbl_unlock_element_byptr(entry);
-		return control_write_complete(s, 1, "unable to shrink device; "
+		return control_write_complete(s, 1, "very experimental; "
 				"not yet supported");
 	}
+#endif
 
 	if (size > dev->b->no_macroblocks) {
 		hashtbl_unlock_element_byptr(entry);
@@ -603,7 +606,7 @@ static int control_resize(int s, control_thread_priv_t *priv, char *argv[]) {
 		entry->size = ((entry->d.rev[0].no_macroblocks - 
 					entry->d.reserved_macroblocks)<<
 				entry->d.b->mesoblk_log)*entry->d.mmpm;
-	scubed3_enlarge(&entry->l);
+	scubed3_reinit(&entry->l);
 
 	hashtbl_unlock_element_byptr(entry);
 

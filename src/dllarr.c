@@ -81,6 +81,8 @@ void dllarr_free(dllarr_t *a) {
 	dllarr_elt_t *elt, *del;
 	dllarr_assert(a);
 
+	if (!a->head.index) return; // nothing to do
+
 	// remove backwards to avoid array copying 
 	elt = a->tail.prev;
 

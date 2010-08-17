@@ -507,8 +507,6 @@ only safe if ALL your scubed3 partitions are open, continue? [No] ";
 		warning();
 		printf("allocating %d blocks for %s from the unclaimed pool, "
 				"this is\n", new - no_macroblocks, argv[0]);
-		//printf("only safe if ALL your scubed3 partitions "
-	//			"are open, continue? [No] ");
 
 		if (!yesno(prompt)) return 0;
 	} else {
@@ -519,15 +517,9 @@ you must resize it yourself continue? [No] ";
 		printf("removing %d blocks from the end of %s, those blocks\n",
 				no_macroblocks - new, argv[0]);
 		printf("will be added to the unclaimed pool, if you have a "
-				"filesystem on it");
-		//printf("you must resize it yourself continue? [No] ");
+				"filesystem on it\n");
 
 		if (!yesno(prompt)) return 0;
-	}
-
-	if (new < no_macroblocks) {
-		printf("shrinking a partition is not yet supported\n");
-		return 0;
 	}
 
 	return do_server_command(priv->s, 1, "resize-internal %s %d %d %d",

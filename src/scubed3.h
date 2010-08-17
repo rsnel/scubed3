@@ -42,6 +42,8 @@ typedef struct scubed3_s {
 	 * macroblock, see the definitions of ID and NO below */
 	uint32_t no_block_indices;
 	uint32_t *block_indices;
+
+	int cycle_goal; /* false = gc, true = make UNUSED */
 } scubed3_t;
 
 int do_req(scubed3_t*, scubed3_io_t, uint64_t, size_t, char*);
@@ -50,7 +52,7 @@ struct blockio_dev_s;
 
 void scubed3_init(scubed3_t*, struct blockio_dev_s*);
 
-void scubed3_enlarge(scubed3_t*);
+void scubed3_reinit(scubed3_t*);
 
 void scubed3_cycle(scubed3_t*);
 

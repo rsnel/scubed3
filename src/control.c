@@ -169,13 +169,14 @@ static int control_verbose_ordered(int s, control_thread_priv_t *priv, char *arg
 	return control_write_complete(s, 0, "see debug output");
 }
 
-static int control_check_data_integrity(int s, control_thread_priv_t *priv, char *argv[]) {
-	void *check_block(blockio_info_t *bi) {
+static int control_check_data_integrity(int s, control_thread_priv_t *priv,
+		char *argv[]) {
+	void *check_block(blockio_info_t *bi, blockio_dev_t *dev) {
 		if (blockio_check_data_hash(bi)) {
-			VERBOSE("%d %lld OK", bi - bi->dev->b->blockio_infos,
+			VERBOSE("%d %lld OK", bi - dev->b->blockio_infos,
 					bi->seqno);
 		} else {
-			VERBOSE("%d %lld FAIL", bi - bi->dev->b->blockio_infos,
+			VERBOSE("%d %lld FAIL", bi - dev->b->blockio_infos,
 					bi->seqno);
 		}
 		return NULL;
@@ -184,7 +185,8 @@ static int control_check_data_integrity(int s, control_thread_priv_t *priv, char
 	if (!entry) return control_write_complete(s, 1,
 			"partition \"%s\" not found", argv[0]);
 
-	dllarr_iterate(&entry->d.used_blocks, (dllarr_iterator_t)check_block, NULL);
+	dllarr_iterate(&entry->d.used_blocks, (dllarr_iterator_t)check_block,
+			&entry->d);
 
 	hashtbl_unlock_element_byptr(entry);
 

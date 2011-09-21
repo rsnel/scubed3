@@ -124,7 +124,7 @@ static void pre_emptive_gc(scubed3_t *l) {
 
 		if (bi == l->dev->bi) break;
 
-		//VERBOSE("searching %d %llu %d", bi - bi->dev->b->blockio_infos,
+		//VERBOSE("searching %d %llu %d", bi - l->dev->b->blockio_infos,
 		//		bi->seqno, bi->no_nonobsolete);
 
 		if (!bi->no_nonobsolete) continue;
@@ -447,7 +447,7 @@ int main(int argc, char **argv) {
 
 	verbose_init(argv[0]);
 
-	VERBOSE("version %s Copyright (C) 2009, Rik Snel <rik@snel.it>",
+	VERBOSE("version %s Copyright (C) 2011, Rik Snel <rik@snel.it>",
 			PACKAGE_VERSION);
 
 	if (fuse_opt_parse(&args, &options, scubed3_opts, NULL) == -1)

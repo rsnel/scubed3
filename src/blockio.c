@@ -197,10 +197,10 @@ void blockio_dev_free(blockio_dev_t *dev) {
 
 void blockio_verbose_ordered(blockio_dev_t *dev) {
 	void *verbose_ding(blockio_info_t *bi) {
-		int id = bi - bi->dev->b->blockio_infos;
+		int id = bi - dev->b->blockio_infos;
 		char *state;
 		char buf[16];
-		switch (blockio_dev_get_macroblock_status(bi->dev, id)) {
+		switch (blockio_dev_get_macroblock_status(dev, id)) {
 			case HAS_DATA:
 				//state = "DATA";
 				snprintf(buf, 16, "DATA %d", bi->no_nonobsolete);
@@ -221,8 +221,8 @@ void blockio_verbose_ordered(blockio_dev_t *dev) {
 				bi->ord.index, id, bi->layout_revision,
 				bi->hard_layout_revision,
 				bi->seqno, bi->next_seqno, state,
-				(id == bi->dev->tail_macroblock)?
-				" >TAIL<":(bi->dev->next_seqno - 1 == bi->seqno)?
+				(id == dev->tail_macroblock)?
+				" >TAIL<":(dev->next_seqno - 1 == bi->seqno)?
 				" >NEWEST<":"");
 		return NULL;
 	}
@@ -1065,8 +1065,8 @@ void blockio_dev_update_statistics(blockio_dev_t *dev) {
 	load_tail_of_ordered_in_prng(dev, stop_below);
 
 	// restore PRNG
-	while (2*++dev->random_len < sizeof(random_store))
-		random_push(&dev->r, random_store[dev->random_len]);
+	while (2*dev->random_len < sizeof(random_store))
+		random_push(&dev->r, random_store[dev->random_len++]);
 }
 
 int blockio_dev_free_macroblocks(blockio_dev_t *dev, uint16_t size) {

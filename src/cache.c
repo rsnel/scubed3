@@ -18,6 +18,7 @@
 #include <string.h>
 #include <errno.h>
 #include <assert.h>
+#include <time.h>
 #include "verbose.h"
 #include "util.h"
 #include "pthd.h"
@@ -25,9 +26,25 @@
 #include "blockio.h"
 #include "ecch.h"
 #include "cache.h"
+#include "random.h"
+
+#define CLOCK_MONOTONIC_RAW 4
 
 void *cache_thread(void *arg) {
+	random_t r;
 	cache_thread_priv_t *priv = arg;
+	struct timespec ts;
+	blockio_t *b = priv->b;
+
+	VERBOSE("cache thread started on %u macroblocks of %u bytes",
+			b->no_macroblocks, 1<<b->macroblock_log);
+
+	random_init(&r, b->no_macroblocks);
+
+	if (clock_gettime(CLOCK_MONOTONIC_RAW, &ts) == -1)
+		FATAL("unable to read CLOCK_MONOTONIC_RAW: %s", strerror(errno));
+
+	VERBOSE("%lu seconds and %ld nanoseconds", ts.tv_sec, ts.tv_nsec);
 
 	pthread_exit(NULL);
 }

@@ -661,7 +661,6 @@ int main(int argc, char **argv) {
 	ctl_priv_t priv;
 	socklen_t len;
 	int i, connections = 0;
-	int ret = -1;//, set = 1;
 	char *line = NULL;
 	struct sockaddr_un remote;
 	assert(!strcmp("SHA256", DEFAULT_PASSPHRASE_HASH));
@@ -730,7 +729,7 @@ int main(int argc, char **argv) {
 				!strcmp(line, "bye") || !strcmp(line, "kthxbye") ||
 				!strcmp(line, "thanks")) {
 			if (!line) printf("^D\n");
-			ret = do_server_command(priv.s, 1, "exit");
+			do_server_command(priv.s, 1, "exit");
 			break;
 		} 
 		

@@ -36,9 +36,9 @@ typedef struct hashtbl_bucket_s {
 
 typedef struct hashtbl_s {
 	hashtbl_bucket_t *buckets;
-	signed key_size :8; /* if positive, it represents the size of 
-			       the key in bytes if zero it signifies 
-			       there is no key, if negative it means 
+	signed key_size :8; /* if positive, it represents the size of
+			       the key in bytes if zero it signifies
+			       there is no key, if negative it means
 			       the key is an ASCIIZ string */
 	unsigned key_bits :5; /* number of key bits that are
 				 used for bucket selection */

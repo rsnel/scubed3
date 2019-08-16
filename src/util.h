@@ -27,7 +27,9 @@ void *ecalloc(size_t, size_t);
 
 char *estrdup(const char*);
 
+#if 0
 uint32_t deterministic(uint32_t);
+#endif
 
 int unbase16(char *buf, size_t len);
 

@@ -22,7 +22,6 @@
 #include "ecch.h"
 
 const cipher_spec_t *cipher_specs[] = {
-	&cipher_abl4,
 	&cipher_null,
 	&cipher_cbc_plain,
 	&cipher_cbc_essiv,

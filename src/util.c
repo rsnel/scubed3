@@ -25,7 +25,7 @@
 
 void *ecalloc(size_t nmemb, size_t size) {
 	void *res = calloc(nmemb, size);
-	if (!res) FATAL("allocating %u blocks of size %u: %s",
+	if (!res) FATAL("allocating %lu blocks of size %lu: %s",
 			nmemb, size, strerror(errno));
 	return res;
 }
@@ -39,6 +39,8 @@ char *estrdup(const char *str) {
 
 	return out;
 }
+
+#if 0
 /* for an explanation of simple deterministic pseudo random number
  * generators, search google for simple PRNG, the constants in this
  * particular one are deduced from Microsoft's "Visual Basic 6.0" */
@@ -53,6 +55,7 @@ uint32_t deterministic(uint32_t max) {
 	ret  = ((double)max)*((double)random_state)/((double)(cst3 + 1));
 	return ret;
 }
+#endif
 
 int unbase16(char *buf, size_t len) {
 	int i;

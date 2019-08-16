@@ -27,7 +27,7 @@
 void bitmap_init(bitmap_t *b, uint32_t no_bits) {
 	assert(b);
 	if (!(b->bits = calloc(((no_bits+31)/32), sizeof(uint32_t))))
-		FATAL("error allocating %d bytes: %s",
+		FATAL("error allocating %ld bytes: %s",
 				sizeof(uint32_t)*((no_bits+31)/32),
 				strerror(errno));
 	b->no_bits = no_bits;

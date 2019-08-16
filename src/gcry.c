@@ -26,7 +26,7 @@
 static int gcry_outofcore_handler(void *arg, size_t size,
 		unsigned int que) {
 	ecch_throw(ECCH_DEFAULT,
-			"libgcrypt out of memory allocating %d bytes", size);
+			"libgcrypt out of memory allocating %ld bytes", size);
 }
 
 /* needed to make libgcrypt thread safe */

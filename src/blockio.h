@@ -77,7 +77,7 @@ typedef struct blockio_dev_s {
 	random_t r;
 
 	uint8_t keep_revisions;
-	
+
 	uint16_t mmpm; /* max mesoblocks per macroblock */
 
 	dllarr_t used_blocks, free_blocks, selected_blocks;

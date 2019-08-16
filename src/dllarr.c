@@ -69,7 +69,7 @@ void dllarr_init(dllarr_t *a, int offset) {
 
 	a->size = DLLARR_START_SIZE;
 	a->array = calloc(DLLARR_START_SIZE, sizeof(*a->array));
-	if (!a->array) FATAL("calloc(%d, %d): %s", DLLARR_START_SIZE,
+	if (!a->array) FATAL("calloc(%d, %ld): %s", DLLARR_START_SIZE,
 			sizeof(*a->array), strerror(errno));
 
 	a->offset = offset;
@@ -83,7 +83,7 @@ void dllarr_free(dllarr_t *a) {
 
 	if (!a->head.index) return; // nothing to do
 
-	// remove backwards to avoid array copying 
+	// remove backwards to avoid array copying
 	elt = a->tail.prev;
 
 	while ((del = elt) != &a->head) {
@@ -144,7 +144,7 @@ void *dllarr_insert(dllarr_t *a, void *new, void *at) {
 		a->size *= 2;
 		if (a->size*sizeof(*a->array) < 0) FATAL("dllarr too full");
 		if (!(a->array = realloc(a->array, sizeof(*a->array)*a->size)))
-			FATAL("realloc to %d bytes: %s",
+			FATAL("realloc to %ld bytes: %s",
 					sizeof(*a->array)*a->size,
 					strerror(errno));
 	}

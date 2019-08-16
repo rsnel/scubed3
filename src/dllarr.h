@@ -33,8 +33,8 @@ typedef struct dllarr_elt_s {
 } dllarr_elt_t;
 
 typedef struct dllarr_s {
-	dllarr_elt_t head; 
-	dllarr_elt_t tail; 
+	dllarr_elt_t head;
+	dllarr_elt_t tail;
 	dllarr_elt_t **array;
 	int size, offset;
 } dllarr_t;

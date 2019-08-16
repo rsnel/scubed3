@@ -72,7 +72,6 @@ int vvar_system(const char *format, va_list ap) {
 
 	free(string);
 	return ret;
-	
 }
 
 int var_system(const char *format, ...) {
@@ -115,7 +114,6 @@ int vwrite_line(int s, const char *format, va_list ap) {
 
 	free(string);
 	return 0;
-	
 }
 
 #if 0
@@ -212,16 +210,16 @@ int do_local_command(ctl_priv_t *priv, ctl_command_t *cmnd, char *format, ...) {
 	char *args;
 	char *argv[MAX_ARGC+1];
 	va_list ap;
-	
+
 	va_start(ap, format);
 	ret = vasprintf(&args, format, ap);
 	va_end(ap);
 
 	if (ret == -1) return -1;
-	
+
 	argv[argc] = args;
 
-	while (argv[argc] != '\0') {
+	while (*argv[argc] != '\0') {
 		while (*argv[argc] == ' ') argv[argc]++;
 
 		argc++;
@@ -243,8 +241,8 @@ int do_local_command(ctl_priv_t *priv, ctl_command_t *cmnd, char *format, ...) {
 
 		if (*argv[argc] == ' ') *argv[argc]++ = '\0';
 	}
-	
-	if (argv[0] == '\0') argc--;
+
+	if (*argv[0] == '\0') argc--;
 	if (argc != cmnd->argc ) {
 		printf("usage: %s%s\n", cmnd->head.key, cmnd->usage);
 		free(args);
@@ -313,11 +311,11 @@ static int ctl_open_create_common(ctl_priv_t *priv, char *argv[], int create) {
 			printf("passphrases do not match\n");
 			return 0;
 		}
-				
+
 		wipememory(pw2, pw2_len);
 		free(pw2);
 	}
-	
+
 	gcry_call(md_open, &hd, algo, GCRY_MD_FLAG_SECURE);
 	assert(gcry_md_is_secure(hd));
 
@@ -327,12 +325,12 @@ static int ctl_open_create_common(ctl_priv_t *priv, char *argv[], int create) {
 
 	hash = gcry_md_read(hd, algo);
 	assert(hash);
-	
+
 	char hash_text[2*gcry_md_get_algo_dlen(algo)], *ptr = hash_text;
 
 	for (i = 0; i < gcry_md_get_algo_dlen(algo); i++)
 		ptr += snprintf(ptr, 3, "%02x", hash[i]);
-			
+
 	gcry_md_close(hd);
 
 	ret = do_server_command(priv->s, 1, "%s-internal %s %s %.*s",
@@ -424,7 +422,7 @@ static int parse_info(ctl_priv_t *priv, int no, ...) {
 					printf("double response from the server");
 					return -1;
 				}
-				
+
 				if (parse_int(ptrs[i], is)) return -1;
 
 				done[i] = 1;
@@ -449,7 +447,7 @@ static int ctl_resize(ctl_priv_t *priv, char *argv[]) {
 		printf("%s\n", result.argv[0]);
 		return 0;
 	}
-	
+
 	if (parse_info(priv, 3, "no_macroblocks",
 				&no_macroblocks, "reserved_macroblocks",
 				&reserved_macroblocks, "keep_revisions",
@@ -558,7 +556,7 @@ static int ctl_mount(ctl_priv_t *priv, char *argv[]) {
 		if (do_server_command(priv->s, 0, "set-close-on-release %s 1",
 				argv[0])) return -1;
 		if (result.status) return 0;
-	} 
+	}
 
 	if (!var_system("mount -o loop %s/%s %s", priv->mountpoint,
 				argv[0], argv[1])) { // ok
@@ -644,7 +642,7 @@ int ctl_call(ctl_priv_t *priv, char *command) {
 
 	/* strip leading spaces */
 	while (*command == ' ' ) command++;
-	
+
 	/* check if the command is local */
 	if ((tmp = strchr(command, ' '))) *tmp = '\0'; // temprary terminator
 	cmnd = hashtbl_find_element_bykey(&priv->c, command);
@@ -731,8 +729,8 @@ int main(int argc, char **argv) {
 			if (!line) printf("^D\n");
 			do_server_command(priv.s, 1, "exit");
 			break;
-		} 
-		
+		}
+
 	} while (!ctl_call(&priv, line));
 
 	free(line);
@@ -740,6 +738,6 @@ int main(int argc, char **argv) {
 	free(priv.mountpoint);
 
 	close(priv.s);
-	
+
 	exit(0);
 }

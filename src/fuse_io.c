@@ -176,7 +176,7 @@ void *fuse_io_init(struct fuse_conn_info *conn) {
 	priv->control_thread_priv.ids = &priv->ids;
 	pthread_create(&priv->control_thread, NULL, control_thread,
 			&priv->control_thread_priv);
-	
+
 	/* start cache and delayed writer thread */
 	pthread_create(&priv->cache_thread, NULL, cache_thread,
 			&priv->cache_thread_priv);

@@ -76,7 +76,7 @@ int main(int argc, char *argv[]) {
 		VERBOSE("%2d %s (diffval %2d) (clean %2d %s) no_used=%2d", next, valid2?"VALID  ":"INVALID", tmp, valid2?cleanup:-1, valid2?(needed?"NEEDED":"UNNDED"):"IMPOSS", no_used);
 		//sleep(1);
 	}
-		
+
 
 	random_free(&r);
 	//fclose(fp);

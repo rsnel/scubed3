@@ -43,7 +43,7 @@ void ecch_try_common(ecch_context_t *c) {
 	ecch_set_context(c);
 }
 
-static ecch_cleanup_t *ecch_cleanup(ecch_cleanup_t *p, 
+static ecch_cleanup_t *ecch_cleanup(ecch_cleanup_t *p,
 		const char *reason, char *file,
 		int line, int level) {
 	while (p && p->level >= level) {
@@ -66,7 +66,7 @@ void ecch_cleanup_levels(ecch_context_t *c, const char *reason, char *file,
 void ecch_cleanup_thread(void *should_be_null) {
 	assert(!should_be_null);
 	while (ecch_context_cur) {
-		ecch_cleanup_levels(ecch_context_cur, "thread cancellation", 
+		ecch_cleanup_levels(ecch_context_cur, "thread cancellation",
 				__FILE__, __LINE__, 0);
 
 		ecch_set_context(ecch_context_cur->prev);
@@ -75,13 +75,13 @@ void ecch_cleanup_thread(void *should_be_null) {
 	//ecch_set_context(NULL); /* is this really needed? */
 }
 
-void ecch_debug(ecch_cleanup_t *c, char *file, int line, char *mode, 
+void ecch_debug(ecch_cleanup_t *c, char *file, int line, char *mode,
 		const char *reason) {
 #if 0
 	  VERBOSE("<%d>:%s:%d:%s_%s%s%s(%p)%s%s%s", c->level, file,
 	  //VERBOSE("<%d>:%s:%d:%s_%s%s%s%s%s%s", c->level, file,
-		line, c->type, mode, c->subtype?"_":"", 
-		c->subtype?c->subtype:"", c->arg, reason?" (":"", 
+		line, c->type, mode, c->subtype?"_":"",
+		c->subtype?c->subtype:"", c->arg, reason?" (":"",
 		reason?reason:"", reason?")":"");
 #endif
 }

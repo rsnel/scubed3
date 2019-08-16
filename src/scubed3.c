@@ -124,7 +124,7 @@ static void pre_emptive_gc(scubed3_t *l) {
 
 		if (bi == l->dev->bi) break;
 
-		//VERBOSE("searching %d %llu %d", bi - l->dev->b->blockio_infos,
+		//VERBOSE("searching %d %lu %d", bi - l->dev->b->blockio_infos,
 		//		bi->seqno, bi->no_nonobsolete);
 
 		if (!bi->no_nonobsolete) continue;
@@ -163,7 +163,7 @@ void select_new_macroblock(scubed3_t *l) {
 		blockio_dev_write_current_and_select_next_valid_macroblock(l->dev);
 		copy_old_block_to_current(l);
 		l->dev->bi->no_indices_gc = l->dev->bi->no_indices;
-		DEBUG("new block %u (seqno=%llu) has %u mesoblocks due "
+		DEBUG("new block %lu (seqno=%lu) has %u mesoblocks due "
 				"to GC of block %u",
 				id(l->dev->bi), l->dev->bi->seqno,
 				l->dev->bi->no_indices,
@@ -178,7 +178,7 @@ void initialize_output(scubed3_t *l) {
 			select_new_macroblock(l);
 		} else {
 			copy_old_block_to_current(l);
-			DEBUG("new block %u (seqno=%llu) has %u mesoblocks due "
+			DEBUG("new block %lu (seqno=%lu) has %u mesoblocks due "
 					"to GC of block %u",
 					id(l->dev->bi), l->dev->bi->seqno,
 					l->dev->bi->no_indices, l->dev->tail_macroblock);
@@ -228,7 +228,7 @@ void *replay(blockio_info_t *bi, scubed3_t *l) {
 
 void debug_stuff(scubed3_t *l) {
 	void *que(blockio_info_t *b) {
-		VERBOSE("block %u owned by \"%s\" (seqno %llu) has %u used "
+		VERBOSE("block %lu owned by \"%s\" (seqno %lu) has %u used "
 				"mesoblocks", id(b), b->dev->name,
 				b->seqno, b->no_nonobsolete);
 		return NULL;
@@ -489,7 +489,7 @@ int main(int argc, char **argv) {
 	unsigned char res2s[32];
 	char key1[32] = { "FEEFACEBADDECAFDEADBEEFC0FFEEEEE" };
 	char key2[32] = { "FEEFACEBADDECAFDEADBEEFC0FFEEEEE" };
-	
+
 	cipher_init(&c1, "CBC_PLAIN(AES256)", 2, key1, 32);
 	cipher_init(&c2, "CBC_ESSIV(AES256)", 2, key2, 32);
 	cipher_enc(&c1, out1, data, 0, 0);

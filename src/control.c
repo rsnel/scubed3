@@ -95,7 +95,7 @@ int control_write_line(int s, const char *format, ...) {
 	return ret;
 }
 
-int control_write_terminate(s) {
+int control_write_terminate(int s) {
 	return control_write_string(s, ".\n", 2);
 }
 
@@ -173,10 +173,10 @@ static int control_check_data_integrity(int s, control_thread_priv_t *priv,
 		char *argv[]) {
 	void *check_block(blockio_info_t *bi, blockio_dev_t *dev) {
 		if (blockio_check_data_hash(bi)) {
-			VERBOSE("%d %lld OK", bi - dev->b->blockio_infos,
+			VERBOSE("%ld %ld OK", bi - dev->b->blockio_infos,
 					bi->seqno);
 		} else {
-			VERBOSE("%d %lld FAIL", bi - dev->b->blockio_infos,
+			VERBOSE("%ld %ld FAIL", bi - dev->b->blockio_infos,
 					bi->seqno);
 		}
 		return NULL;
@@ -309,7 +309,7 @@ static int control_open_create_common(int s, control_thread_priv_t *priv, char *
 
 		cipher_init(&entry->c, argv[1], 1024,
 				(unsigned char*)argv[2], key_len/2);
-		
+
 		// encrypt zeroed buffer and hash the result
 		// the output of the hash is used to ID ciphermode + key
 		cipher_enc(&entry->c, (unsigned char*)buf, (unsigned char*)buf, 0, 0, 0);
@@ -319,11 +319,11 @@ static int control_open_create_common(int s, control_thread_priv_t *priv, char *
 		entry->d.name = estrdup(allocname);
 		if (!hashtbl_add_element(priv->ids, &entry->unique_id))
 			ecch_throw(ECCH_DEFAULT, "cipher(mode)/key combination already in use");
-		hashtbl_unlock_element_byptr(&entry->unique_id);	
+		hashtbl_unlock_element_byptr(&entry->unique_id);
 		entry->ids = priv->ids;
 
 		blockio_dev_init(&entry->d, priv->b, &entry->c, argv[0]);
-		if (add && entry->d.rev[0].no_macroblocks) 
+		if (add && entry->d.rev[0].no_macroblocks)
 			ecch_throw(ECCH_DEFAULT, "unable to create device: it already exists, use `open' instead");
 		if (!add & !entry->d.rev[0].no_macroblocks)
 			ecch_throw(ECCH_DEFAULT, "unable to open device: passphrase wrong?");
@@ -605,7 +605,7 @@ static int control_resize(int s, control_thread_priv_t *priv, char *argv[]) {
 	dev->updated = 1;
 
 	if (entry->d.rev[0].no_macroblocks > entry->d.reserved_macroblocks)
-		entry->size = ((entry->d.rev[0].no_macroblocks - 
+		entry->size = ((entry->d.rev[0].no_macroblocks -
 					entry->d.reserved_macroblocks)<<
 				entry->d.b->mesoblk_log)*entry->d.mmpm;
 	scubed3_reinit(&entry->l);

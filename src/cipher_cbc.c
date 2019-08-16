@@ -73,7 +73,7 @@ static void *init_essiv(const char *name, size_t no_blocks,
 			gcry_md_get_algo_dlen(ESSIV_HASH));
 
 	gcry_md_close(hd);
-	
+
 	priv->plain = init_plain(name, no_blocks, key, key_len);
 
 	return priv;

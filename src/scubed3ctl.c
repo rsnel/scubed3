@@ -1,6 +1,6 @@
 /* scubed3ctl.c - scubed3 control program
  *
- * Copyright (C) 2009  Rik Snel <rik@snel.it>
+ * Copyright (C) 2019  Rik Snel <rik@snel.it>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -320,7 +320,7 @@ static int ctl_open_create_common(ctl_priv_t *priv, char *argv[], int create) {
 	assert(gcry_md_is_secure(hd));
 
 	gcry_md_write(hd, pw, pw_len - 1);
-	wipememory(pw, pw_len);
+	wipememory(pw,pw_len);
 	free(pw);
 
 	hash = gcry_md_read(hd, algo);
@@ -333,12 +333,16 @@ static int ctl_open_create_common(ctl_priv_t *priv, char *argv[], int create) {
 
 	gcry_md_close(hd);
 
+	// WARNING: sizeof(hash_text) must be cast to int... see below
 	ret = do_server_command(priv->s, 1, "%s-internal %s %s %.*s",
 			create?"create":"open", argv[0],
-			DEFAULT_CIPHER_STRING, sizeof(hash_text),
+			DEFAULT_CIPHER_STRING, (int)sizeof(hash_text),
 			hash_text);
 
-	wipememory(hash_text, sizeof(hash_text));
+	// HERE BE DRAGONS! if sizeof(hash_text) is NOT cast to int, then
+	// the compiler 'optimizes' it to 0, that will lead to wipememory
+	// attempting to wipe all memory, which will lead to a segfault
+	wipememory(hash_text, (int)sizeof(hash_text));
 
 	return ret;
 }

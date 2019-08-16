@@ -34,8 +34,6 @@
 #include "gcry.h"
 #include "ecch.h"
 
-#define DM_SECTOR_LOG 9
-
 /* stream (FILE*) stuff */
 
 static void stream_io(void *fp, void *buf, uint64_t offset, uint32_t size,
@@ -73,8 +71,6 @@ static void *stream_open(const char *path) {
 }
 
 /* end stream stuff */
-
-#define MAX_MACROBLOCKS		(3*4096*4)
 
 #define BASE			(dev->tmp_macroblock)
 #define INDEXBLOCK_HASH		(BASE + 0)
@@ -118,6 +114,17 @@ void blockio_init_file(blockio_t *b, const char *path, uint8_t macroblock_log,
 	b->macroblock_size = 1<<macroblock_log;
 	b->mesoblk_log = mesoblk_log;
 
+        VERBOSE("mesoblock size %d bytes, macroblock size %d bytes",
+			1<<b->mesoblk_log, b->macroblock_size);
+
+	VERBOSE("%ld mesoblocks per macroblock, including index", 1L<<(macroblock_log - mesoblk_log));
+
+        size_t indexblock_size = 120 + (4<<(macroblock_log - mesoblk_log));
+        size_t max_macroblocks = ((1L<<mesoblk_log) - indexblock_size)<<3;
+
+        VERBOSE("required minimumsize of indexblock excluding macroblock index is %ld bytes", indexblock_size);
+        VERBOSE("maximal amount of macroblocks supported %ld", max_macroblocks);
+
 	b->open = (void* (*)(const void*))stream_open;
 	b->read = stream_read;
 	b->write = stream_write;
@@ -151,14 +158,14 @@ void blockio_init_file(blockio_t *b, const char *path, uint8_t macroblock_log,
 		if (ioctl(fileno(priv), BLKGETSIZE64, &tmp))
 			FATAL("error querying size of blockdevice %s", path);
 
-	} else FATAL("%s is not a regular file", path);
+	} else FATAL("%s is not a regular file or a block device", path);
 
-	DEBUG("backing size in bytes %ld, macroblock_size=%u",
-			tmp, b->macroblock_size);
+	DEBUG("backing size in bytes %ld having %ld macroblocks of size %u",
+			tmp, tmp>>b->macroblock_log, b->macroblock_size);
 
 	/* check if the device or file is not too large */
 	tmp >>= b->macroblock_log;
-	if (tmp > MAX_MACROBLOCKS) FATAL("device is too large");
+	if (tmp > max_macroblocks) FATAL("device is too large");
 	b->no_macroblocks = tmp;
 
 	b->blockio_infos = ecalloc(sizeof(blockio_info_t), b->no_macroblocks);

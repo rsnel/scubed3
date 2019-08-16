@@ -117,53 +117,56 @@ resizes a scubed partition
 * MACROBLOCKS, the amount of macroblocks owned by the partition
 
 
-Example calculation:
-~~~~~~~~~~~~~~~~~~~
+Example calculation (version 2019)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Macroblock size 4MB (m). Mesoblock size 16kB (s). For the moment: assume 256
-mesoblocks per macroblock. Mesoblock 0 is the indexblock, the other ones are
-datablocks.
+Suppose the device consists of 10 macroblocks. To not to overwrite the current
+rivision while writing the new rivision when, in addition, writing random
+blocks. A certain amount of wiggleroom has to be taken into account. Calculations
+in 'testing/' point to the the following conjecture:
+
+	wasting 60% of space, leads to 40% wasted writes
+	wasting 50% of space, leads to 50% wasted writes
+	wasting 40% of space, leads to 60% wasted writes
+	etc
+
+So there is a tradeoff between the usable size of a device and the amount of
+dummy writes (writing empty macroblocks) that are needed. The amount of blocks
+that are USED is specified in simultaneous_blocks. To be efficient, some more
+space needs to be wasted, this is specified in reserved_blocks.
+
+For this example we assume the following. Macroblock size 4MB (m). Mesoblock
+size 16kB (s). So, there are 256 mesoblocks per macroblock. Mesoblock
+0 is the indexblock, the other ones are datablocks.
+
+Whatever values are used, the indexblock MUST fit in one mesoblock! Required
+size of the indexblock depends on the maximum amount of macroblocks scubed3 can
+support (the size of a backing device can change, so scubed3 should be able to
+deal with it, up to a maximum size).
+
+The useful size of the device is
+	(1<<(macroblock_log - mesoblock_log) - 1)(simultaneous_blocks - reserved_blocks)
+
+Note that the usable size is limited by 2^32*(1<<mesoblock_log), because the device is partitioned
+in mesoblocks, and we have 32 bits available to index the mesoblocks.
 
 Layout of macroblock:
 
 0x000000 SHA256_HASH_INDEXBLOCK
 0x000020 SHA256_HASH_DATA (hash of ciphertext)
-0x000040 SEQNO_HASH
+0x000040 SEQNO_HASH     // hash of the list of seqno's that are required for this revision to be complete
 0x000060 uint64_t seqno
 0x000068 8byte literal "SSS3v0.1"
-0x000070 uint32_t random_len
-0x000074 uint16_t tail_macroblock 
-0x000076 uint16_t reserved_macroblocks (device size based on difference of these)
-0x000078 uint16_t layout_revision
-0x00007A uint8_t macroblock_log
-0x00007B uint8_t mesoblock_log
-0x00007C uint32_t next_seqno
-0x000080 uint64_t seqno_of_revision[0] (prng start rev current)
-0x000088 uint64_t seqno_of_revision[1] (prng start rev previous)
-0x000090 ..... 0x0000B0 etc
-0x0000B8 uint64_t seqno_of_revision[7] (prng start oldest revision)
-0x0000C0 uint16_t no_macroblocks[0] (current revision)
-0x0000C2 uint16_t no_macroblocks[1] (previous revision, if any)
-0x0000C4 uint16_t no_macroblocks[2] (...etc...)
-0x0000C6 ..... 0x0000CD  no_macroblocks[3] - no_macroblocks[6]
-0x0000CE uint16_t no_macroblocks[7]
-0x0000D0 uint16_t revision_work[0]
-0x0000D2 uint16_t revision_work[1]
-0x0000D4 uint16_t revision_work[2]
-0x0000D6 ..... 0x0000DD revision_work[3] - no_macroblocks[6]
-0x0000DE uint16_t revision_work[7]
-0x0000E0 - 0x0000FF reserved
-0x000100 uint32_t no_indices
-0x000104 uint32_t idx0x01
-0x000108 uint32_t idx0x02
+0x000070 uint32_t simultaneous_blocks
+0x000074 uint32_t reserved_blocks
+0x000078 uint32_t no_indices
+0x00007C uint32_t idx0x01
+0x000080 uint32_t idx0x02
 ......
-0x0004FC uint32_t idx0xFF
-0x000500 - 0x000FFF reserved
-0x001000 bitmap: groups of 2 bits
-		00 this block is not allocated to us
-		01 allocated and in use
-		10 allocated and free
-		11 allocated and free and participated in selection
+0x000474 uint32_t idx0xFF
+0x000478 bitmap: each bit represents a macroblock of the base device
+		 0 this block is not allocated to us
+		 1 this block is allocated to us
 0x003FFF last 8 bits of bitmap
 0x004000 datablock1
 0x008000 datablock2
@@ -172,9 +175,17 @@ Layout of macroblock:
 0x3FC000 datablock255
 0x400000 end
 
-There is space to index 0x4000 - 0x1000 = 0x3000 = 12288 bytes,
-which corresponds to a base device size of 12288*4*4/1024 = 192GiB.
+There is space to index 0x4000 - 0x0478 = 0x3B88 = 15240 bytes,
+which corresponds to a base device size of 15240*8 = 121920 macroblocks,
+which correspond to 4MiB * 121902 = 476GiB
+
+Maximum usable size of the device is 2^32*(1<<mesoblock_log) = 64TiB, which is
+sufficient in the light of the maximum size of the backing device.
 
 
+In general the indexblock requires:
+- fixed size: 120 bytes
+- 4 bytes for every mesoblock in a macroblock
+- 1 bit for every macroblock
 
 

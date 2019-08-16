@@ -447,15 +447,13 @@ int main(int argc, char **argv) {
 
 	verbose_init(argv[0]);
 
-	VERBOSE("version %s Copyright (C) 2011, Rik Snel <rik@snel.it>",
+	VERBOSE("version %s Copyright (C) 2019, Rik Snel <rik@snel.it>",
 			PACKAGE_VERSION);
 
 	if (fuse_opt_parse(&args, &options, scubed3_opts, NULL) == -1)
 		FATAL("error parsing options");
 
 	if (!options.base) FATAL("argument -b FILE is required");
-
-	if (options.mesoblock_log < 12) FATAL("mesoblock log is too small");
 
 	/* lock me into memory; don't leak info to swap */
 	if (mlockall(MCL_CURRENT|MCL_FUTURE)<0)

@@ -241,18 +241,25 @@ static int control_status(int s, control_thread_priv_t *priv, char *argv[]) {
         int rep(control_status_priv_t *priv, fuse_io_entry_t *entry) {
 		size_t size = ((entry->d.rev[0].no_macroblocks - entry->d.reserved_macroblocks)*entry->d.mmpm);
 		priv->macroblocks_left -= entry->d.rev[0].no_macroblocks;
-                return control_write_line(priv->s, "%07u blocks in %s (%.1fMiB)%s%s%s%s%s\n", entry->d.rev[0].no_macroblocks, entry->head.key, ((entry->d.rev[0].no_macroblocks >= entry->d.reserved_macroblocks)?size<<entry->d.b->mesoblk_log:0)/(1024.*1024.), entry->inuse?" [U]":"", entry->close_on_release?" [C]":"", entry->mountpoint?" [MNT ":"", entry->mountpoint?entry->mountpoint:"", entry->mountpoint?"]":"");
+                return control_write_line(priv->s,
+				"%07u blocks in %s (%.1fMiB)%s%s%s%s%s\n",
+				entry->d.rev[0].no_macroblocks, entry->head.key,
+				((entry->d.rev[0].no_macroblocks >= entry->d.reserved_macroblocks)?
+				 	size<<entry->d.b->mesoblk_log:0)/(1024.*1024.),
+				entry->inuse?" [U]":"",
+				entry->close_on_release?" [C]":"",
+				entry->mountpoint?" [MNT ":"",
+				entry->mountpoint?entry->mountpoint:"",
+				entry->mountpoint?"]":"");
         }
 
 	if (control_write_status(s, 0)) return -1;
-
-//	if (control_write_line(s, "consists of %u macroblocks of %u bytes\n", priv->b->no_macroblocks, priv->b->macroblock_size)) return -1;
-//	if (control_write_line(s, "each macroblock has %d mesoblocks of %u bytes\n", 1<<(priv->b->macroblock_log - priv->b->mesoblk_log), 1<<priv->b->mesoblk_log)) return -1;
 
 	if (hashtbl_ts_traverse(priv->h, (int (*)(void*, hashtbl_elt_t*))rep, &status_priv)) return -1;
 
 	if (control_write_line(s, "%07u blocks unclaimed\n", status_priv.macroblocks_left)) return -1;
 	if (control_write_line(s, "%07u blocks total\n", priv->b->no_macroblocks)) return -1;
+
 	return control_write_terminate(s);
 }
 
@@ -322,14 +329,24 @@ static int control_open_create_common(int s, control_thread_priv_t *priv, char *
 		hashtbl_unlock_element_byptr(&entry->unique_id);
 		entry->ids = priv->ids;
 
+		/* scan base file/device for our blocks */
 		blockio_dev_init(&entry->d, priv->b, &entry->c, argv[0]);
+
+		/* if we used 'create' we should not have found any blocks */
 		if (add && entry->d.rev[0].no_macroblocks)
-			ecch_throw(ECCH_DEFAULT, "unable to create device: it already exists, use `open' instead");
+			ecch_throw(ECCH_DEFAULT, "unable to create device: "
+					"it already exists, use `open' instead");
+
+
+		/* if we used 'open' we expect to find at least one block */
 		if (!add & !entry->d.rev[0].no_macroblocks)
 			ecch_throw(ECCH_DEFAULT, "unable to open device: passphrase wrong?");
+
 		entry->size = 0;
 		if (entry->d.rev[0].no_macroblocks > entry->d.reserved_macroblocks) entry->size = ((entry->d.rev[0].no_macroblocks-entry->d.reserved_macroblocks)<<entry->d.b->mesoblk_log)*entry->d.mmpm;
 		scubed3_init(&entry->l, &entry->d);
+
+		// really only used for test
 		//ecch_throw(ECCH_DEFAULT, "break off, we're testing");
 	}
 	ecch_catch_all {

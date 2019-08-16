@@ -46,6 +46,8 @@ void *cache_thread(void *arg) {
 
 	VERBOSE("%lu seconds and %ld nanoseconds", ts.tv_sec, ts.tv_nsec);
 
+	/* the cache thread doesn't do anything yet */
+
 	pthread_exit(NULL);
 }
 

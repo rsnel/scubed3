@@ -706,7 +706,7 @@ int main(int argc, char **argv) {
 	priv.mountpoint = strdup(result.argv[0]);
 	if (!priv.mountpoint) FATAL("out of memory");
 
-	if (parse_int(&priv.no_macroblocks, result.argv[1])) 
+	if (parse_int(&priv.no_macroblocks, result.argv[1]))
 		FATAL("unable to read the number of macroblocks from the server");
 
 	if (!connections) {

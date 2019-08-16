@@ -40,7 +40,7 @@ completely against this. We assume the adversary cannot detect read access.
 Paranoia levels
 ~~~~~~~~~~~~~~~
 
-When a new macroblock needs to be selected: 
+When a new macroblock needs to be selected:
 
 Level 0: not paranoid
 
@@ -86,7 +86,7 @@ Control protocol
 
 /MOUNTPOINT/.control is a file to which commands can be written, and
 scubed3's response can be read. A command is a line of text terminated
-with a linefeed '\n'. 
+with a linefeed '\n'.
 
 A response starts with "OK\n", or "ERR\n". One or more lines follow.
 The last line must be ".\n". This terminates the message.
@@ -117,8 +117,8 @@ resizes a scubed partition
 * MACROBLOCKS, the amount of macroblocks owned by the partition
 
 
-Example calculation (version 2019)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Example calculation if indexblock size
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Suppose the device consists of 10 macroblocks. To not to overwrite the current
 rivision while writing the new rivision when, in addition, writing random
@@ -187,5 +187,21 @@ In general the indexblock requires:
 - fixed size: 120 bytes
 - 4 bytes for every mesoblock in a macroblock
 - 1 bit for every macroblock
+
+Random blockselection
+~~~~~~~~~~~~~~~~~~~~~
+
+How to randomly select blocks?
+
+Suppose a device has 8 mesoblocks assigned to it. The state of the device is
+currenty contained in:
+block 0, seqno 13
+block 7, seqno 17
+block 3, seqno 18
+block 1, seqno 20
+
+Randomly selecting a block from these 8 blocks seems impossible, because we do not
+want the new block to be 0, 7, 3 or 1 since that that would damage te state of the device
+if something goes wrong during the writing of the new block.
 
 

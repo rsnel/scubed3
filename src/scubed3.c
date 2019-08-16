@@ -1,6 +1,6 @@
 /* scubed3.c - deniable encryption resistant to surface analysis
  *
- * Copyright (C) 2009  Rik Snel <rik@snel.it>
+ * Copyright (C) 2019  Rik Snel <rik@snel.it>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -44,8 +44,6 @@
 #include "cipher.h"
 #include "hashtbl.h"
 #include "fuse_io.h"
-
-#define DM_SECTOR_LOG 9
 
 #define ID	(index>>l->mesobits)
 #define NO	(index&l->mesomask)
@@ -213,7 +211,7 @@ void scubed3_cycle(scubed3_t *l) {
 void *replay(blockio_info_t *bi, scubed3_t *l) {
 	uint32_t k, index;
 
-	//VERBOSE("replay at seqno=%lld (%d indices)", bi->seqno, bi->no_indices);
+	VERBOSE("replay at seqno=%ld (%d indices)", bi->seqno, bi->no_indices);
 	for (k = 0; k < bi->no_indices; k++) {
 		//VERBOSE("k=%u, bi->indices[k]=%u", k, bi->indices[k]);
 		if (bi->indices[k] >= l->no_block_indices) continue;
@@ -288,12 +286,12 @@ void scubed3_init(scubed3_t *l, blockio_dev_t *dev) {
 	l->no_block_indices = (dev->rev[0].no_macroblocks -
 			dev->reserved_macroblocks)*dev->mmpm;
 
-	//VERBOSE("l->no_block_indices=%d", l->no_block_indices);
+	VERBOSE("l->no_block_indices=%d", l->no_block_indices);
 	l->block_indices = ecalloc(l->no_block_indices, sizeof(uint32_t));
 
 	for (i = 0; i < l->no_block_indices; i++) l->block_indices[i] = 0xFFFFFFFF;
 
-	//debug_stuff(l);
+	debug_stuff(l);
 	dllarr_iterate(&dev->used_blocks, (dllarr_iterator_t)replay, l);
 }
 
@@ -475,52 +473,3 @@ int main(int argc, char **argv) {
 	exit(ret);
 }
 
-#if 0
-	cipher_t c1;
-	cipher_t c2;
-	unsigned char data[32] = "0123456789ABCDEF0123456789ABCDEF";
-	unsigned char out1[32];
-	unsigned char out2[32];
-	unsigned char res1r[32];
-	unsigned char res2r[32];
-	unsigned char res1s[32];
-	unsigned char res2s[32];
-	char key1[32] = { "FEEFACEBADDECAFDEADBEEFC0FFEEEEE" };
-	char key2[32] = { "FEEFACEBADDECAFDEADBEEFC0FFEEEEE" };
-
-	cipher_init(&c1, "CBC_PLAIN(AES256)", 2, key1, 32);
-	cipher_init(&c2, "CBC_ESSIV(AES256)", 2, key2, 32);
-	cipher_enc(&c1, out1, data, 0, 0);
-	cipher_enc(&c2, out2, data, 0, 0);
-
-	DEBUG("out1");
-	verbose_md5((char*)out1);
-	verbose_md5((char*)out1 + 16);
-
-	DEBUG("out2");
-	verbose_md5((char*)out2);
-	verbose_md5((char*)out2 + 16);
-
-	cipher_dec(&c1, res1s, out1, 0, 0);
-	cipher_dec(&c2, res2s, out2, 0, 0);
-	cipher_dec(&c2, res1r, out1, 0, 0);
-	cipher_dec(&c1, res2r, out2, 0, 0);
-
-	DEBUG("res1s");
-	verbose_md5((char*)res1s);
-	verbose_md5((char*)res1s + 16);
-
-	DEBUG("res2s");
-	verbose_md5((char*)res2s);
-	verbose_md5((char*)res2s + 16);
-
-	DEBUG("res1r");
-	verbose_md5((char*)res1r);
-	verbose_md5((char*)res1r + 16);
-
-	DEBUG("res2r");
-	verbose_md5((char*)res2r);
-	verbose_md5((char*)res2r + 16);
-
-	exit(0);
-#endif

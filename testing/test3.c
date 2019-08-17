@@ -9,9 +9,9 @@
 #include "verbose.h"
 #include "random.h"
 
-#define NO_BLOCKS 8
-#define SIMULTANEOUS_BLOCKS 3
-#define ANALYSIS_LENGTH 10000
+#define NO_BLOCKS 4
+#define SIMULTANEOUS_BLOCKS 2
+#define ANALYSIS_LENGTH 8
 
 typedef enum blockstate_e { EMPTY, FILLER, DATA } blockstate_t;
 
@@ -187,7 +187,7 @@ void show_blockdests(blockdest_t *blockdests, int no) {
 
 int main(int argc, char *argv[]) {
 	random_t r;
-	uint64_t seqno = 0, fillerno = 0, discardno = 0;
+	uint64_t seqno = 0, fillerno = 0;//, discardno = 0;
 	blockinfo_t blockinfos[NO_BLOCKS] = { };
 	blockdest_t blockdests[ANALYSIS_LENGTH] = { };
 
@@ -195,6 +195,35 @@ int main(int argc, char *argv[]) {
 
 	random_init(&r, NO_BLOCKS);
 
+	random_push(&r, 0);
+	random_push(&r, 2);
+	random_push(&r, 2);
+	random_push(&r, 3);
+	random_push(&r, 2);
+	random_push(&r, 3);
+	random_push(&r, 0);
+	random_push(&r, 2);
+	/*random_push(&r, 5);
+	random_push(&r, 1);
+	random_push(&r, 0);
+	random_push(&r, 2);
+	random_push(&r, 1);
+	random_push(&r, 3);
+	random_push(&r, 0);
+	random_push(&r, 2);
+	random_push(&r, 4);
+	random_push(&r, 3);
+	random_push(&r, 4);
+	random_push(&r, 0);
+	random_push(&r, 0);
+	random_push(&r, 3);
+	random_push(&r, 3);
+	random_push(&r, 1);
+	random_push(&r, 2);
+	random_push(&r, 5);
+	random_push(&r, 3);
+	random_push(&r, 1);
+	random_push(&r, 4);*/
 	VERBOSE("trail with NO_BLOCKS=%d, ANALISYS_LENGTH=%d, SIMULTANEOUS_BLOCKS=%d",
 			NO_BLOCKS, ANALYSIS_LENGTH, SIMULTANEOUS_BLOCKS);
 
@@ -202,7 +231,7 @@ int main(int argc, char *argv[]) {
 	for (i = 0; i < ANALYSIS_LENGTH; i++) {
 		//int peek = random_peek(&r, i);
 		int peek = random_pop(&r);
-		//VERBOSE("step %d, selected block is %d", i, peek);
+		VERBOSE("step %d, selected block is %d", i, peek);
 		if (blockinfos[peek].state != DATA) {
 			blockdests[i].block = peek;
 			blockdests[i].state = DATA;
@@ -218,7 +247,7 @@ int main(int argc, char *argv[]) {
 			blockinfos[peek].seqno = ++seqno;
 		}
 
-		if (seqno - fillerno - 1 == SIMULTANEOUS_BLOCKS) {
+		/*if (seqno - fillerno - 1 == SIMULTANEOUS_BLOCKS) {
 			while (blockdests[discardno].state != DATA) {
 				blockdests[discardno].locked = 1;
 				discardno++;
@@ -229,7 +258,7 @@ int main(int argc, char *argv[]) {
 			fillerno++;
 			discardno++;
 			//FATAL("complete!");
-		}
+		}*/
 
 		//show_blockinfos(blockinfos);
 		//show_blockdests(blockdests, i + 1);

@@ -1,3 +1,5 @@
+strategy: strategy.c verbose.c random.c
+
 all: test test2 test3
 
 test3: test3.c dllist.c verbose.c random.c

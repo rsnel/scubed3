@@ -9,17 +9,11 @@
 #include "verbose.h"
 #include "random.h"
 
-#if 0 // test 1
-#define NO_BLOCKS 4
-#define SIMULTANEOUS_BLOCKS 2
-#define ANALYSIS_LENGTH 5
-#endif
+//#define TEST2 
 
-#if 1 // test 2,3
-#define NO_BLOCKS 6
-#define SIMULTANEOUS_BLOCKS 3
-#define ANALYSIS_LENGTH 8
-#endif
+#define NO_BLOCKS 12
+#define SIMULTANEOUS_BLOCKS 4
+#define ANALYSIS_LENGTH 100000
 
 // demonstration of algorithm
 //
@@ -38,7 +32,13 @@
 //  4.3.2 -0-
 //  4.3.3 -0-1
 //  4.4   -0-12
-//
+
+#ifdef TEST1
+#define NO_BLOCKS 4
+#define SIMULTANEOUS_BLOCKS 2
+#define ANALYSIS_LENGTH 5
+#endif
+
 //  test 2
 //        20312015
 //  0     0
@@ -63,7 +63,13 @@
 //  6.5.5 --0-12
 //  6.6   --0-123
 //  7     --0-1234
-//
+
+#ifdef TEST2
+#define NO_BLOCKS 6
+#define SIMULTANEOUS_BLOCKS 3
+#define ANALYSIS_LENGTH 8
+#endif
+
 //          20320323
 //  0       0
 //  1       01
@@ -95,8 +101,12 @@
 //  7.6.6.5 ----0-
 //  7.6.6.6 ----0-1
 //  7.7     ----0-12
-//
 
+#ifdef TEST3
+#define NO_BLOCKS 6
+#define SIMULTANEOUS_BLOCKS 3
+#define ANALYSIS_LENGTH 8
+#endif
 
 typedef enum block_state_e { DATA, FILLER } block_state_t;
 
@@ -105,17 +115,6 @@ typedef struct seq_s {
 	block_state_t state;
 	int count, block_idx;
 } seq_t;
-
-const char *block_state_string(block_state_t state) {
-	switch (state) {
-		case DATA:
-			return "DATA";
-		case FILLER:
-			return "FILLER";
-		default:
-			assert(0);
-	}
-}
 
 typedef struct disk_s {
 	seq_t *seq;
@@ -131,6 +130,10 @@ typedef struct depth_s {
 	long int i;
 } depth_t;
 
+depth_t *tail_depth(depth_t *d) {
+	return d->next?tail_depth(d->next):d;
+}
+
 int count_depth(depth_t *d) {
 	assert(d);
 	return d->next?(count_depth(d->next) + 1):0;
@@ -140,61 +143,72 @@ typedef struct info_s {
 	counter_t counter;
 	disk_t disk[NO_BLOCKS];
 	seq_t seq[ANALYSIS_LENGTH];
+	int maxdepth;
+	long int maxbacktrack;
 } info_t;
 
 void do_block(seq_t *s, info_t *i, depth_t *d) {
 	depth_t depth = { .next = d };
 	seq_t *prev; // pointer to the block that will be overwritten (if any)
 	seq_t **diskblock;
+	int tmp = count_depth(d);
+	long int tmp2 = tail_depth(d)->i - d->i;
 
-	VERBOSE("attempt to place block %ld on disk at %d, depth=%d, dc=%d, fc=%d ",
-			d->i, s->block_idx, count_depth(d), i->counter.data, i->counter.filler);
-
-	//if (s->state != DATA) FATAL("placing non-DATA block is not implemented");
+	if (tmp > i->maxdepth) i->maxdepth = tmp;
+	if (tmp2 > i->maxbacktrack) i->maxbacktrack = tmp2;
+	
+	//VERBOSE("attempt to place block %ld on disk at %d, depth=%d, dc=%d, fc=%d ",
+	//		d->i, s->block_idx, count_depth(d), i->counter.data, i->counter.filler);
 
 	diskblock = &i->disk[s->block_idx].seq;
 	prev = *diskblock;
 
 	if (prev) {
+		/* if we overwrite a datablock, we must make
+		 * sure that it is old enough */
 		if (prev->state == DATA) {
 			int age = i->counter.data - prev->count;
-			VERBOSE("writing on top of DATA-block count=%d, age is %d", prev->count, age);
+			//VERBOSE("writing on top of DATA-block count=%d, age is %d", prev->count, age);
 			if (age <= SIMULTANEOUS_BLOCKS) {
-				VERBOSE("index of overwritten block is %ld", depth.i);
+				//VERBOSE("conflict while placing block %ld mark previous block as filler", d->i);
+				//VERBOSE("index of overwritten block is %ld", depth.i);
 				//depth.i = prev - i->seq;
 				depth.i = d->i;
 				seq_t *topop;
 				do {
 					topop = &i->seq[--depth.i];
-					VERBOSE("popping block %ld", depth.i);
+					//VERBOSE("popping block %ld", depth.i);
 					if (topop->state == DATA) i->counter.data--;
 					else if (topop->state == FILLER) i->counter.filler--;
 					else assert(0);
+
+					/* check that this block is actually on disk
+					 * at this time at block_idx */
 					assert(i->disk[topop->block_idx].seq == topop);
+
+					/* remove the block */
 					i->disk[topop->block_idx].seq = topop->prev;
 				} while (topop != prev);
+
 				/* mark last popped block as filler */
 				topop->state = FILLER;
+				//VERBOSE("conflict placing block %ld, retry from block %ld<-FILLER", d->i, depth.i);
 
 				/* replay */
 				for (; depth.i < d->i; depth.i++) {
 					do_block(&i->seq[depth.i], i, &depth);
 				}
-
-				//FATAL("not implemented, block is too young to be overwritten");
-			} else VERBOSE("no problem");
-		} else {
-			VERBOSE("overwriting FILLER block");
-		}
+			} 
+		} 
 	}
 
 	*diskblock = s;
 	s->prev = prev;
 	if (s->state == DATA) {
-		VERBOSE("placed block %ld as DATA %d", d->i, i->counter.data);
+		//VERBOSE("placed block %ld at %d as DATA %d at depth %d", d->i, s->block_idx, i->counter.data, count_depth(d));
 		s->count = i->counter.data++;
 	} else if (s->state == FILLER) {
-		VERBOSE("placed block %ld as FILLER", d->i);
+		//VERBOSE("placed block %ld at %d as FILLER at depth %d", d->i, s->block_idx, count_depth(d));
 		s->count = i->counter.filler++;
 	} else assert(0);
 }
@@ -208,7 +222,7 @@ int main(int argc, char *argv[]) {
 
 	random_init(&r, NO_BLOCKS);
 
-#if 0 // test 1
+#ifdef TEST1 // test 1
 	assert(NO_BLOCKS == 4);
 	assert(ANALYSIS_LENGTH == 5);
 	assert(SIMULTANEOUS_BLOCKS == 2);
@@ -218,7 +232,7 @@ int main(int argc, char *argv[]) {
 	random_push(&r, 0);
 	random_push(&r, 2);
 #endif
-#if 1 // test 2
+#ifdef TEST2 // test 2
 	assert(NO_BLOCKS == 6);
 	assert(ANALYSIS_LENGTH == 8);
 	assert(SIMULTANEOUS_BLOCKS == 3);
@@ -227,6 +241,19 @@ int main(int argc, char *argv[]) {
 	random_push(&r, 0);
 	random_push(&r, 2);
 	random_push(&r, 1);
+	random_push(&r, 3);
+	random_push(&r, 0);
+	random_push(&r, 2);
+#endif
+#ifdef TEST3 // test 3
+	assert(NO_BLOCKS == 6);
+	assert(ANALYSIS_LENGTH == 8);
+	assert(SIMULTANEOUS_BLOCKS == 3);
+	random_push(&r, 3);
+	random_push(&r, 2);
+	random_push(&r, 3);
+	random_push(&r, 0);
+	random_push(&r, 2);
 	random_push(&r, 3);
 	random_push(&r, 0);
 	random_push(&r, 2);
@@ -241,19 +268,21 @@ int main(int argc, char *argv[]) {
 		do_block(s, &info, &depth);
 	}
 
+	VERBOSE("fraction %f", info.counter.data/(double)depth.i);
+	VERBOSE("maxdepth=%d, maxbacktrack=%ld", info.maxdepth, info.maxbacktrack);
+
+	int fillstreak = 0;
+	int max_fillstreak = 0;
+	for (int i = 0; i < ANALYSIS_LENGTH; i++) {
+		fprintf(stderr, info.seq[i].state == DATA?((i < depth.i - info.maxbacktrack)?"D":"d"):"-");
+		if (info.seq[i].state == FILLER) fillstreak++;
+		else {
+			if (fillstreak > max_fillstreak) max_fillstreak = fillstreak;
+			fillstreak = 0;
+		}
+	}
+
+	fprintf(stderr, "\n");
+	VERBOSE("fillstreak = %d", max_fillstreak);
 	exit(0);
 }
-
-	/*random_push(&r, 4);
-	random_push(&r, 3);
-	random_push(&r, 4);
-	random_push(&r, 0);
-	random_push(&r, 0);
-	random_push(&r, 3);
-	random_push(&r, 3);
-	random_push(&r, 1);
-	random_push(&r, 2);
-	random_push(&r, 5);
-	random_push(&r, 3);
-	random_push(&r, 1);
-	random_push(&r, 4);*/

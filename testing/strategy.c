@@ -9,32 +9,21 @@
 #include "verbose.h"
 #include "random.h"
 
+#if 0 // test 1
 #define NO_BLOCKS 4
 #define SIMULTANEOUS_BLOCKS 2
 #define ANALYSIS_LENGTH 5
+#endif
+
+#if 1 // test 2,3
+#define NO_BLOCKS 6
+#define SIMULTANEOUS_BLOCKS 3
+#define ANALYSIS_LENGTH 8
+#endif
 
 // demonstration of algorithm
 //
-//        012120
-//  0     0
-//  1     01
-//  2     012
-//  3     0123   (overwrite 1, difference<3, relabel from 1 to 3)
-//  3.1   0-
-//  3.2   0-1
-//  3.3   0-12
-//  4     0-123  (overwrite 2, difference<3, relabel from 2 to 4)
-//  4.2   0--
-//  4.3   0--1
-//  4.4   0--12
-//  5     0--123 (overwrite 0, difference=3, relabel from 0 to 5)
-//  5.0   -
-//  5.1   --
-//  5.2   ---
-//  5.3   ---0
-//  5.4   ---01
-//  5.5   ---012
-//
+//  test 1
 //        20323
 //
 //  0     0
@@ -50,6 +39,7 @@
 //  4.3.3 -0-1
 //  4.4   -0-12
 //
+//  test 2
 //        20312015
 //  0     0
 //  1     01
@@ -72,6 +62,7 @@
 //  6.5.4 --0-1
 //  6.5.5 --0-12
 //  6.6   --0-123
+//  7     --0-1234
 //
 //          20320323
 //  0       0
@@ -217,11 +208,29 @@ int main(int argc, char *argv[]) {
 
 	random_init(&r, NO_BLOCKS);
 
+#if 0 // test 1
+	assert(NO_BLOCKS == 4);
+	assert(ANALYSIS_LENGTH == 5);
+	assert(SIMULTANEOUS_BLOCKS == 2);
 	random_push(&r, 3);
 	random_push(&r, 2);
 	random_push(&r, 3);
 	random_push(&r, 0);
 	random_push(&r, 2);
+#endif
+#if 1 // test 2
+	assert(NO_BLOCKS == 6);
+	assert(ANALYSIS_LENGTH == 8);
+	assert(SIMULTANEOUS_BLOCKS == 3);
+	random_push(&r, 5);
+	random_push(&r, 1);
+	random_push(&r, 0);
+	random_push(&r, 2);
+	random_push(&r, 1);
+	random_push(&r, 3);
+	random_push(&r, 0);
+	random_push(&r, 2);
+#endif
 
 	VERBOSE("trial with NO_BLOCKS=%d, ANALYSIS_LENGTH=%d, SIMULTANEOUS_BLOCKS=%d",
 			NO_BLOCKS, ANALYSIS_LENGTH, SIMULTANEOUS_BLOCKS);
@@ -235,23 +244,7 @@ int main(int argc, char *argv[]) {
 	exit(0);
 }
 
-	/* random_push(&r, 0);
-	random_push(&r, 2);
-	random_push(&r, 2);
-	random_push(&r, 3);
-	random_push(&r, 2);
-	random_push(&r, 3);
-	random_push(&r, 0);
-	random_push(&r, 2); */
-	/*random_push(&r, 5);
-	random_push(&r, 1);
-	random_push(&r, 0);
-	random_push(&r, 2);
-	random_push(&r, 1);
-	random_push(&r, 3);
-	random_push(&r, 0);
-	random_push(&r, 2);
-	random_push(&r, 4);
+	/*random_push(&r, 4);
 	random_push(&r, 3);
 	random_push(&r, 4);
 	random_push(&r, 0);

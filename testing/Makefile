@@ -8,7 +8,7 @@ test2: test2.c dllist.c verbose.c random.c
 
 test: test.c dllist.c verbose.c random.c
 
-CFLAGS=-Wall -Werror
+CFLAGS=-Wall -Werror -g
 
 clean:
-	rm test
+	rm -f test test2 test3 strategy

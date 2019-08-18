@@ -11,7 +11,7 @@
 
 #define NO_BLOCKS 4
 #define SIMULTANEOUS_BLOCKS 2
-#define ANALYSIS_LENGTH 8
+#define ANALYSIS_LENGTH 5
 
 // demonstration of algorithm
 //
@@ -110,8 +110,9 @@
 typedef enum block_state_e { DATA, FILLER } block_state_t;
 
 typedef struct seq_s {
+	struct seq_s *prev;
 	block_state_t state;
-	int count, block;
+	int count, block_idx;
 } seq_t;
 
 const char *block_state_string(block_state_t state) {
@@ -129,38 +130,107 @@ typedef struct disk_s {
 	seq_t *seq;
 } disk_t;
 
-typedef struct dfcount_s {
-	int data_counter;
-	int fill_counter;
-} dfcount_t;
+typedef struct counter_s {
+	int data;
+	int filler;
+} counter_t;
+
+typedef struct depth_s {
+	struct depth_s *next;
+	long int i;
+} depth_t;
+
+int count_depth(depth_t *d) {
+	assert(d);
+	return d->next?(count_depth(d->next) + 1):0;
+}
+
+typedef struct info_s {
+	counter_t counter;
+	disk_t disk[NO_BLOCKS];
+	seq_t seq[ANALYSIS_LENGTH];
+} info_t;
+
+void do_block(seq_t *s, info_t *i, depth_t *d) {
+	depth_t depth = { .next = d };
+	seq_t *prev; // pointer to the block that will be overwritten (if any)
+	seq_t **diskblock;
+
+	VERBOSE("attempt to place block %ld on disk at %d, depth=%d, dc=%d, fc=%d ",
+			d->i, s->block_idx, count_depth(d), i->counter.data, i->counter.filler);
+
+	//if (s->state != DATA) FATAL("placing non-DATA block is not implemented");
+
+	diskblock = &i->disk[s->block_idx].seq;
+	prev = *diskblock;
+
+	if (prev) {
+		if (prev->state == DATA) {
+			int age = i->counter.data - prev->count;
+			VERBOSE("writing on top of DATA-block count=%d, age is %d", prev->count, age);
+			if (age <= SIMULTANEOUS_BLOCKS) {
+				VERBOSE("index of overwritten block is %ld", depth.i);
+				//depth.i = prev - i->seq;
+				depth.i = d->i;
+				seq_t *topop;
+				do {
+					topop = &i->seq[--depth.i];
+					VERBOSE("popping block %ld", depth.i);
+					if (topop->state == DATA) i->counter.data--;
+					else if (topop->state == FILLER) i->counter.filler--;
+					else assert(0);
+					assert(i->disk[topop->block_idx].seq == topop);
+					i->disk[topop->block_idx].seq = topop->prev;
+				} while (topop != prev);
+				/* mark last popped block as filler */
+				topop->state = FILLER;
+
+				/* replay */
+				for (; depth.i < d->i; depth.i++) {
+					do_block(&i->seq[depth.i], i, &depth);
+				}
+
+				//FATAL("not implemented, block is too young to be overwritten");
+			} else VERBOSE("no problem");
+		} else {
+			VERBOSE("overwriting FILLER block");
+		}
+	}
+
+	*diskblock = s;
+	s->prev = prev;
+	if (s->state == DATA) {
+		VERBOSE("placed block %ld as DATA %d", d->i, i->counter.data);
+		s->count = i->counter.data++;
+	} else if (s->state == FILLER) {
+		VERBOSE("placed block %ld as FILLER", d->i);
+		s->count = i->counter.filler++;
+	} else assert(0);
+}
 
 int main(int argc, char *argv[]) {
 	random_t r;
-	dfcount_t dfcount = { };
-	disk_t disk[NO_BLOCKS] = { };
-	seq_t seq[ANALYSIS_LENGTH] = { };
+	depth_t depth = { };
+	info_t info = { }; /* initialization to 0 sets all blocks to state DATA */
 
 	verbose_init(argv[0]);
 
 	random_init(&r, NO_BLOCKS);
 
+	random_push(&r, 3);
+	random_push(&r, 2);
+	random_push(&r, 3);
+	random_push(&r, 0);
+	random_push(&r, 2);
+
 	VERBOSE("trial with NO_BLOCKS=%d, ANALYSIS_LENGTH=%d, SIMULTANEOUS_BLOCKS=%d",
 			NO_BLOCKS, ANALYSIS_LENGTH, SIMULTANEOUS_BLOCKS);
 
-	for (int i = 0; i < ANALYSIS_LENGTH; i++) {
-		int block = random_pop(&r);
-		VERBOSE("step %d, selected block is %d, data_counter %d", i, block, dfcount.data_counter);
-
-		seq[i].block = block;
-		seq[i].state = DATA;
-		seq[i].count = dfcount.data_counter++;
-		if (!disk[block].seq) {
-			disk[block].seq = &seq[i];
-		} else {
-			FATAL("BLOCK %d already contains data", block);
-		}
+	for (depth.i = 0; depth.i < ANALYSIS_LENGTH; depth.i++) {
+		seq_t *s = &info.seq[depth.i];
+		s->block_idx = random_pop(&r);
+		do_block(s, &info, &depth);
 	}
-
 
 	exit(0);
 }

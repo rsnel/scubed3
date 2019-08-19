@@ -125,15 +125,12 @@ rivision while writing the new rivision when, in addition, writing random
 blocks. A certain amount of wiggleroom has to be taken into account. Calculations
 in 'testing/' point to the the following conjecture:
 
-	wasting 60% of space, leads to 40% wasted writes
-	wasting 50% of space, leads to 50% wasted writes
-	wasting 40% of space, leads to 60% wasted writes
-	etc
+	If a device consists of n macroblocks, the maximum number of usable
+	macroblocks is about 1/4th of n. To be safe, the system default is
+	floor(1/4n).
 
-So there is a tradeoff between the usable size of a device and the amount of
-dummy writes (writing empty macroblocks) that are needed. The amount of blocks
-that are USED is specified in simultaneous_blocks. To be efficient, some more
-space needs to be wasted, this is specified in reserved_blocks.
+To be efficient, some more space needs to be wasted, this is specified in
+reserved_blocks.
 
 For this example we assume the following. Macroblock size 4MB (m). Mesoblock
 size 16kB (s). So, there are 256 mesoblocks per macroblock. Mesoblock
@@ -191,220 +188,64 @@ In general the indexblock requires:
 Random blockselection
 ~~~~~~~~~~~~~~~~~~~~~
 
-How to randomly select blocks?
+How to randomly select blocks and assign roles to them?
 
-Suppose a device has 8 mesoblocks assigned to it. The state of the device is
-currenty contained in:
-block 0, seqno 13
-block 7, seqno 17
-block 3, seqno 18
-block 1, seqno 20
+In this example, we use 6 macroblocks, each write a group of 3 blocks needs to
+be preserved (as can be seen in testing/, this is not possible (if you try it,
+every block will be marked as filler)), but it leads to a nice example that
+illustrates the recursive workings of the algorithm.
 
-Randomly selecting a block from these 8 blocks seems impossible, because we do
-not want the new block to be 0, 7, 3 or 1 since that that would damage te state
-of the device if something goes wrong during the writing of the new block.
+Randomly select blocks to write is easy; just use an RNG. But how to select
+roles? We must do it in such a way, that after every write the group of 2
+blocks (that contain the state of the scubed3 device) are preserved.
 
-The strategy is to plan ahead. We start with an example in a simple setting.
-- there are two macroblocks
-- the old macroblock may not be overwritten with the new
-- selection of each write must be random
+Suppose we have the random numbers 20312015..
 
-Algorithm description:
-- ' ' block empty or overwritten
-- '?' candidate block for data
-- '-' block used for dummy write
-- '0' newest block in current real write sequence
-- '1' next newest block in current real write sequence
-- etc
-- 'd' obsolete data
-
-each step in the algorithm consumes the next random number
-if there are more candidates than the number of datablocks
-that must stay intact, then de oldest candidate becomes
-a real datablock
-
-So, what happens in the case of NO_BLOCKS=6 and
-SIMULTANEOUS_BLOCKS=3
-
-seqno  | wr | 012345 | 0123456789ABCDEFGHIJKLMNOPQRSTUV
--------|----|------------------------------------------
-       |    |        | 41352133004342031201524400044320
-    1  |  0 |        | ?       |       |       |
-    2  |  0 |        | ??      |       |       |
-    3  |  0 |        | ???     |       |       |
-    4  |  1 |     0  | 0???    |       |       |
-    5  |  2 |  1  0  | 01???   |       |       |
-    6  |  3 |  1 20  | 012???  |       |       |
-    7  |  4 |  1 203 | 0123??? |       |       |
-    8  |  4 |  1 203 | 0123??/?|       |       |
-    9  |  5 |  14203 | 01234?/??       |       |
-   10  |  5 |  14203 | 01234?/?/?      |       |
-   11  |  7 |  54-03 | 0~~345-?/??     |       |
-   12  |  9 | -54-03 | 0~~345.--???    |       |
-   13  |  9 | -54-03 | 0~~345r--?/??   |       |
-   14  | 11 | 654--3 | ~~~345.-.6-???  |       |
-   15  | 12 | 6547-3 | ~~~345...6-7??? |       |
-   16  | 13 | 654783 | ~~~345...6.78???|       |
-   17  | 14 | 659783 | ~~~3~5...6.789???       |
-   18  | 15 | A59783 | ~~~3~5...~.789A???      |
-   19  | 16 | A59B83 | ~~~3~5...~.~89AB???     |
-   20  | 17 | A-9B83 | ~~~3~~...~.~89AB-???    |
-   21  |    |        | ~~~ ~        ~AB-C???   |
-
-seqno  | 012345 | 0123456789ABCDEF
--------|--------------------------
-       |        | 2031201524400044
-    1  |        | ?       |
-    2  |        | ??      |
-    3  |        | ???     |
-    4  |   0    | 0???    |
-    5  | 1 0    | 01???   |
-    6  | 1 02   | 012???  |
-    7  | 1-02   | 012-??? |
-    8  | 1-02   | 012-????|
-
-  0123456789ABCDEF
-  2031201524400044
-  ?      
-  ??     
-  ???    
-  ????   
-  ?????  
-  ???-???
-
-0123456
-xx     
- xx    
-  xx   
-x x    
-   xx  
- x x   
-    xx 
-  x x  
-     xx
-   x x 
-x  x   
- x  x  
-x   x  
-  x  x 
- x   x 
-x    x 
-    x x
-   x  x
-  x   x
- x    x
-x     x
-
-2031201524400044
-
-0123456789A|
-.1         |
- .1        |
-  .1       |
-. 2        |
-   .1      |
- . 2       |
-    .1     |
-  . 2      |
-     .1    |
-   . 2     |
-.  3       |
-      .1   |
-    . 2    |
- .  3      |
-       .1  |
-     . 2   |
-  .  3     |
-        .1 |
-      . 2  |
-   .  3    |
-
-???-??????
-
-1+2+3+4
-
-         .1|
-       . 2 |
-    .  3   |
-.   4      |
-
-compare 01
-compare 12
-	compare 02
-compare 23
-	compare 13
-		compare 03
-compare 34
-	compare 24
-		compare 14
-			compare 04
-compare 45
-	compare 35
-		compare 25
-			compare 15
-				compare 05
-compare 56
-	compare 46
-		compare 36
-			compare 26
-				compare 16
-					compare 06
-
-       |    | disk   | 00000000000000001111111111111111
-seqno  | wr | 012345 | 0123456789ABCDEF0123456789ABCDEF
--------|----|------------------------------------------
-       |    |        | 41352133004342031201524400044320
-    1  |  0 |        | ?       |       |       |
-    2  |  0 |        | ??      |       |       |
-    3  |  0 |        | ???     |       |       |
-    4  |  1 |     0  | 0???    |       |       |
-    5  |  2 |  0  1  | 10???   |       |       |
-    6  |  3 |  1 02  | 210???  |       |       |
-    7  |  4 |  2 130 | 3210??? |       |       |
-    8  |  4 |  2 130 | 3210??/?|       |       |
-    9  |  5 |  30241 | 43210?/??       |       |
-   10  |  5 |  30241 | 43210?/?/?      |       |
-   11  |  7 |  01-52 | 5~~210-?/??     |       |
-   12  |  9 | -01-52 | 5~~210.--???    |       |
-   13  |  9 | -01-52 | 5~~210r--?/??   |       |
-   14  | 11 | 012--3 | ~~~321.-.0-???  |       |
-   15  | 12 | 1230-4 | ~~~432...1-0??? |       |
-   16  | 13 | 234105 | ~~~543...2.10???|       |
-   17  | 14 | 340216 | ~~~6.4...3.210???       |
-   18  | 15 | 051327 | ~~~7.5...~.3210???      |
-   19  | 16 | 162038 | ~~~8.6...~.~3210???     |
-   20  | 17 | 1-2038 | ~~~8.~...~.~3210-???    |
-   21  |    |        | ~~~              0???   |
+The algorithm works as follows. The the first random number, mark the block as used
+on de disk as a DATA block. Take the next random number:
+- if we overwrite an old datablock, a filler block or an empty block, just continue
+- if we overwrite a datablock that is not old enough, backtrack to that block,
+  mark it as filler and then revisit all blocks between the old block and the current block
+  (revisiting: because we lost a datablock, we have to check that new datablocks
+  do not overwrite datablocks that are too young, if we overwrite a block that is too young,
+  backtrack and mark that block as filler etc....)
 
 
+step  | disk   | rng output | commentary
+      | 012345 | 20312015.. |
+---------------------------------------------------------------------
+0     |   0    | 0          | use empty #2 as DATA0
+1     | 1 0    | 01         | use empty #0 as DATA1
+2     | 1 02   | 012        | use empty #3 as DATA2
+3     | 1302   | 0123 	    | use empty #1 as DATA3
+4     | 1342   | 01234      | overwrite DATA0 at #2 with DATA4
+5     | 5342   | 012345     | overwrite DATA1 at #0 with DATA5
+6     | 5*42   | 012345*    | conflict at #1 with DATA3, rewind to 3
+6.3   | 1-02   | 012-       |  mark #1 as FILLER
+6.4   | 1-*2   | 012-*      |  conflict at #2 with DATA0, rewind to 0
+6.4.0 |   -    | -          |   mark #1 as FILLER
+6.4.1 | 0 -    | -0         |   use empty #0 as DATA0
+6.4.2 | 0 -1   | -01        |   use empty #3 as DATA1
+6.4.3 | 0--1   | -01-       |   block #1 already marked as FILLER
+6.4.4 | 0-21   | -01-2      |   overwrite FILLER at #2 with DATA2
+6.5   | *-21   | -01-2*     |  conflict at #0 with DATA0, rewind to 1
+6.5.1 | - -    | --         |   mark #0 as FILLER
+6.5.2 | - -0   | --0        |   use empty #3 as DATA0
+6.5.3 | ---0   | --0-       |   block #1 already marked as FILLER
+6.5.4 | --10   | --0-1      |   overwrite FILLER at #2 with DATA1
+6.5.5 | 2-10   | --0-12     |   overwrite FILLER at #0 with DATA2
+6.6   | 2310   | --0-123    |   overwrite FILLER at #1 with DATA3
+7     | 2310 4 | --0-1234   | use empty #5 as DATA4
+ETC   | ETC    | ETC        | ETC
 
 
+How can we be sure that te numbering of a datablock is definitive?
 
+Well, just look at maximum backtrack the algorithm produces, if we are far away
+from the maximum backtrack, we assume everyhting is ok. If we would continue
+with the above example, all blocks will eventually be labeled as FILLER.
 
-              | 00000000000000001
-seqno         | 0123456789ABCDEF0
---------------|------------------
-random numbers| 11001010010110001
-step  1       | ?
-step  2       | -?
-step  3       |  0?
-step  4       |  0-?
-step  5       |  1 0?
-step  6       |    10?
-step  7       |     10?
-step  8       |      10?
-step  9       |       10?
-step 10       |        0-?
-step 11       |        1 0?
-step 12       |          10?
-step 13       |           0-?
-step 14       |           1 0?
-step 15	      |             0-?
-step 16       |             0 -?
-step 17       |             1  0?
+Maximum backtrack (in situations where not all blocks will be marked as FILLER
+eventually) is about equal to two times NO_BLOCKS. So we wait 5 times NO_BLOCKS
+to be sure.
 
-We can assume, without loss of randomness,  that after a non-dummy write, the
-next block pointed to by the random number generator, will be the other block.
-
-The parameters of this example are:
-NO_BLOCKS=2 SIMULTANEOUS_BLOCKS=1

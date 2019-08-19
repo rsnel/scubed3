@@ -9,6 +9,6 @@ scubed3_SOURCES = scubed3.c scubed3.h binio.c binio.h bitmap.c bitmap.h \
 scubed3ctl_SOURCES = scubed3ctl.c verbose.c verbose.h gcry.c gcry.h \
 		     ecch.h ecch.c hashtbl.c hashtbl.h pthd.c pthd.h \
 		     util.c util.h
-AM_CFLAGS = -D_GNU_SOURCE -O2 -g -Wall -Werror -D_FILE_OFFSET_BITS=64
+AM_CFLAGS = -D_GNU_SOURCE -O3 -g -Wall -Werror -D_FILE_OFFSET_BITS=64
 AM_LDFLAGS = -lpthread -lfuse -lgcrypt -lm -lrt -lgpg-error
 scubed3ctl_LDFLAGS = -lreadline -lgcrypt -lpthread -lgpg-error

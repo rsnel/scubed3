@@ -9,14 +9,14 @@
 #include "verbose.h"
 #include "random.h"
 
-//#define TEST3
+//#define TEST2
 
-#define NO_BLOCKS 24
-#define SIMULTANEOUS_BLOCKS 6
-#define ANALYSIS_LENGTH 200
+#define NO_BLOCKS 160
+#define SIMULTANEOUS_BLOCKS 40
+#define ANALYSIS_LENGTH 1000000
 //#define NO_BLOCKS 3
 //#define SIMULTANEOUS_BLOCKS 1
-//#define ANALYSIS_LENGTH 30
+//#define ANALYSIS_LENGTH 300000
 
 // demonstration of algorithm
 //
@@ -144,8 +144,10 @@ int count_depth(depth_t *d) {
 
 typedef struct info_s {
 	counter_t counter;
-	disk_t disk[NO_BLOCKS];
-	seq_t seq[ANALYSIS_LENGTH];
+	//disk_t disk[NO_BLOCKS];
+	disk_t *disk;
+	//seq_t seq[ANALYSIS_LENGTH];
+	seq_t *seq;
 	int maxdepth;
 	long int maxbacktrack;
 } info_t;
@@ -231,6 +233,12 @@ int main(int argc, char *argv[]) {
 
 	verbose_init(argv[0]);
 
+	info.disk = calloc(NO_BLOCKS, sizeof(disk_t));
+	if (!info.disk) FATAL("out of memory allocating %d times %ld (%ld) bytes", NO_BLOCKS, sizeof(disk_t), NO_BLOCKS*sizeof(disk_t));
+
+	info.seq = calloc(ANALYSIS_LENGTH, sizeof(seq_t));
+	if (!info.seq) FATAL("out of memory allocating %d times %ld (%ld) bytes", ANALYSIS_LENGTH, sizeof(seq_t), ANALYSIS_LENGTH*sizeof(seq_t));
+
 	random_init(&r, NO_BLOCKS);
 
 #ifdef TEST1 // test 1
@@ -287,10 +295,10 @@ int main(int argc, char *argv[]) {
 			fillstreak = 0;
 			density++;
 		}
-	//	if (i%180 == 179) {
-	//		fprintf(stderr, " density: %f\n", density/(double)180);
-	//		density=0;
-	//	}
+//		if (i%180 == 179) {
+//			fprintf(stderr, " density: %f\n", density/(double)180);
+//			density=0;
+//		}
 
 	}
 	fprintf(stderr, "\n");
@@ -300,6 +308,7 @@ int main(int argc, char *argv[]) {
 			NO_BLOCKS, ANALYSIS_LENGTH, SIMULTANEOUS_BLOCKS);
 	VERBOSE("fraction %f", info.counter.data/(double)depth.i);
 	VERBOSE("maxdepth=%d, maxbacktrack=%ld, max_fillstreak=%d, log_back=%f, log_depth=%f", info.maxdepth, info.maxbacktrack, max_fillstreak, log((double)info.maxbacktrack), log((double)info.maxdepth));
+#if 0
 	VERBOSE("rewinding to first block");
 	rewind_to(info.seq, &info, ANALYSIS_LENGTH);
 	VERBOSE("replay");
@@ -325,5 +334,6 @@ int main(int argc, char *argv[]) {
 		}
 		fprintf(stderr, "\n");
 	}
+#endif
 	exit(0);
 }

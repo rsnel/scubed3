@@ -783,7 +783,7 @@ void *control_thread(void *arg) {
 	if (listen(s, 1) == -1)
 		FATAL("listen: %s", strerror(errno));
 
-	VERBOSE("listening for connection with scubed2ctl on " CONTROL_SOCKET);
+	VERBOSE("listening for connection with scubed3ctl on " CONTROL_SOCKET);
 
 	while (1) {
 		int n, i, start, done = 0, ret;

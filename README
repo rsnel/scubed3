@@ -249,8 +249,8 @@ with the above example, all blocks will eventually be labeled as FILLER.
 [TODO: find criterium for definitive numbering]
 
 Maximum backtrack (in situations where not all blocks will be marked as FILLER
-eventually) is about equal to two times NO_BLOCKS. So we wait 5 times NO_BLOCKS
-to be sure.
+eventually) is about equal to two times NO_BLOCKS for a run of 300000 blocks.
+So we wait 5 times NO_BLOCKS to be sure.
 
 How to restart the RNG after close/open or resize?
 

@@ -120,11 +120,12 @@ void blockio_init_file(blockio_t *b, const char *path, uint8_t macroblock_log,
 	VERBOSE("%ld mesoblocks per macroblock, including index", 1L<<(macroblock_log - mesoblk_log));
 
         size_t indexblock_size = 96 + (4<<(macroblock_log - mesoblk_log));
+	if (indexblock_size >= 1<<mesoblk_log)
+		FATAL("not enough room for indexblock in mesoblock");
+        VERBOSE("required minimumsize of indexblock excluding macroblock index "
+			"is %ld bytes", indexblock_size);
+
         size_t max_macroblocks = ((1L<<mesoblk_log) - indexblock_size)<<3;
-
-        VERBOSE("required minimumsize of indexblock excluding macroblock index is %ld bytes", indexblock_size);
-	if (indexblock_size >= 1<<mesoblk_log) FATAL("not enough room for indexblock in mesoblock");
-
         VERBOSE("maximal amount of macroblocks supported %ld", max_macroblocks);
 
 	b->open = (void* (*)(const void*))stream_open;

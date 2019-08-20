@@ -173,9 +173,9 @@ Layout of macroblock:
 0x3FC000 mesoblock255
 0x400000 end
 
-There is space to index 0x4000 - 0x0460 = 0x3BA0 = 15256 bytes,
-which corresponds to a base device size of 15240*8 = 122048 macroblocks,
-which correspond to 4MiB * 122048 = 476.75GiB
+There is space to index 0x4000 - 0x0460 = 0x3BA0 = 15264 bytes,
+which corresponds to a base device size of 15240*8 = 122112 macroblocks,
+which correspond to 4MiB * 122112 = 477GiB
 
 Maximum usable size of the device is 2^32*(1<<mesoblock_log) = 64TiB, which is
 sufficient in the light of the maximum size of the backing device.

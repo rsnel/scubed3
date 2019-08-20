@@ -134,7 +134,7 @@ reserved_blocks.
 
 For this example we assume the following. Macroblock size 4MB (m). Mesoblock
 size 16kB (s). So, there are 256 mesoblocks per macroblock. Mesoblock
-0 is the indexblock, the other ones are datablocks.
+0 is the indexblock, the other ones are data blocks.
 
 Whatever values are used, the indexblock MUST fit in one mesoblock! Required
 size of the indexblock depends on the maximum amount of macroblocks scubed3 can
@@ -151,37 +151,38 @@ Layout of macroblock:
 
 0x000000 SHA256_HASH_INDEXBLOCK
 0x000020 SHA256_HASH_DATA (hash of ciphertext)
-0x000040 SEQNO_HASH     // hash of the list of seqno's that are required for this revision to be complete
-0x000060 uint64_t seqno
-0x000068 8byte literal "SSS3v0.1"
-0x000070 uint32_t simultaneous_blocks
-0x000074 uint32_t reserved_blocks
-0x000078 uint32_t no_indices
-0x00007C uint32_t idx0x01
-0x000080 uint32_t idx0x02
+0x000040 uint64_t seqno
+0x000048 8byte literal "scubed3-"
+0x000050 4byte BCD version "0000"
+0x000054 uint32_t obsoleted_by (if DATA, number of macroblock, otherwise 0xffffffff)
+0x000058 uint32_t simultaneous_blocks
+0x00005C uint32_t reserved_blocks
+0x000060 uint32_t no_indices
+0x000064 uint32_t idx0x01
+0x000068 uint32_t idx0x02
 ......
-0x000474 uint32_t idx0xFF
-0x000478 bitmap: each bit represents a macroblock of the base device
+0x00045C uint32_t idx0xff
+0x000460 bitmap: each bit represents a macroblock of the base device
 		 0 this block is not allocated to us
 		 1 this block is allocated to us
 0x003FFF last 8 bits of bitmap
-0x004000 datablock1
-0x008000 datablock2
-0x00C000 datablock3
+0x004000 mesoblock1
+0x008000 mesoblock2
+0x00C000 mesoblock3
 ........
-0x3FC000 datablock255
+0x3FC000 mesoblock255
 0x400000 end
 
-There is space to index 0x4000 - 0x0478 = 0x3B88 = 15240 bytes,
-which corresponds to a base device size of 15240*8 = 121920 macroblocks,
-which correspond to 4MiB * 121902 = 476GiB
+There is space to index 0x4000 - 0x0460 = 0x3BA0 = 15256 bytes,
+which corresponds to a base device size of 15240*8 = 122048 macroblocks,
+which correspond to 4MiB * 122048 = 476.75GiB
 
 Maximum usable size of the device is 2^32*(1<<mesoblock_log) = 64TiB, which is
 sufficient in the light of the maximum size of the backing device.
 
 
 In general the indexblock requires:
-- fixed size: 120 bytes
+- fixed size: 96 bytes
 - 4 bytes for every mesoblock in a macroblock
 - 1 bit for every macroblock
 
@@ -203,11 +204,11 @@ Suppose we have the random numbers 20312015..
 
 The algorithm works as follows. The the first random number, mark the block as used
 on de disk as a DATA block. Take the next random number:
-- if we overwrite an old datablock, a filler block or an empty block, just continue
-- if we overwrite a datablock that is not old enough, backtrack to that block,
+- if we overwrite an old data block, a filler block or an empty block, just continue
+- if we overwrite a data block that is not old enough, backtrack to that block,
   mark it as filler and then revisit all blocks between the old block and the current block
-  (revisiting: because we lost a datablock, we have to check that new datablocks
-  do not overwrite datablocks that are too young, if we overwrite a block that is too young,
+  (revisiting: because we lost a data block, we have to check that new data blocks
+  do not overwrite data blocks that are too young, if we overwrite a block that is too young,
   backtrack and mark that block as filler etc....)
 
 
@@ -239,13 +240,86 @@ step  | disk   | rng output | commentary
 ETC   | ETC    | ETC        | ETC
 
 
-How can we be sure that te numbering of a datablock is definitive?
+How can we be sure that te numbering of a data block is definitive?
 
 Well, just look at maximum backtrack the algorithm produces, if we are far away
 from the maximum backtrack, we assume everyhting is ok. If we would continue
 with the above example, all blocks will eventually be labeled as FILLER.
 
+[TODO: find criterium for definitive numbering]
+
 Maximum backtrack (in situations where not all blocks will be marked as FILLER
 eventually) is about equal to two times NO_BLOCKS. So we wait 5 times NO_BLOCKS
 to be sure.
+
+How to restart the RNG after close/open or resize?
+
+Generate a random sequence, and assign roles according to the algorithm. Then permute the numbers
+so that the new sequence is consistent with the state of the disk.
+
+An example:
+
+Suppose the disk is at sequence 39:
+
+(the numbers here are sequence numbers, every block has
+a sequence number, in step n of the writing process, the block
+with sequence number n is written)
+
+39: 0/35~ 1/39- 2/34~ 3/38- 4/37D 5/29~ 6/32~ 7/36D
+
+This means that:
+
+block 0 OLD data block established at seqno 35
+block 1 FILLER block established at seqno 39
+block 2 OLD data block established at seqno 34
+block 3 FILLER block established at seqno 38
+block 4 CURRENT data block established at seqno 37
+block 5 OLD data block established at seqno 29
+block 6 OLD data block established at seqno 32
+block 7 CURRENT data block established at seqno 36
+
+Now we want to sync the RNG to this harddisk state.
+Assume the RNG generated  464047060734627375331140...
+our algorithm gives       -D-DDD-DDDDDDD-DDD-D-DDD...
+
+Interpret RNG output as symbols using this translation
+	01234567
+	stuvwxyz
+
+Note that this translation does not affect the roles assigned to the blocks
+by the algorithm. We get: wywswzsyszvwyuzvzxvvttws...
+
+This is the reconstructed timeline based on the pattern on disk
+and our new data.
+
+data block and prospective datablock turned to FILLER blocks ages,
+age is 0, 1 or '~' (meaning OLD), '.' overwritten or ' ' empty
+
+  3333333344444444
+  2345678901234567
+  ~.~~DD!!-D-DDD-D
+  6?207431wywswzsy
+  --old--><--new--
+0 ...01~~~
+1 .......0
+2 ..01~~~~
+3 ......01
+4 .....000
+5 ~~~~~~~~
+6 ~~~~~~~~
+7 ....0111
+
+' ' is an empty block on disk (MAY overwrite) (not shown in the example)
+'~' is an old data block on disk (MAY overwrite)
+'.' is a block that is not on disk anymore (ignore)
+'D' is a current data block (MUST NOT overwrite until it's obsolete)
+'!' is an old FILLER block (MUST overwrite
+
+Now we must choose the values of stuvwxyz based on the constraints. Since each data block
+encodes the disk block that obsoletes it, we already know the value of y and s.
+
+Furthermore:
+
+- w or y must be equal to 3 to obsolete disk block 3 in time
+- w, y or s must be equal to 1 to obsolete disk block 1 in time
 

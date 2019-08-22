@@ -11,9 +11,9 @@
 
 //#define TEST2
 
-#define NO_BLOCKS 160
-#define SIMULTANEOUS_BLOCKS 40
-#define ANALYSIS_LENGTH 1000000
+#define NO_BLOCKS 4
+#define SIMULTANEOUS_BLOCKS 2
+#define ANALYSIS_LENGTH 1000
 //#define NO_BLOCKS 3
 //#define SIMULTANEOUS_BLOCKS 1
 //#define ANALYSIS_LENGTH 300000
@@ -125,7 +125,7 @@ typedef struct disk_s {
 
 typedef struct counter_s {
 	int data;
-	int filler;
+	//int filler;
 } counter_t;
 
 typedef struct depth_s {
@@ -144,9 +144,7 @@ int count_depth(depth_t *d) {
 
 typedef struct info_s {
 	counter_t counter;
-	//disk_t disk[NO_BLOCKS];
 	disk_t *disk;
-	//seq_t seq[ANALYSIS_LENGTH];
 	seq_t *seq;
 	int maxdepth;
 	long int maxbacktrack;
@@ -158,8 +156,8 @@ long int rewind_to(seq_t *target, info_t *i, long int j) {
 	do {
 		cur = &i->seq[--j];
 		if (cur->state == DATA) i->counter.data--;
-		else if (cur->state == FILLER) i->counter.filler--;
-		else assert(0);
+		//else if (cur->state == FILLER) i->counter.filler--;
+		//else assert(0);
 
 		/* check that this block is actually on disk
 		 * at this time at block_idx */
@@ -182,8 +180,8 @@ void do_block(seq_t *s, info_t *i, depth_t *d) {
 	if (tmp > i->maxdepth) i->maxdepth = tmp;
 	if (tmp2 > i->maxbacktrack) i->maxbacktrack = tmp2;
 
-	//VERBOSE("attempt to place block %ld on disk at %d, depth=%d, dc=%d, fc=%d ",
-	//		d->i, s->block_idx, count_depth(d), i->counter.data, i->counter.filler);
+	//VERBOSE("attempt to place block %ld on disk at %d, depth=%d, dc=%d ",
+	//		d->i, s->block_idx, count_depth(d), i->counter.data); //, i->counter.filler);
 
 	diskblock = &i->disk[s->block_idx].seq;
 	prev = *diskblock;
@@ -221,7 +219,7 @@ void do_block(seq_t *s, info_t *i, depth_t *d) {
 		s->count = i->counter.data++;
 	} else if (s->state == FILLER) {
 		//VERBOSE("placed block %ld at %d as FILLER at depth %d", d->i, s->block_idx, count_depth(d));
-		s->count = i->counter.filler++;
+		s->count = -1; //i->counter.filler++;
 	} else assert(0);
 
 }
@@ -288,7 +286,7 @@ int main(int argc, char *argv[]) {
 	int max_fillstreak = 0;
 	int density = 0;
 	for (int i = 0; i < ANALYSIS_LENGTH; i++) {
-		fprintf(stderr, info.seq[i].state == DATA?((i < depth.i - info.maxbacktrack)?"D":"d"):"-");
+		fprintf(stderr, info.seq[i].state == DATA?((i < depth.i - info.maxbacktrack)?"D%x":"D%x"):"-%x", info.seq[i].block_idx);
 		if (info.seq[i].state == FILLER) fillstreak++;
 		else {
 			if (fillstreak > max_fillstreak) max_fillstreak = fillstreak;

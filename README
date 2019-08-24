@@ -239,6 +239,36 @@ step  | disk   | rng output | commentary
 7     | 2310 4 | --0-1234   | use empty #5 as DATA4
 ETC   | ETC    | ETC        | ETC
 
+step      | disk | rng output    |
+          | 0123 | 0123012301231 |
+------------------------------------------------
+0         | 0    | 0             | use empty #0 as DATA0
+1         | 01   | 01            | use empty #1 as DATA1
+2         | 012  | 012           | use empty #2 as DATA2
+3         | 0123 | 0123          | use empty #3 as DATA3
+4         | 4123 | 01234         | overwrite DATA0 at #0 with DATA4
+5         | 4523 | 012345        | overwrite DATA1 at #1 with DATA5
+6         | 4563 | 0123456       | overwrite DATA2 at #2 with DATA6
+7         | 4567 | 01234567      | overwrite DATA3 at #3 with DATA7
+8         | 8567 | 012345678     | overwrite DATA4 at #0 with DATA8
+9         | 8967 | 0123456789    | overwrite DATA5 at #1 with DATA9
+a         | 89a7 | 0123456789a   | overwrite DATA6 at #2 with DATAa
+b         | 89ab | 0123456789ab  | overwrite DATA7 at #3 with DATAb
+c         | 8*ab | 0123456789ab* | conflict at #1 with DATA9, rewind to 9
+c.9       | 8-67 | 012345678-    |  mark #1 as FILLER
+c.a       | 8-*  | 012345678-*   |  conflict at #2 with DATA6, rewind to 6
+c.a.6     | 45-3 | 012345-       |   mark #2 as FILLER
+c.a.7     | 45-* | 012345-*      |   conflict at #3 with DATA3, rewind to 3
+c.a.7.3   | 012- | 012-          |    mark #3 as FILLER
+c.a.7.4   | *12- | 012-*         |    conflict at #0 with DATA4, rewind to 0
+c.a.7.4.0 | -    | -             |     mark #0 as FILLER
+c.a.7.4.1 | -0   | -0            |     use empty #1 as DATA0
+c.a.7.4.2 | -01  | -01           |     use empty #2 as DATA1
+c.a.7.4.3 | -01- | -01-          |     block #3 already marked as FILLER
+c.a.7.4.4 | 201- | -01-2         |     overwrite FILLER at #0 with DATA2
+c.a.7.5   | 2*1- | -01-2*        |     conflict at #1 with DATA0, rewind to 1
+c.a.7.5.1 | --   | --            |      mark #1 as FILLER
+
 
 How can we be sure that te numbering of a data block is definitive?
 

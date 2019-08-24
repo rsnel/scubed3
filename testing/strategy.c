@@ -9,11 +9,11 @@
 #include "verbose.h"
 #include "random.h"
 
-//#define TEST2
+#define TEST4
 
-#define NO_BLOCKS 4
-#define SIMULTANEOUS_BLOCKS 2
-#define ANALYSIS_LENGTH 1000
+//#define NO_BLOCKS 4
+//#define SIMULTANEOUS_BLOCKS 2
+//#define ANALYSIS_LENGTH 1000
 //#define NO_BLOCKS 3
 //#define SIMULTANEOUS_BLOCKS 1
 //#define ANALYSIS_LENGTH 300000
@@ -109,6 +109,12 @@
 #define NO_BLOCKS 6
 #define SIMULTANEOUS_BLOCKS 3
 #define ANALYSIS_LENGTH 8
+#endif
+
+#ifdef TEST4
+#define NO_BLOCKS 4
+#define SIMULTANEOUS_BLOCKS 3
+#define ANALYSIS_LENGTH 13
 #endif
 
 typedef enum block_state_e { DATA, FILLER } block_state_t;
@@ -275,7 +281,24 @@ int main(int argc, char *argv[]) {
 	random_push(&r, 0);
 	random_push(&r, 2);
 #endif
-
+#ifdef TEST4 // test 4
+	assert(NO_BLOCKS == 4);
+	assert(ANALYSIS_LENGTH == 13);
+	assert(SIMULTANEOUS_BLOCKS == 3);
+	random_push(&r, 1);
+	random_push(&r, 3);
+	random_push(&r, 2);
+	random_push(&r, 1);
+	random_push(&r, 0);
+	random_push(&r, 3);
+	random_push(&r, 2);
+	random_push(&r, 1);
+	random_push(&r, 0);
+	random_push(&r, 3);
+	random_push(&r, 2);
+	random_push(&r, 1);
+	random_push(&r, 0);
+#endif
 	for (depth.i = 0; depth.i < ANALYSIS_LENGTH; depth.i++) {
 		seq_t *s = &info.seq[depth.i];
 		s->block_idx = random_pop(&r);

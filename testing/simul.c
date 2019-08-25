@@ -9,9 +9,9 @@
 /* calculate expected value of number of datablocks after an amount of iterations */
 /* if the expected value converges, we will get no datablocks, if it keeps growing without bound, 
  * then we will have stable datablocks */
-#define NO_BLOCKS 4
-#define SIMULTANEOUS_BLOCKS 2
-#define STEPS 10000000
+#define NO_BLOCKS 210
+#define SIMULTANEOUS_BLOCKS 100
+#define STEPS 100000000
 
 int out_len = 0;
 int removed = 0;
@@ -145,24 +145,20 @@ void show_array(unsigned char *array, int length) {
 	printf("\n");
 }
 
-int testsep2 = 0;
-int succsep2 = 0;
+int maxdepth = 0;
 
 int findbad(unsigned char *array, int check, visits_t *v, int length) {
-	//showvisits(v);
+	if (out_len - check - 1 > maxdepth) maxdepth = out_len - check - 1;
+
 	int shift = visit_pop_shift(v);
-	//VERBOSE("popped shift=%d", shift);
 
 	for (int distance = SIMULTANEOUS_BLOCKS - shift +1; check - distance >= 0 && distance <= SIMULTANEOUS_BLOCKS; distance++) {
 		//VERBOSE("checking array[%d]=%u and array[%d]=%u at distance %d", check - distance, array[check-distance], check, array[check], distance);
-		if (distance == 2) testsep2++;
 		if (array[check-distance] == array[check]) {
-			if (distance == 2) succsep2++;
 			length = remove_entry(array, check - distance, length);
 			check--;
 			visits_shift(v);
 			for (int i = check - 1; i > check - distance; i--) {
-				//VERBOSE("add element at %d", i);
 				visits_push_shift(v, i);
 			}
 			visits_increase_shifts(v);
@@ -195,8 +191,8 @@ int main(int argc, char *argv[]) {
 
 	for (int i = 0; i < STEPS; i++) {
 		if (i%100000 == 0) {
-			VERBOSE("frac=%f, %10d/%d", ((double)out_len)/((double)i+1), out_len, i);
-			VERBOSE("sep2frac=%f", ((double)succsep2)/((double)testsep2));
+			VERBOSE("frac=%f, maxdepth=%d, generated=%u, depth fraction=%f", ((double)out_len)/((double)i), maxdepth, i, ((double)maxdepth/(double)i));
+			//VERBOSE("sep2frac=%f", ((double)succsep2)/((double)testsep2));
 		}
 		out[out_len++] = random_pop(&r);
 		//VERBOSE("before");
@@ -223,7 +219,8 @@ int main(int argc, char *argv[]) {
 		//show_array(out, out_len);
 	///	show();
 	}
-	show(out, out_len);
+	//show(out, out_len);
+#if 0
 	int equal= 0;
 	int total = 0;
 
@@ -232,6 +229,7 @@ int main(int argc, char *argv[]) {
 		total++;
 	}
 	VERBOSE("equal/total=%f", ((double)equal)/((double)total));
+#endif
 #endif
 }
 

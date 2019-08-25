@@ -191,6 +191,9 @@ Random blockselection
 
 How to randomly select blocks and assign roles to them?
 
+-----------------------------
+NONSENSE, to delete:
+
 In this example, we use 6 macroblocks, each write a group of 3 blocks needs to
 be preserved (as can be seen in testing/, this is not possible (if you try it,
 every block will be marked as filler)), but it leads to a nice example that

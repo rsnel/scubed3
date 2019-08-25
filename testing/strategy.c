@@ -9,11 +9,11 @@
 #include "verbose.h"
 #include "random.h"
 
-#define TEST4
+//#define TEST4
 
-//#define NO_BLOCKS 4
-//#define SIMULTANEOUS_BLOCKS 2
-//#define ANALYSIS_LENGTH 1000
+#define NO_BLOCKS 12
+#define SIMULTANEOUS_BLOCKS 3
+#define ANALYSIS_LENGTH 100000
 //#define NO_BLOCKS 3
 //#define SIMULTANEOUS_BLOCKS 1
 //#define ANALYSIS_LENGTH 300000

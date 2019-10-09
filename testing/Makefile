@@ -1,4 +1,6 @@
-all: badrandom strategy exact simul
+all: badrandom strategy exact simul ultimate
+
+ultimate: ultimate.c verbose.c
 
 simul: simul.c verbose.c random.c
 

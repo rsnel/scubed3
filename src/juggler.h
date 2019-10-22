@@ -18,19 +18,27 @@
 #ifndef INCLUDE_SCUBED3_JUGGLER_H
 #define INCLUDE_SCUBED3_JUGGLER_H 1
 
+#include <stdint.h>
+#include "random.h"
+
 typedef struct juggler_block_s {
-	struct juggler_block_s **devblock;
-	uint32_t lifespan; // INT_MAX means: lifespan not yet known
+	struct juggler_block_s *next;
+	uint32_t lifespan; // 0 means unknown lifespan
+	uint32_t index;
 } juggler_block_t;
 
 typedef struct juggler_s {
-	juggler_block_t *cache;        // cache of blocks
-	juggler_block_t **devblocks;   // view of the disk
-	uint32_t devblocks_size, cache_size, cache_len;
-	FILE *urandom;
+	juggler_block_t *devblocks;   // view of the disk
+	juggler_block_t *scheduled, *unscheduled;
+	uint32_t no_devblocks, no_scheduled, no_unscheduled;
+	random_t *r;
 } juggler_t;
 
-void juggler_init_fresh(juggler_t*, uint32_t);
+void juggler_init_fresh(juggler_t*, random_t *r, uint32_t);
+
+uint32_t juggler_get_devblock(juggler_t*, uint32_t*);
+
+void juggler_verbose(juggler_t*);
 
 void juggler_free(juggler_t*);
 

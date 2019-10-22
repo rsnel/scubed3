@@ -1,8 +1,4 @@
-all: simul test
-
-simul: simul.c verbose.c juggler.c util.c
-
-test: test.c verbose.c random.c
+simul: simul.c verbose.c juggler.c util.c random.c
 
 LDFLAGS=-lm
 CFLAGS=-Wall -Werror -g -O3 -D_GNU_SOURCE

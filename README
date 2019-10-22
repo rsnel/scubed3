@@ -1,5 +1,5 @@
-Copyright
-~~~~~~~~~
+License
+~~~~~~~
 
 GPL v3 or (at your option) any later version
 
@@ -176,7 +176,6 @@ which correspond to 4MiB * 122112 = 477GiB
 
 Maximum usable size of the device is 2^32*(1<<mesoblock_log) = 64TiB, which is
 sufficient in the light of the maximum size of the backing device.
-
 
 In general the indexblock requires:
 - fixed size: 96 bytes

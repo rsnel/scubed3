@@ -23,10 +23,19 @@
 #include "verbose.h"
 #include "util.h"
 
+void *erealloc(void *ptr, size_t nmemb, size_t size) {
+	void *res = reallocarray(ptr, nmemb, size);
+	if (!res) FATAL("reallocating %lu blocks of size %lu: %s",
+			nmemb, size, strerror(errno));
+
+	return res;
+}
+
 void *ecalloc(size_t nmemb, size_t size) {
 	void *res = calloc(nmemb, size);
 	if (!res) FATAL("allocating %lu blocks of size %lu: %s",
 			nmemb, size, strerror(errno));
+
 	return res;
 }
 

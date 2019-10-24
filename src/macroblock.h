@@ -61,7 +61,6 @@ typedef struct macroblock_s {
 	uint64_t next_seqno;
 
 	uint64_t lifespan2;	// FIXME remove
-	uint64_t lifespan;	// FIXME remove
 	int id;			// FIXME remove
 } macroblock_t;
 

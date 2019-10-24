@@ -118,7 +118,7 @@ static void show_list(const char *name, macroblock_t *list, macroblock_t *disk) 
 	int i = 0;
 	VERBOSE("%s", name);
 	while (b) {
-		VERBOSE("%d [%lu %lu %lu]", i++, b - disk, b->lifespan2, b->lifespan);
+		VERBOSE("%d [%lu %lu]", i++, b - disk, b->lifespan2);
 		b = b->next;
 	}
 }

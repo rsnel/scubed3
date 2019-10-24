@@ -33,7 +33,7 @@ void show_disk(macroblock_t *disk, uint32_t no_devblocks, uint64_t seqno, uint32
 				printf(" \"     ");
 				break;
 			case MACROBLOCK_STATE_OK_E:
-				printf(" %c (%2ld)", 'a' + b->id, b->lifespan);
+				printf(" %c (%2ld)", 'a' + b->id, b->lifespan2);
 				break;
 		}
 	}
@@ -61,35 +61,16 @@ int main(int argc, char *argv[]) {
 	show_disk_header(NO_DEVBLOCKS);
 
 	for (seqno = 1; seqno <= 24; seqno++) {
-		macroblock_t *obsoleted, *next = juggler_get_devblock(&j);
-		//uint64_t lifespan;
-		//uint32_t index = juggler_get_devblock(&j, &lifespan);
-		//next = &disk[index];
-		//VERBOSE("got index=%u lifespan=%lu", index, lifespan);
+		macroblock_t *next = juggler_get_devblock(&j);
 		assert(next->state != MACROBLOCK_STATE_OK_E);
-		next->lifespan = next->lifespan2;
 
-		obsoleted = NULL;
-		for (uint32_t j = 0; j < NO_DEVBLOCKS; j++) {
-			macroblock_t *b = &disk[j];
-			if (b->state == MACROBLOCK_STATE_OK_E) {
-				assert(b->lifespan > 0);
-				b->lifespan--;
-				if (b->lifespan == 1) {
-					b->state = MACROBLOCK_STATE_OBSOLETED_E;
-					assert(!obsoleted);
-					obsoleted = b;
-				}
-			}
-		}
-
-		assert(obsoleted == juggler_get_obsoleted(&j) || next->lifespan == 1);
-
-		if (next->lifespan == 1) {
+		if (next->lifespan2 == 1) {
 			next->state = MACROBLOCK_STATE_FILLER_E;
 		} else {
 			next->state = MACROBLOCK_STATE_OK_E;
+			macroblock_t *obsoleted = juggler_get_obsoleted(&j);
 			if (obsoleted) { 
+				obsoleted->state = MACROBLOCK_STATE_OBSOLETED_E;
 				assert(obsoleted != next);
 				next->id = obsoleted->id;
 			} else {
@@ -98,8 +79,6 @@ int main(int argc, char *argv[]) {
 		}
 
 		show_disk(disk, NO_DEVBLOCKS, seqno, next - disk);
-		//VERBOSE("(%lu) block=%d", lifespan, juggler_get_devblock(&j, &lifespan));
-		//juggler_verbose(&j);
 	}
 
 	juggler_verbose(&j);

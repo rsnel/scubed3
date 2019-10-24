@@ -22,6 +22,11 @@
 #include "macroblock.h"
 #include "random.h"
 
+/* the juggler keeps only information
+ * that can be inferred by looking at the
+ * contents of the disk, so that the juggler
+ * can be easily be restarted without loss of
+ * randomness */
 typedef struct juggler_s {
 	macroblock_t *scheduled, *unscheduled;
 	uint32_t no_scheduled, no_unscheduled;
@@ -35,7 +40,7 @@ void juggler_add_macroblock(juggler_t*, macroblock_t*);
 
 macroblock_t *juggler_get_obsoleted(juggler_t*);
 
-macroblock_t *juggler_get_devblock(juggler_t*);
+macroblock_t *juggler_get_devblock(juggler_t*, int);
 
 void juggler_verbose(juggler_t*, macroblock_t *disk);
 

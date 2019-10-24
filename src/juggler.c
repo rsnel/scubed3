@@ -64,10 +64,29 @@ macroblock_t *juggler_get_obsoleted(juggler_t *j) {
 	else return NULL;
 }
 	
-macroblock_t *juggler_get_devblock(juggler_t *j) {
-	macroblock_t *next, **iterate;
+macroblock_t *juggler_get_devblock(juggler_t *j, int discard) {
+	macroblock_t *next = juggler_get_obsoleted(j), **iterate;
 
-	if ((next = juggler_get_obsoleted(j))) {
+	if (discard) {
+		/* user wants to discard next block, let's see
+		 * if that is possible, return NULL if not */
+
+		/* if a block is scheduled to be written, either another block
+		 * must be scheduled to be written after that or an unscheduled
+		 * block must be available to fill the hole */
+		if (next && (j->no_unscheduled == 0 &&
+					(!next->next ||
+						next->next->next_seqno !=
+					 		next->next_seqno + 1)))
+			return NULL;
+
+		/* of no block is scheduled to be written, then we must discard
+		 * an unscheduled block and there must be another unscheduled block
+		 * available to output the next time */
+		if (!next && j->no_unscheduled < 2) return NULL;
+	}
+
+	if (next) {
 		//VERBOSE("already scheduled block must be output");
 		j->scheduled = next->next;
 		j->no_scheduled--;
@@ -81,6 +100,16 @@ macroblock_t *juggler_get_devblock(juggler_t *j) {
 		next = *iterate;
 		*iterate =  next->next;
 		j->no_unscheduled--;
+
+		if (discard) {
+			assert(j->no_unscheduled > 0);
+			next->seqno = next->next_seqno = 0;
+			next->next = NULL;
+			/* caller will see seqnos = 0, this means
+			 * that the block doens't have to be written
+			 * to the disk */
+			return next;
+		}
 	}
 
 	j->seqno++;
@@ -93,7 +122,12 @@ macroblock_t *juggler_get_devblock(juggler_t *j) {
 	iterate = &j->scheduled;
 	next->seqno = next->next_seqno = j->seqno;
 
-	do {
+	if (discard) {
+		assert(j->no_unscheduled > 0 || (j->scheduled && j->scheduled->next_seqno == next->seqno + 1));
+		next->next = NULL;
+
+		/* we don't reschedule this block, since it will be discarded */
+	} else do {
 		next->next_seqno++;
 		if ((*iterate) && next->next_seqno == (*iterate)->next_seqno) {
 			/* our block will certainly not appear here

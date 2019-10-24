@@ -55,8 +55,10 @@ int main(int argc, char *argv[]) {
 
 	show_disk_header(NO_DEVBLOCKS);
 
+	assert(juggler_get_devblock(&j, 1));
+
 	for (int i = 0; i < 24; i++) {
-		macroblock_t *next = juggler_get_devblock(&j);
+		macroblock_t *next = juggler_get_devblock(&j, 0);
 		macroblock_t *obsoleted = juggler_get_obsoleted(&j);
 
 		if (next != obsoleted) {
@@ -79,7 +81,7 @@ int main(int argc, char *argv[]) {
 	juggler_verbose(&j, disk);
 
 	for (int i = 0; i < 24; i++) {
-		macroblock_t *next = juggler_get_devblock(&j);
+		macroblock_t *next = juggler_get_devblock(&j, 0);
 		macroblock_t *obsoleted = juggler_get_obsoleted(&j);
 
 		if (next != obsoleted) {

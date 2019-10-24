@@ -32,21 +32,17 @@ uint32_t random_uint32(random_t *r) {
 // - take result%13 as the answer
 // 
 // values of variables for this example
-// max = 12
 // count = 13
-// limit = 13*((32 - 12)/13) + 12 = 25
+// limit = 13*((32 - 13 + 1)/13) + 13 - 1 = 25
 // 32 plays the role of UINT32_MAX
 // (note that integer division is used here)
-uint32_t random_custom(random_t *r, uint32_t max) {
-	/* edge case */
-	if (max == UINT32_MAX) return random_uint32(r);
-
-	uint32_t tmp, count = max + 1; // since max < UINT32_MAX
-				       // count is well defined
+uint32_t random_custom(random_t *r, uint32_t count) {
+	assert(count);
+	uint32_t tmp;
 	
 	// limit is the largest output of the rng we can use
 	// use the trick with - max and + max to avoid 64bit arithmetic
-	uint32_t limit = count*((UINT32_MAX - max)/count) + max;
+	uint32_t limit = count*((UINT32_MAX - count + 1)/count) + count - 1;
 
 	do tmp = random_uint32(r);
 	while (tmp > limit); 

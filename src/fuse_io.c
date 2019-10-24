@@ -28,15 +28,12 @@
 #include "blockio.h"
 #include "pthd.h"
 #include "control.h"
-#include "cache.h"
 #include "fuse_io.h"
 
 typedef struct fuse_io_priv_s {
 	hashtbl_t entries, ids;
 	pthread_t control_thread;
 	control_thread_priv_t control_thread_priv;
-	pthread_t cache_thread;
-	cache_thread_priv_t cache_thread_priv;
 } fuse_io_priv_t;
 
 static int fuse_io_getattr(const char *path, struct stat *stbuf) {
@@ -177,10 +174,6 @@ void *fuse_io_init(struct fuse_conn_info *conn) {
 	pthread_create(&priv->control_thread, NULL, control_thread,
 			&priv->control_thread_priv);
 
-	/* start cache and delayed writer thread */
-	pthread_create(&priv->cache_thread, NULL, cache_thread,
-			&priv->cache_thread_priv);
-
 	return fuse_get_context()->private_data;
 }
 
@@ -203,9 +196,6 @@ void fuse_io_destroy(void *arg) {
 	pthread_cancel(priv->control_thread);
 	pthread_join(priv->control_thread, NULL);
 	hashtbl_free(&priv->control_thread_priv.c);
-
-	pthread_cancel(priv->cache_thread);
-	pthread_join(priv->cache_thread, NULL);
 }
 
 static struct fuse_operations fuse_io_operations = {
@@ -273,9 +263,7 @@ int fuse_io_start(int argc, char **argv, blockio_t *b) {
 	hashtbl_init_default(&priv.ids, 32, 4, 1, 1, NULL);
 
 	priv.control_thread_priv.b = b;
-	priv.cache_thread_priv.b = b;
 
-	//ret = fuse_main(argc, argv, &fuse_io_operations, &priv);
 	ret = fuse_main_custom(argc, argv, &fuse_io_operations,
 			sizeof(fuse_io_operations), &priv, 0);
 

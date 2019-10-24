@@ -26,10 +26,9 @@
 #include "macroblock.h"
 #include "juggler.h"
 
-void juggler_init(juggler_t *j, random_t *r, macroblock_t *disk) {
-	assert(r && j && disk);
+void juggler_init(juggler_t *j, random_t *r) {
+	assert(j && r);
 
-	j->disk = disk;
 	j->unscheduled = j->scheduled = NULL;
 	j->no_scheduled = j->no_unscheduled = 0;
 	j->r = r;
@@ -38,12 +37,25 @@ void juggler_init(juggler_t *j, random_t *r, macroblock_t *disk) {
 
 void juggler_add_macroblock(juggler_t *j, macroblock_t *b) {
 	assert(j && b);
-	assert(b->state == MACROBLOCK_STATE_EMPTY_E);
-	j->no_unscheduled++;
-	b->next = j->unscheduled;
-	j->unscheduled = b;
+	assert(!b->next);
+	if (b->seqno == b->next_seqno) { // empty block
+		assert(!b->next_seqno);
+		j->no_unscheduled++;
+		b->next = j->unscheduled;
+		j->unscheduled = b;
+	} else if (b->seqno < b->next_seqno) { // block that is in use
+		macroblock_t **iterate = &j->scheduled;
+		assert(b->next_seqno > b->seqno);
+		while (*iterate && (*iterate)->next_seqno < b->next_seqno)
+			iterate = &((*iterate)->next);
+		assert(!(*iterate) || (*iterate)->next_seqno > b->next_seqno);
+		b->next = *iterate;
+		*iterate = b;
+		j->no_scheduled++;
+		if (b->seqno > j->seqno) j->seqno = b->seqno;
+	} else assert(0); // nonsensical block 
 }
-
+		
 macroblock_t *juggler_get_obsoleted(juggler_t *j) {
 	assert(j);
 	macroblock_t *ret = j->scheduled;
@@ -54,6 +66,7 @@ macroblock_t *juggler_get_obsoleted(juggler_t *j) {
 	
 macroblock_t *juggler_get_devblock(juggler_t *j) {
 	macroblock_t *next, **iterate;
+
 	if ((next = juggler_get_obsoleted(j))) {
 		//VERBOSE("already scheduled block must be output");
 		j->scheduled = next->next;
@@ -65,7 +78,6 @@ macroblock_t *juggler_get_devblock(juggler_t *j) {
 		//VERBOSE("requested index is %u", index);
 		iterate = &j->unscheduled;
 		while (index--) iterate = &((*iterate)->next);
-		assert(index == UINT32_MAX);
 		next = *iterate;
 		*iterate =  next->next;
 		j->no_unscheduled--;
@@ -92,8 +104,8 @@ macroblock_t *juggler_get_devblock(juggler_t *j) {
 			if (!random_custom(j->r, available_blocks)) {
 				//VERBOSE("(re)schedule block %u at %lu", next->index, time);
 				next->next = *iterate;
-				j->no_scheduled++;
 				*iterate = next;
+				j->no_scheduled++;
 				break;
 			}
 		}
@@ -107,36 +119,31 @@ static void show_list(const char *name, macroblock_t *list, macroblock_t *disk) 
 	int i = 0;
 	VERBOSE("%s", name);
 	while (b) {
-		VERBOSE("%d [%lu %lu]", i++, b - disk, b->next_seqno - b->seqno);
+		VERBOSE("%d [%lu %5lu]", i++, b - disk, b->next_seqno);
 		b = b->next;
 	}
 }
 
-void juggler_verbose(juggler_t *j) {
+void juggler_verbose(juggler_t *j, macroblock_t *disk) {
 	VERBOSE("--juggler--");
-	VERBOSE("no_scheduled=%u, no_unscheduled=%u", j->no_scheduled, j->no_unscheduled);
-	show_list("scheduled", j->scheduled, j->disk);
-	show_list("unscheduled", j->unscheduled, j->disk);
+	VERBOSE("no_scheduled=%u, no_unscheduled=%u, seqno=%lu",
+			j->no_scheduled, j->no_unscheduled, j->seqno);
+	show_list("scheduled", j->scheduled, disk);
+	show_list("unscheduled", j->unscheduled, disk);
+}
+
+static void empty_list(macroblock_t *head) {
+	macroblock_t *next;
+
+	while (head) {
+		next = head->next;
+		head->next = NULL;
+		head = next;
+	}
 }
 
 void juggler_free(juggler_t *j) {
-#if 0
-	macroblock_t *cur;
-
-	cur = j->scheduled;
-	while (cur) {
-		macroblock_t *next = cur->next;
-		free(cur);
-		cur = next;
-	}
-
-	cur = j->unscheduled;
-	while (cur) {
-		macroblock_t *next = cur->next;
-		free(cur);
-		cur = next;
-	}
-#endif
-
+	empty_list(j->scheduled);
+	empty_list(j->unscheduled);
 }
 

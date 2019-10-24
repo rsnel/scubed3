@@ -1,6 +1,6 @@
-/* macroblock.h - macroblock stuff
+/* cache.h - cache and delayed writer
  *
- * Copyright (C) 2019  Rik Snel <rik@snel.it>
+ * Copyright (C) 2009  Rik Snel <rik@snel.it>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -15,18 +15,15 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
-#ifndef INCLUDE_SCUBED3_MACROBLOCK_H
-#define INCLUDE_SCUBED3_MACROBLOCK_H 1
+#ifndef INCLUDE_SCUBED3_CACHE_H
+#define INCLUDE_SCUBED3_CACHE_H 1
 
-#include <stdint.h>
+#include "blockio.h"
 
-typedef struct macroblock_s {
-	struct macroblock_s *next;
+typedef struct cache_thread_priv_s {
+	blockio_t *b;
+} cache_thread_priv_t;
 
-	uint64_t seqno;
-	uint64_t next_seqno;
+void *cache_thread(void *arg);
 
-	int id;			// FIXME remove
-} macroblock_t;
-
-#endif /* INCLUDE_SCUBED3_MACROBLOCK_H */
+#endif /* INCLUDE_SCUBED3_CACHE_H */

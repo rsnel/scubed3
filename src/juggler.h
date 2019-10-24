@@ -23,13 +23,13 @@
 #include "random.h"
 
 typedef struct juggler_s {
-	macroblock_t *scheduled, *unscheduled, *disk;
+	macroblock_t *scheduled, *unscheduled;
 	uint32_t no_scheduled, no_unscheduled;
 	uint64_t seqno;
 	random_t *r;
 } juggler_t;
 
-void juggler_init(juggler_t*, random_t *r, macroblock_t *disk);
+void juggler_init(juggler_t*, random_t *r);
 
 void juggler_add_macroblock(juggler_t*, macroblock_t*);
 
@@ -37,7 +37,7 @@ macroblock_t *juggler_get_obsoleted(juggler_t*);
 
 macroblock_t *juggler_get_devblock(juggler_t*);
 
-void juggler_verbose(juggler_t*);
+void juggler_verbose(juggler_t*, macroblock_t *disk);
 
 void juggler_free(juggler_t*);
 

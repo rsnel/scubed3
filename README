@@ -149,10 +149,9 @@ Layout of macroblock:
 0x000000 SHA256_HASH_INDEXBLOCK
 0x000020 SHA256_HASH_DATA (hash of ciphertext)
 0x000040 uint64_t seqno
-0x000048 8byte literal "scubed3-"
-0x000050 4byte BCD version "0000"
-0x000054 uint32_t obsoleted_by (if DATA, number of macroblock, otherwise 0xffffffff)
-0x000058 uint32_t simultaneous_blocks
+0x000048 uint64_t next_seqno
+0x000050 8byte literal "scubed3-"
+0x000058 4byte BCD version "0000"
 0x00005C uint32_t reserved_blocks
 0x000060 uint32_t no_indices
 0x000064 uint32_t idx0x01

@@ -18,27 +18,21 @@ void show_disk_header(uint32_t no_devblocks) {
 	printf("\n");
 }
 
-void show_disk(macroblock_t *disk, uint32_t no_devblocks, macroblock_t *next) {
+void show_disk(macroblock_t *disk, uint32_t no_devblocks, macroblock_t *next,
+		macroblock_t *obsoleted) {
 	printf("%5lu->%5lu: ", next->seqno, next->next_seqno);
 	for (int i = 0; i < no_devblocks; i++) {
 		macroblock_t *b = &disk[i];
-		switch (b->state) {
-			case MACROBLOCK_STATE_EMPTY_E:
-				assert(b != next);
-				printf(" - ");
-				break;
-			case MACROBLOCK_STATE_FILLER_E:
-				if (b != next) printf(" ! ");
-				else printf("[!]");
-				break;
-			case MACROBLOCK_STATE_OBSOLETED_E:
-				assert(b != next);
-				printf(" ^ ");
-				break;
-			case MACROBLOCK_STATE_OK_E:
-				if (b != next) printf(" %c ", 'a' + b->id);
-				else printf("[%c]", 'a' + b->id);
-				break;
+		if (b->seqno == b->next_seqno) {		// empty
+			printf(" - ");
+		} else if (b->seqno + 1 == b->next_seqno) {	// filler
+			printf("[!]");
+		} else if (b == obsoleted) {			// obsoleted
+			printf(" ^ ");
+		} else if (b != next) {				// old
+			printf(" %c ", 'a' + b->id);
+		} else {					// new	
+			printf("[%c]", 'a' + b->id);
 		}
 	}
 	printf("\n");
@@ -54,35 +48,51 @@ int main(int argc, char *argv[]) {
 
 	random_init(&r);
 
-	juggler_init(&j, &r, disk);
+	juggler_init(&j, &r);
 
 	for (uint32_t i = 0; i < NO_DEVBLOCKS; i++)
 		juggler_add_macroblock(&j, disk + i);
 
 	show_disk_header(NO_DEVBLOCKS);
 
-	for (int i = 0; i < 8192; i++) {
+	for (int i = 0; i < 24; i++) {
 		macroblock_t *next = juggler_get_devblock(&j);
-		assert(next->state != MACROBLOCK_STATE_OK_E);
+		macroblock_t *obsoleted = juggler_get_obsoleted(&j);
 
-		if (next->next_seqno == 1 + next->seqno) {
-			next->state = MACROBLOCK_STATE_FILLER_E;
-		} else {
-			next->state = MACROBLOCK_STATE_OK_E;
-			macroblock_t *obsoleted = juggler_get_obsoleted(&j);
-			if (obsoleted) { 
-				obsoleted->state = MACROBLOCK_STATE_OBSOLETED_E;
-				assert(obsoleted != next);
-				next->id = obsoleted->id;
-			} else {
-				next->id = next_id++;
-			}
+		if (next != obsoleted) {
+			if (obsoleted) next->id = obsoleted->id;
+			else next->id = next_id++;
 		}
 
-		show_disk(disk, NO_DEVBLOCKS, next);
+		show_disk(disk, NO_DEVBLOCKS, next, obsoleted);
+	}
+
+	juggler_verbose(&j, disk);
+
+	juggler_free(&j);
+
+	juggler_init(&j, &r);
+
+	for (uint32_t i = 0; i < NO_DEVBLOCKS; i++)
+		juggler_add_macroblock(&j, disk + i);
+
+	juggler_verbose(&j, disk);
+
+	for (int i = 0; i < 24; i++) {
+		macroblock_t *next = juggler_get_devblock(&j);
+		macroblock_t *obsoleted = juggler_get_obsoleted(&j);
+
+		if (next != obsoleted) {
+			if (obsoleted) next->id = obsoleted->id;
+			else next->id = next_id++;
+		}
+
+		show_disk(disk, NO_DEVBLOCKS, next, obsoleted);
 	}
 
 	juggler_free(&j);
+
+	random_free(&r);
 
 	exit(0);
 }

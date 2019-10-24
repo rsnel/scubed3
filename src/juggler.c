@@ -33,6 +33,7 @@ void juggler_init(juggler_t *j, random_t *r, macroblock_t *disk) {
 	j->unscheduled = j->scheduled = NULL;
 	j->no_scheduled = j->no_unscheduled = 0;
 	j->r = r;
+	j->seqno = 0;
 }
 
 void juggler_add_macroblock(juggler_t *j, macroblock_t *b) {
@@ -43,37 +44,24 @@ void juggler_add_macroblock(juggler_t *j, macroblock_t *b) {
 	j->unscheduled = b;
 }
 
-static void decrease_lifespan(macroblock_t *list) {
-	uint64_t seen = 1;
-	while (list) {
-		assert(list->lifespan2 > seen);
-		seen = list->lifespan2--;
-		list = list->next;
-	}
-}
-
 macroblock_t *juggler_get_obsoleted(juggler_t *j) {
 	assert(j);
 	macroblock_t *ret = j->scheduled;
 
-	if (ret && ret->lifespan2 == 1) return ret;
+	if (ret && ret->next_seqno == j->seqno + 1) return ret;
 	else return NULL;
 }
 	
 macroblock_t *juggler_get_devblock(juggler_t *j) {
-	uint64_t time = 1;
-	uint32_t available_blocks;
 	macroblock_t *next, **iterate;
-	assert(j->unscheduled || (j->scheduled && j->scheduled->lifespan2));
 	if ((next = juggler_get_obsoleted(j))) {
 		//VERBOSE("already scheduled block must be output");
-		next->lifespan2 = 0;
 		j->scheduled = next->next;
 		j->no_scheduled--;
 	} else {
 		//VERBOSE("no scheduled block to output, select from unscheduled blocks");
 		assert(j->unscheduled && j->no_unscheduled != 0);
-		uint32_t index = random_custom(j->r, j->no_unscheduled - 1);
+		uint32_t index = random_custom(j->r, j->no_unscheduled);
 		//VERBOSE("requested index is %u", index);
 		iterate = &j->unscheduled;
 		while (index--) iterate = &((*iterate)->next);
@@ -83,31 +71,32 @@ macroblock_t *juggler_get_devblock(juggler_t *j) {
 		j->no_unscheduled--;
 	}
 
-	decrease_lifespan(j->scheduled);
+	j->seqno++;
 
 	/* decide when we will see the chosen block again */
 	/* it is now at time 0, so the first time at which
 	 * this block can reappear is time 1 */
 
-	available_blocks = j->no_unscheduled + 1; // unscheduled blocks + selected block
+	uint32_t available_blocks = j->no_unscheduled + 1; // unscheduled blocks + selected block
 	iterate = &j->scheduled;
+	next->seqno = next->next_seqno = j->seqno;
+
 	do {
-		if ((*iterate) && time == (*iterate)->lifespan2) {
+		next->next_seqno++;
+		if ((*iterate) && next->next_seqno == (*iterate)->next_seqno) {
 			/* our block will certainly not appear here
 			 * because another block is scheduled to appear */
 			iterate = &((*iterate)->next);
 			available_blocks++;
 		} else {
-			if (!random_custom(j->r, available_blocks - 1)) {
+			if (!random_custom(j->r, available_blocks)) {
 				//VERBOSE("(re)schedule block %u at %lu", next->index, time);
-				/* *lifespan = */ next->lifespan2 = time;
 				next->next = *iterate;
 				j->no_scheduled++;
 				*iterate = next;
 				break;
 			}
 		}
-		time++;
 	} while (1);
 
 	return next;
@@ -118,7 +107,7 @@ static void show_list(const char *name, macroblock_t *list, macroblock_t *disk) 
 	int i = 0;
 	VERBOSE("%s", name);
 	while (b) {
-		VERBOSE("%d [%lu %lu]", i++, b - disk, b->lifespan2);
+		VERBOSE("%d [%lu %lu]", i++, b - disk, b->next_seqno - b->seqno);
 		b = b->next;
 	}
 }

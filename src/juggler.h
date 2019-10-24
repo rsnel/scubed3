@@ -25,6 +25,7 @@
 typedef struct juggler_s {
 	macroblock_t *scheduled, *unscheduled, *disk;
 	uint32_t no_scheduled, no_unscheduled;
+	uint64_t seqno;
 	random_t *r;
 } juggler_t;
 

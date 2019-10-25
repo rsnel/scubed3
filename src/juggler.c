@@ -23,7 +23,7 @@
 #include <string.h>
 #include "verbose.h"
 #include "util.h"
-#include "macroblock.h"
+#include "blockio.h"
 #include "juggler.h"
 
 void juggler_init(juggler_t *j, random_t *r) {
@@ -35,7 +35,7 @@ void juggler_init(juggler_t *j, random_t *r) {
 	j->seqno = 0;
 }
 
-void juggler_add_macroblock(juggler_t *j, macroblock_t *b) {
+void juggler_add_macroblock(juggler_t *j, blockio_info_t *b) {
 	assert(j && b);
 	assert(!b->next);
 	if (b->seqno == b->next_seqno) { // empty block
@@ -44,7 +44,7 @@ void juggler_add_macroblock(juggler_t *j, macroblock_t *b) {
 		b->next = j->unscheduled;
 		j->unscheduled = b;
 	} else if (b->seqno < b->next_seqno) { // block that is in use
-		macroblock_t **iterate = &j->scheduled;
+		blockio_info_t **iterate = &j->scheduled;
 		assert(b->next_seqno > b->seqno);
 		while (*iterate && (*iterate)->next_seqno < b->next_seqno)
 			iterate = &((*iterate)->next);
@@ -56,35 +56,36 @@ void juggler_add_macroblock(juggler_t *j, macroblock_t *b) {
 	} else assert(0); // nonsensical block 
 }
 		
-macroblock_t *juggler_get_obsoleted(juggler_t *j) {
+blockio_info_t *juggler_get_obsoleted(juggler_t *j) {
 	assert(j);
-	macroblock_t *ret = j->scheduled;
+	blockio_info_t *ret = j->scheduled;
 
 	if (ret && ret->next_seqno == j->seqno + 1) return ret;
 	else return NULL;
 }
 	
-macroblock_t *juggler_get_devblock(juggler_t *j, int discard) {
-	macroblock_t *next = juggler_get_obsoleted(j), **iterate;
+int juggler_discard_possible(juggler_t *j, blockio_info_t *next) {
+	/* if a block is scheduled to be written, either another block
+	 * must be scheduled to be written after that or an unscheduled
+	 * block must be available to fill the hole */
+	if (next && (j->no_unscheduled == 0 && (!next->next ||
+			next->next->next_seqno != next->next_seqno + 1)))
+		return 0;
 
-	if (discard) {
-		/* user wants to discard next block, let's see
-		 * if that is possible, return NULL if not */
+	/* of no block is scheduled to be written, then we must discard
+	 * an unscheduled block and there must be another unscheduled block
+	 * available to output the next time */
+	if (!next && j->no_unscheduled < 2) return 0;
 
-		/* if a block is scheduled to be written, either another block
-		 * must be scheduled to be written after that or an unscheduled
-		 * block must be available to fill the hole */
-		if (next && (j->no_unscheduled == 0 &&
-					(!next->next ||
-						next->next->next_seqno !=
-					 		next->next_seqno + 1)))
-			return NULL;
+	return 1;
+}
 
-		/* of no block is scheduled to be written, then we must discard
-		 * an unscheduled block and there must be another unscheduled block
-		 * available to output the next time */
-		if (!next && j->no_unscheduled < 2) return NULL;
-	}
+blockio_info_t *juggler_get_devblock(juggler_t *j, int discard) {
+	blockio_info_t *next = juggler_get_obsoleted(j), **iterate;
+
+	/* if the user wants to discard the next block, let's
+	 * see if that is possible, return NULL if not */
+	if (discard && !juggler_discard_possible(j, next)) return NULL;
 
 	if (next) {
 		//VERBOSE("already scheduled block must be output");
@@ -118,15 +119,23 @@ macroblock_t *juggler_get_devblock(juggler_t *j, int discard) {
 	/* it is now at time 0, so the first time at which
 	 * this block can reappear is time 1 */
 
+	// all the unscheduled blocks are available and the current block
+	// is also available to be selected, we are only interested in
+	// when our selected block is reselected
 	uint32_t available_blocks = j->no_unscheduled + 1; // unscheduled blocks + selected block
 	iterate = &j->scheduled;
 	next->seqno = next->next_seqno = j->seqno;
 
 	if (discard) {
-		assert(j->no_unscheduled > 0 || (j->scheduled && j->scheduled->next_seqno == next->seqno + 1));
+		assert(j->no_unscheduled > 0 ||
+				(j->scheduled &&
+				 j->scheduled->next_seqno == next->seqno + 1));
 		next->next = NULL;
 
-		/* we don't reschedule this block, since it will be discarded */
+		/* we don't reschedule this block, since it will be discarded
+		 * the block MUST be written to disk (to indicate that it
+		 * has been discarded), the fact that this block is discarded
+		 * will be visible because seqno and next_seqno are equal */
 	} else do {
 		next->next_seqno++;
 		if ((*iterate) && next->next_seqno == (*iterate)->next_seqno) {
@@ -136,7 +145,6 @@ macroblock_t *juggler_get_devblock(juggler_t *j, int discard) {
 			available_blocks++;
 		} else {
 			if (!random_custom(j->r, available_blocks)) {
-				//VERBOSE("(re)schedule block %u at %lu", next->index, time);
 				next->next = *iterate;
 				*iterate = next;
 				j->no_scheduled++;
@@ -148,26 +156,27 @@ macroblock_t *juggler_get_devblock(juggler_t *j, int discard) {
 	return next;
 }
 
-static void show_list(const char *name, macroblock_t *list, macroblock_t *disk) {
-	macroblock_t *b = list;
+static void show_list(const char *name, blockio_info_t *list,
+		uint32_t (*getnum)(blockio_info_t*, void*), void *priv) {
+	blockio_info_t *b = list;
 	int i = 0;
 	VERBOSE("%s", name);
 	while (b) {
-		VERBOSE("%d [%lu %5lu]", i++, b - disk, b->next_seqno);
+		VERBOSE("%d [%u %5lu]", i++, getnum(b, priv), b->next_seqno);
 		b = b->next;
 	}
 }
 
-void juggler_verbose(juggler_t *j, macroblock_t *disk) {
+void juggler_verbose(juggler_t *j, uint32_t (*getnum)(blockio_info_t*, void*), void *priv) {
 	VERBOSE("--juggler--");
 	VERBOSE("no_scheduled=%u, no_unscheduled=%u, seqno=%lu",
 			j->no_scheduled, j->no_unscheduled, j->seqno);
-	show_list("scheduled", j->scheduled, disk);
-	show_list("unscheduled", j->unscheduled, disk);
+	show_list("scheduled", j->scheduled, getnum, priv);
+	show_list("unscheduled", j->unscheduled, getnum, priv);
 }
 
-static void empty_list(macroblock_t *head) {
-	macroblock_t *next;
+static void empty_list(blockio_info_t *head) {
+	blockio_info_t *next;
 
 	while (head) {
 		next = head->next;

@@ -8,10 +8,12 @@ Terminoloy
 ~~~~~~~~~~
 
 base device: this file/device/database holds all macroblocks, our worst case
-threat-model assumes an adversary can make snapshots of it at will
+threat-model assumes an adversary can make snapshots of it at will, each block
+has a number
 
 scubed3 partition: a block device whose contents are managed by a scubed3
-deamon, writing to a scubed3 partition causes changes to the macroblocks in the base device
+deamon, writing to a scubed3 partition causes changes to the macroblocks in
+the base device
 
 macroblocks: the smallest bit of information to someone who doesn't have the
 cryptographic key corresponding to it, a macroblock will either change randomly
@@ -23,6 +25,16 @@ information on where the mesoblock belongs on the scubed3 partition.
 indexblock: the first mesoblock in each macroblock contains information
 about the other mesoblocks in said macroblock
 
+ESSIV is a function that turns an uint64_t and two uint32_t's in a 128 bit
+block for use as IV.
+
+indexblocks are encrypted with IV = ESSIV(0, macroblock_number, 0)
+
+mesoblocks are encrypted with IV = ESSIV(seqno, macroblock_number, index)
+
+the indexblock IV will repeat when the same disk block is written
+
+the mesoblock IV will never repeat (as long as the seqno is not reset)
 
 Threat model
 ~~~~~~~~~~~~
@@ -146,21 +158,23 @@ in mesoblocks, and we have 32 bits available to index the mesoblocks.
 
 Layout of macroblock:
 
-0x000000 SHA256_HASH_INDEXBLOCK
+0x000000 SHA256_HASH_INDEXBLOCK hash of 0x000020 - 0x003FFF
 0x000020 SHA256_HASH_DATA (hash of ciphertext)
-0x000040 uint64_t seqno
-0x000048 uint64_t next_seqno
-0x000050 8byte literal "scubed3-"
-0x000058 4byte BCD version "0000"
-0x00005C uint32_t reserved_blocks
-0x000060 uint32_t no_indices
-0x000064 uint32_t idx0x01
-0x000068 uint32_t idx0x02
+0x000040 SHA256_HASH_SEQNOS  /* seqnos of used macroblocks */
+0x000060 uint64_t seqno
+0x000068 uint64_t next_seqno
+0x000070 8byte literal "SSS3v0.1"
+0x000078 uint32_t no_macroblocks
+0x00007C uint32_t reserved_blocks
+0x000080 uint8_t[128] reserved space, MUST be 0
+0x000100 uint32_t no_indices
+0x000104 uint32_t idx0x01
+0x000108 uint32_t idx0x02
 ......
-0x00045C uint32_t idx0xff
-0x000460 bitmap: each bit represents a macroblock of the base device
-		 0 this block is not allocated to us
-		 1 this block is allocated to us
+0x0004FC uint32_t idx0xff
+0x000500 bitmap: each bit represents a macroblock of the base device
+		 0 this block is not unwritten or not allocated to us
+		 1 this block is unwritten and allocated to us
 0x003FFF last 8 bits of bitmap
 0x004000 mesoblock1
 0x008000 mesoblock2
@@ -169,15 +183,15 @@ Layout of macroblock:
 0x3FC000 mesoblock255
 0x400000 end
 
-There is space to index 0x4000 - 0x0460 = 0x3BA0 = 15264 bytes,
-which corresponds to a base device size of 15240*8 = 122112 macroblocks,
-which correspond to 4MiB * 122112 = 477GiB
+There is space to index 0x4000 - 0x0500 = 0x3B00 = 15104 bytes,
+which corresponds to a base device size of 15104*8 = 120832 macroblocks,
+which correspond to 4MiB * 120832 = 472GiB
 
 Maximum usable size of the device is 2^32*(1<<mesoblock_log) = 64TiB, which is
 sufficient in the light of the maximum size of the backing device.
 
 In general the indexblock requires:
-- fixed size: 96 bytes
+- fixed size: 260 bytes (including 128 bytes of reserved space)
 - 4 bytes for every mesoblock in a macroblock
 - 1 bit for every macroblock
 

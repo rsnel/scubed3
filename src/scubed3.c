@@ -455,7 +455,7 @@ int main(int argc, char **argv) {
 
 	/* lock me into memory; don't leak info to swap */
 	if (mlockall(MCL_CURRENT|MCL_FUTURE)<0)
-		WARNING("failed locking process in RAM (not root?): %s",
+		WARNING("failed locking process in RAM: %s",
 				strerror(errno));
 
 	gcry_global_init();

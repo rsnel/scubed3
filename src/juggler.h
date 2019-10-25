@@ -19,7 +19,7 @@
 #define INCLUDE_SCUBED3_JUGGLER_H 1
 
 #include <stdint.h>
-#include "macroblock.h"
+#include "blockio.h"
 #include "random.h"
 
 /* the juggler keeps only information
@@ -28,7 +28,7 @@
  * can be easily be restarted without loss of
  * randomness */
 typedef struct juggler_s {
-	macroblock_t *scheduled, *unscheduled;
+	blockio_info_t *scheduled, *unscheduled;
 	uint32_t no_scheduled, no_unscheduled;
 	uint64_t seqno;
 	random_t *r;
@@ -36,13 +36,13 @@ typedef struct juggler_s {
 
 void juggler_init(juggler_t*, random_t *r);
 
-void juggler_add_macroblock(juggler_t*, macroblock_t*);
+void juggler_add_macroblock(juggler_t*, blockio_info_t*);
 
-macroblock_t *juggler_get_obsoleted(juggler_t*);
+blockio_info_t *juggler_get_obsoleted(juggler_t*);
 
-macroblock_t *juggler_get_devblock(juggler_t*, int);
+blockio_info_t *juggler_get_devblock(juggler_t*, int);
 
-void juggler_verbose(juggler_t*, macroblock_t *disk);
+void juggler_verbose(juggler_t*, uint32_t (*getnum)(blockio_info_t*, void*), void*);
 
 void juggler_free(juggler_t*);
 

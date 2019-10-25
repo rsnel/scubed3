@@ -5,24 +5,24 @@
 
 #include "verbose.h"
 #include "random.h"
-#include "macroblock.h"
+#include "blockio.h"
 #include "juggler.h"
 
 #define NO_DEVBLOCKS 6
 
 void show_disk_header(uint32_t no_devblocks) {
-	printf("             ");
+	printf("  seq   nseq ");
 	for (int i = 0; i < no_devblocks; i++) {
-		printf("  %x", i);
+		printf(" %2d", i);
 	}
 	printf("\n");
 }
 
-void show_disk(macroblock_t *disk, uint32_t no_devblocks, macroblock_t *next,
-		macroblock_t *obsoleted) {
+void show_disk(blockio_info_t *disk, uint32_t no_devblocks, blockio_info_t *next,
+		blockio_info_t *obsoleted) {
 	printf("%5lu->%5lu: ", next->seqno, next->next_seqno);
 	for (int i = 0; i < no_devblocks; i++) {
-		macroblock_t *b = &disk[i];
+		blockio_info_t *b = &disk[i];
 		if (b->seqno == b->next_seqno) {		// empty
 			printf(" - ");
 		} else if (b->seqno + 1 == b->next_seqno) {	// filler
@@ -39,7 +39,7 @@ void show_disk(macroblock_t *disk, uint32_t no_devblocks, macroblock_t *next,
 }
 
 int main(int argc, char *argv[]) {
-	macroblock_t disk[NO_DEVBLOCKS] = { };
+	blockio_info_t disk[NO_DEVBLOCKS] = { };
 	int next_id = 0;
 	random_t r;
 	juggler_t j;
@@ -55,34 +55,9 @@ int main(int argc, char *argv[]) {
 
 	show_disk_header(NO_DEVBLOCKS);
 
-	assert(juggler_get_devblock(&j, 1));
-
 	for (int i = 0; i < 24; i++) {
-		macroblock_t *next = juggler_get_devblock(&j, 0);
-		macroblock_t *obsoleted = juggler_get_obsoleted(&j);
-
-		if (next != obsoleted) {
-			if (obsoleted) next->id = obsoleted->id;
-			else next->id = next_id++;
-		}
-
-		show_disk(disk, NO_DEVBLOCKS, next, obsoleted);
-	}
-
-	juggler_verbose(&j, disk);
-
-	juggler_free(&j);
-
-	juggler_init(&j, &r);
-
-	for (uint32_t i = 0; i < NO_DEVBLOCKS; i++)
-		juggler_add_macroblock(&j, disk + i);
-
-	juggler_verbose(&j, disk);
-
-	for (int i = 0; i < 24; i++) {
-		macroblock_t *next = juggler_get_devblock(&j, 0);
-		macroblock_t *obsoleted = juggler_get_obsoleted(&j);
+		blockio_info_t *next = juggler_get_devblock(&j, 0);
+		blockio_info_t *obsoleted = juggler_get_obsoleted(&j);
 
 		if (next != obsoleted) {
 			if (obsoleted) next->id = obsoleted->id;
@@ -98,3 +73,33 @@ int main(int argc, char *argv[]) {
 
 	exit(0);
 }
+
+#if 0
+	uint32_t getnum(blockio_info_t *b, void *priv) {
+		return b - (blockio_info_t*)priv;
+	}
+	juggler_verbose(&j, getnum, disk);
+
+	juggler_free(&j);
+
+	juggler_init(&j, &r);
+
+	for (uint32_t i = 0; i < NO_DEVBLOCKS; i++)
+		juggler_add_macroblock(&j, disk + i);
+
+	assert(juggler_get_devblock(&j, 1));
+
+	juggler_verbose(&j, getnum, disk);
+
+	for (int i = 0; i < 24; i++) {
+		blockio_info_t *next = juggler_get_devblock(&j, 0);
+		blockio_info_t *obsoleted = juggler_get_obsoleted(&j);
+
+		if (next != obsoleted) {
+			if (obsoleted) next->id = obsoleted->id;
+			else next->id = next_id++;
+		}
+
+		show_disk(disk, NO_DEVBLOCKS, next, obsoleted);
+	}
+#endif

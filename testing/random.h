@@ -19,6 +19,7 @@
 #define INCLUDE_SCUBED3_RANDOM_H 1
 
 #include <stdio.h>
+#include <stdint.h>
 
 typedef struct random_s {
 	FILE *fp;

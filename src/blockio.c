@@ -73,23 +73,16 @@ static void *stream_open(const char *path) {
 /* end stream stuff */
 
 #define BASE			(dev->tmp_macroblock)
-#define INDEXBLOCK_HASH		(BASE + 0)
-#define DATABLOCKS_HASH		(BASE + 32)
-#define SEQNOS_HASH		(BASE + 64)
-#define SEQNO			(BASE + 96)
-#define MAGIC			(BASE + 104)
-#define RANDOM_LEN		(BASE + 112)
-#define TAIL_MACROBLOCK		(BASE + 116)
-#define RESERVED_MACROBLOCKS	(BASE + 118)
-#define LAYOUT_REVISION		(BASE + 120)
-#define MACROBLOCK_LOG		(BASE + 122)
-#define MESOBLOCK_LOG		(BASE + 123)
-#define NEXT_SEQNO_DIFF		(BASE + 124)
-#define REV_SEQNOS		(BASE + 128)
-#define NO_MACROBLOCKS		(BASE + 192)
-#define REVISION_WORK		(BASE + 208)
-#define NO_INDICES		(BASE + 256)
-#define BITMAP			(BASE + 4096)
+#define INDEXBLOCK_SHA256	(BASE + 0x000)
+#define DATABLOCKS_SHA256	(BASE + 0x020)
+#define SEQNOS_SHA256		(BASE + 0x040)
+#define SEQNO_UINT64		(BASE + 0x060)
+#define NEXT_SEQNO_UINT64	(BASE + 0x068)
+#define MAGIC64			(BASE + 0x070)
+#define NO_MACROBLOCKS_UINT32	(BASE + 0x078)
+#define RESERVED_BLOCKS_UINT32	(BASE + 0x07C)
+#define RESERVED_SPACE1024	(BASE + 0x080)
+#define NO_INDICES		(BASE + 0x100)
 
 void blockio_free(blockio_t *b) {
 	assert(b);
@@ -119,13 +112,13 @@ void blockio_init_file(blockio_t *b, const char *path, uint8_t macroblock_log,
 
 	VERBOSE("%ld mesoblocks per macroblock, including index", 1L<<(macroblock_log - mesoblk_log));
 
-        size_t indexblock_size = 96 + (4<<(macroblock_log - mesoblk_log));
-	if (indexblock_size >= 1<<mesoblk_log)
+        b->bitmap_offset = 256 + (4<<(macroblock_log - mesoblk_log));
+	if (b->bitmap_offset >= 1<<mesoblk_log)
 		FATAL("not enough room for indexblock in mesoblock");
         VERBOSE("required minimumsize of indexblock excluding macroblock index "
-			"is %ld bytes", indexblock_size);
+			"is %d bytes", b->bitmap_offset);
 
-        size_t max_macroblocks = ((1L<<mesoblk_log) - indexblock_size)<<3;
+        size_t max_macroblocks = ((1L<<mesoblk_log) - b->bitmap_offset)<<3; /* *8 */
         VERBOSE("maximum amount of macroblocks supported %ld", max_macroblocks);
 
 	b->open = (void* (*)(const void*))stream_open;

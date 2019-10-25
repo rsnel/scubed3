@@ -1,4 +1,4 @@
-/* macroblock.h - macroblock stuff
+/* blockio.h - handles block input/output
  *
  * Copyright (C) 2019  Rik Snel <rik@snel.it>
  *
@@ -15,18 +15,17 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
-#ifndef INCLUDE_SCUBED3_MACROBLOCK_H
-#define INCLUDE_SCUBED3_MACROBLOCK_H 1
+#ifndef INCLUDE_SCUBED3_BLOCKIO_H
+#define INCLUDE_SCUBED3_BLOCKIO_H 1
+
+/* simplified blockio.h for testing purposes */
 
 #include <stdint.h>
 
-typedef struct macroblock_s {
-	struct macroblock_s *next;
+typedef struct blockio_info_s {
+	struct blockio_info_s *next; // for use with random block selector
+	uint64_t seqno, next_seqno;
+	int id; // temp
+} blockio_info_t;
 
-	uint64_t seqno;
-	uint64_t next_seqno;
-
-	int id;			// FIXME remove
-} macroblock_t;
-
-#endif /* INCLUDE_SCUBED3_MACROBLOCK_H */
+#endif /* INCLUDE_SCUBED3_BLOCKIO_H */

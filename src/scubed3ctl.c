@@ -263,7 +263,7 @@ int my_getpass(char **lineptr, size_t *n, FILE *stream) {
 	struct termios old, new;
 
 	/* Turn echoing off and fail if we can't. */
-	if (tcgetattr (fileno(stream), &old) != 0) return -1;
+	if (tcgetattr(fileno(stream), &old) != 0) return -1;
 
 	new = old;
 	new.c_lflag &= ~ECHO;
@@ -340,10 +340,10 @@ static int ctl_open_create_common(ctl_priv_t *priv, char *argv[], int create) {
 			algo, subalgo, kdf_salt, strlen(kdf_salt),
 			DEFAULT_KDF_ITERATIONS, 32, hash);
 
-	wipememory(pw,pw_len);
+	wipememory(pw, pw_len);
 	free(pw);
 
-	char hash_text[2*gcry_md_get_algo_dlen(subalgo)], *ptr = hash_text;
+	char hash_text[64], *ptr = hash_text;
 
 	for (i = 0; i < gcry_md_get_algo_dlen(subalgo); i++)
 		ptr += snprintf(ptr, 3, "%02x", hash[i]);
@@ -463,7 +463,7 @@ static int parse_info(ctl_priv_t *priv, int no, ...) {
 #define DEFAULT_RESERVED_MACROBLOCKS (DEFAULT_KEEP_REVISIONS + DEFAULT_INCREMENT)
 
 static int ctl_resize(ctl_priv_t *priv, char *argv[]) {
-	int no_macroblocks, new, reserved_macroblocks, keep_revisions;
+	int no_macroblocks, new, reserved_macroblocks;
 
 	if (do_server_command(priv->s, 0, "info %s", argv[0])) return -1;
 	if (result.status) {
@@ -471,55 +471,28 @@ static int ctl_resize(ctl_priv_t *priv, char *argv[]) {
 		return 0;
 	}
 
-	if (parse_info(priv, 3, "no_macroblocks",
-				&no_macroblocks, "reserved_macroblocks",
-				&reserved_macroblocks, "keep_revisions",
-				&keep_revisions)) return 0;
+	if (parse_info(priv, 1, "no_macroblocks", &no_macroblocks)) return 0;
 
 	if (parse_int(&new, argv[1])) return 0;
 
-	if (no_macroblocks == 0 && reserved_macroblocks == 0 &&
-			keep_revisions == 0) {
-		reserved_macroblocks = (new < DEFAULT_RESERVED_MACROBLOCKS)?
-			new:DEFAULT_RESERVED_MACROBLOCKS;
-		keep_revisions = (reserved_macroblocks - DEFAULT_INCREMENT <
-				DEFAULT_KEEP_REVISIONS)?reserved_macroblocks -
-		       	DEFAULT_INCREMENT:DEFAULT_KEEP_REVISIONS;
-		if (keep_revisions < 0) keep_revisions = 0;
-	}
+	if (new > 0) reserved_macroblocks = (new - 1)/4 + 1; 
+	else reserved_macroblocks = 0;
 
 	if (new == no_macroblocks) {
 		printf("size already is %d\n", new);
 		return 0;
 	}
 
-	if (new <= 0) {
-		printf("you cannot resize below 1\n");
+	if (new < 0) {
+		printf("you cannot resize below 0\n");
 		return 0;
 	}
 
 	if (new > priv->no_macroblocks) {
-		printf("there are only %d macroblocks in total\n",
-				priv->no_macroblocks);
+		printf("can't resize to %d macroblocks because there are only "
+				"%d macroblocks in total\n",
+				new, priv->no_macroblocks);
 		return 0;
-	}
-
-	if (new < reserved_macroblocks) {
-		printf("* we need to decrease the amount of reserved "
-				"macroblocks by %d to %d\n",
-				reserved_macroblocks - new, new);
-
-		reserved_macroblocks = new;
-	}
-
-	if (reserved_macroblocks - DEFAULT_INCREMENT < keep_revisions) {
-		int nr = reserved_macroblocks - DEFAULT_INCREMENT;
-		if (nr < 0) nr = 0;
-
-		if (keep_revisions != 0) printf("* we need to decrease "
-				"the amount of kept revisions to %d\n", nr);
-
-		keep_revisions = nr;
 	}
 
 	if (new > no_macroblocks) {
@@ -531,8 +504,6 @@ only safe if ALL your scubed3 partitions are open, continue? [No] ";
 
 		if (!yesno(prompt)) return 0;
 	} else {
-		char *prompt = "\
-you must resize it yourself continue? [No] ";
 		assert(no_macroblocks > new);
 		warning();
 		printf("removing %d blocks from the end of %s, those blocks\n",
@@ -540,12 +511,12 @@ you must resize it yourself continue? [No] ";
 		printf("will be added to the unclaimed pool, if you have a "
 				"filesystem on it\n");
 
-		if (!yesno(prompt)) return 0;
+		if (!yesno("you must resize it before typing Yes, "
+					"continue? [No] ")) return 0;
 	}
 
-	return do_server_command(priv->s, 1, "resize-internal %s %d %d %d",
-			argv[0], new, reserved_macroblocks,
-			keep_revisions);
+	return do_server_command(priv->s, 1, "resize-internal %s %d %d",
+			argv[0], new, reserved_macroblocks);
 }
 
 static int ctl_mke2fs(ctl_priv_t *priv, char *argv[]) {

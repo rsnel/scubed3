@@ -1,6 +1,6 @@
 all: test rtest
 
-test: test.c verbose.c juggler.c util.c random.c macroblock.h
+test: test.c verbose.c juggler.c util.c random.c blockio.h
 
 rtest: rtest.c verbose.c random.c
 

@@ -555,41 +555,19 @@ static int control_resize(int s, control_thread_priv_t *priv, char *argv[]) {
 
 	if (parse_int(s, &size, argv[1])) return -1;
 	if (parse_int(s, &reserved, argv[2])) return -1;
-	if (parse_int(s, &keep, argv[3])) return -1;
 
-	if (!(reserved <= size) || !(keep <= reserved) || !(size >= 0)) {
+	if (!(reserved <= size) || !(size >= 0)) {
 		hashtbl_unlock_element_byptr(entry);
 		return control_write_complete(s, 1,
-			"something wrong with caller");
+			"values for new_size=%d and reserved=%d make no sense",
+			size, reserved);
 	}
 
-	if (reserved != dev->reserved_macroblocks && dev->bi) {
-		hashtbl_unlock_element_byptr(entry);
-		return control_write_complete(s, 1, "unable to change amount "
-				"of reserved blocks");
-	}
-
-	if (reserved <= 4 && keep != 0) {
-		hashtbl_unlock_element_byptr(entry);
-		return control_write_complete(s, 1, "if reserved < 4, then "
-				"keep revisions must be 0");
-	}
-
-	if (reserved > 4 && keep > reserved - 4) {
-		hashtbl_unlock_element_byptr(entry);
-		return control_write_complete(s, 1, "if reserved > 0, then "
-				"keep revisions must be smaller than "
-				"reserved - 4");
-	}
-
-#if 1
-	if (size < dev->rev[0].no_macroblocks) {
+	if (size < dev->no_macroblocks) {
 		blockio_dev_free_macroblocks(dev, dev->rev[0].no_macroblocks - size);
 		hashtbl_unlock_element_byptr(entry);
-		return control_write_complete(s, 1, "very experimental; "
-				"not yet supported");
+		return control_write_complete(s, 1, "shrinking device is not yet supported");
 	}
-#endif
 
 	if (size > dev->b->no_macroblocks) {
 		hashtbl_unlock_element_byptr(entry);
@@ -711,8 +689,8 @@ static control_command_t control_commands[] = {
 	}, {
 		.head.key = "resize-internal",
 		.command = control_resize,
-		.argc = 4,
-		.usage = " NAME BLOCKS RESERVED KEEP"
+		.argc = 3,
+		.usage = " NAME BLOCKS RESERVED"
 	}
 };
 

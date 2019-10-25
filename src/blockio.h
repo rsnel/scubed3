@@ -18,10 +18,9 @@
 #ifndef INCLUDE_SCUBED3_BLOCKIO_H
 #define INCLUDE_SCUBED3_BLOCKIO_H 1
 
-#define MACROBLOCK_HISTORY	8
 #include <stdint.h>
 
-#include "scubed3.h"
+//#include "scubed3.h"
 #include "dllarr.h"
 #include "cipher.h"
 #include "bitmap.h"
@@ -31,29 +30,22 @@
 typedef struct blockio_s blockio_t;
 
 typedef struct blockio_info_s {
+	struct blockio_info_s *next; // for use with random juggler
 	dllarr_elt_t ord; // for ordered
 	dllarr_elt_t ufs; // for used, free and selected lists
 	uint64_t seqno, next_seqno;
-	uint16_t hard_layout_revision;
-	uint16_t layout_revision;
 	char data_hash[32];
 	char seqnos_hash[32];
+
 	uint32_t no_indices;
 	uint32_t no_indices_gc;
 	uint32_t no_nonobsolete;
 	uint32_t no_indices_preempt;
 	uint32_t *indices;
 
-	uint16_t internal;
-
+	/* the scubed device associated with this block, if any */
 	struct blockio_dev_s *dev;
 } blockio_info_t;
-
-typedef struct blockio_dev_rev_s {
-	uint64_t seqno;
-	uint16_t no_macroblocks;
-	uint16_t work;
-} blockio_dev_rev_t;
 
 typedef struct blockio_dev_s {
 	char *name;
@@ -63,29 +55,17 @@ typedef struct blockio_dev_s {
 	bitmap_t status; // record status of all macroblocks with
 			 // respect to this device
 
-	/* current macroblock count is in rev[0].no_macroblocks */
-	blockio_dev_rev_t rev[MACROBLOCK_HISTORY];
+	uint32_t no_macroblocks;
+	uint32_t reserved_macroblocks;
 	uint64_t next_seqno;
-	uint16_t reserved_macroblocks; /* visible in scubed file */
 	blockio_info_t *bi;
 	int valid;
-
-	/* state of prng */
-	uint16_t layout_revision;
-	uint16_t tail_macroblock;
-	uint32_t random_len;
-	random_t r;
-
-	uint8_t keep_revisions;
-
-	uint16_t mmpm; /* max mesoblocks per macroblock */
 
 	dllarr_t used_blocks, free_blocks, selected_blocks;
 	dllarr_t ordered;
 
-	/* array, used with PRNG to select random blocks */
-	uint16_t *macroblock_ref;
-
+	/* here we build the macroblock
+	 * to be written out to disk */
 	uint8_t *tmp_macroblock;
 
 	/* stats */
@@ -107,8 +87,10 @@ struct blockio_s {
 	uint32_t macroblock_size;
 	uint8_t macroblock_log;
 	uint32_t no_macroblocks; /* amount of raw macroblocks */
+	uint32_t bitmap_offset;
 
 	uint8_t mesoblk_log;
+	uint16_t mmpm; /* max mesoblocks per macroblock */
 
 	blockio_info_t *blockio_infos;
 

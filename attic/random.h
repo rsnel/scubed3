@@ -1,4 +1,4 @@
-/* random.h - rng based on /dev/urandom (not cryptographically secure!)
+/* random.h - buffered rng
  *
  * Copyright (C) 2009  Rik Snel <rik@snel.it>
  *
@@ -23,13 +23,26 @@
 
 typedef struct random_s {
 	FILE *fp;
+	uint16_t *buffer;
+	uint32_t buffer_len, buffer_size;
+	uint32_t no;
 } random_t;
 
-void random_init(random_t*);
+void random_rescale(random_t*, uint32_t);
 
-uint32_t random_uint32(random_t*);
+void random_init(random_t*, uint32_t);
 
-uint32_t random_custom(random_t*, uint32_t);
+void random_flush(random_t*);
+
+uint16_t random_custom(random_t*, uint32_t);
+
+uint16_t random_pop(random_t*);
+
+void random_push(random_t*, uint16_t);
+
+void random_verbose(random_t*);
+
+uint16_t random_peek(random_t*, uint32_t);
 
 void random_free(random_t*);
 

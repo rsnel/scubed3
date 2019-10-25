@@ -81,7 +81,7 @@ static void add_blockref(scubed3_t *l, uint32_t offset) {
 }
 
 static inline uint8_t *mesoblk(scubed3_t *l, uint16_t no) {
-	assert(no < l->dev->mmpm);
+	assert(no < l->dev->b->mmpm);
 	return l->dev->tmp_macroblock + ((no+1)<<l->dev->b->mesoblk_log);
 }
 
@@ -117,7 +117,7 @@ static void pre_emptive_gc(scubed3_t *l) {
 	assert(!l->dev->bi->no_indices_preempt);
 
 	while ((bi = dllarr_next(&l->dev->ordered, bi)) &&
-			l->dev->bi->no_indices < l->dev->mmpm) {
+			l->dev->bi->no_indices < l->dev->b->mmpm) {
 		uint32_t ctr = 0, index;
 
 		if (bi == l->dev->bi) break;
@@ -128,7 +128,7 @@ static void pre_emptive_gc(scubed3_t *l) {
 		if (!bi->no_nonobsolete) continue;
 
 		while (ctr < bi->no_indices &&
-				l->dev->bi->no_indices < l->dev->mmpm) {
+				l->dev->bi->no_indices < l->dev->b->mmpm) {
 			index = l->block_indices[bi->indices[ctr]];
 			if (ID != id(bi)) {
 				ctr++;
@@ -162,11 +162,11 @@ void select_new_macroblock(scubed3_t *l) {
 		copy_old_block_to_current(l);
 		l->dev->bi->no_indices_gc = l->dev->bi->no_indices;
 		DEBUG("new block %lu (seqno=%lu) has %u mesoblocks due "
-				"to GC of block %u",
+				"to GC of block %uFIXME",
 				id(l->dev->bi), l->dev->bi->seqno,
 				l->dev->bi->no_indices,
 				l->dev->tail_macroblock);
-	} while (l->dev->bi->no_indices == l->dev->mmpm);
+	} while (l->dev->bi->no_indices == l->dev->b->mmpm);
 }
 
 void initialize_output(scubed3_t *l) {
@@ -252,8 +252,8 @@ void scubed3_reinit(scubed3_t *l) {
 
 	tmp = l->no_block_indices;
 
-	l->no_block_indices = (l->dev->rev[0].no_macroblocks -
-			l->dev->reserved_macroblocks)*l->dev->mmpm;
+	l->no_block_indices = (l->dev->no_macroblocks -
+			l->dev->reserved_macroblocks)*l->dev->b->mmpm;
 
 	if (tmp == l->no_block_indices) return;
 
@@ -276,15 +276,15 @@ void scubed3_init(scubed3_t *l, blockio_dev_t *dev) {
 
 	l->dev = dev;
 
-	if (!dev->rev[0].no_macroblocks) return;
+	if (!dev->no_macroblocks) return;
 
 	l->mesobits = (dev->b->macroblock_log - dev->b->mesoblk_log);
 	l->mesomask = 0xFFFFFFFF>>(32 - l->mesobits);
 
-	if (dev->rev[0].no_macroblocks <= dev->reserved_macroblocks) return;
+	if (dev->no_macroblocks <= dev->reserved_macroblocks) return;
 
-	l->no_block_indices = (dev->rev[0].no_macroblocks -
-			dev->reserved_macroblocks)*dev->mmpm;
+	l->no_block_indices = (dev->no_macroblocks -
+			dev->reserved_macroblocks)*dev->b->mmpm;
 
 	VERBOSE("l->no_block_indices=%d", l->no_block_indices);
 	l->block_indices = ecalloc(l->no_block_indices, sizeof(uint32_t));
@@ -333,7 +333,7 @@ int do_write(scubed3_t *l, uint32_t mesoff, uint32_t muoff, uint32_t size,
 		/* could be that the new block is full after
 		 * garbage collecting (depends on the way the
 		 * to-be-freed block is selected) */
-		if (l->dev->bi->no_indices == l->dev->mmpm)
+		if (l->dev->bi->no_indices == l->dev->b->mmpm)
 			select_new_macroblock(l);
 
 		index = l->block_indices[mesoff];

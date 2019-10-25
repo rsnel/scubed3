@@ -55,6 +55,7 @@ typedef struct blockio_dev_s {
 	bitmap_t status; // record status of all macroblocks with
 			 // respect to this device
 
+	uint32_t tail_macroblock; /* tbe block that must be cleaned out */
 	uint32_t no_macroblocks;
 	uint32_t reserved_macroblocks;
 	uint64_t next_seqno;

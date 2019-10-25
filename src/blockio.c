@@ -106,6 +106,7 @@ void blockio_init_file(blockio_t *b, const char *path, uint8_t macroblock_log,
 	b->macroblock_log = macroblock_log;
 	b->macroblock_size = 1<<macroblock_log;
 	b->mesoblk_log = mesoblk_log;
+	b->mmpm = (1<<(b->macroblock_log - b->mesoblk_log)) - 1;
 
         VERBOSE("mesoblock size %d bytes, macroblock size %d bytes",
 			1<<b->mesoblk_log, b->macroblock_size);
@@ -446,83 +447,6 @@ static void load_tail_of_ordered_in_prng(blockio_dev_t *dev, uint64_t walking_se
 	}
 }
 
-#if 0
-static void initialize_resize_prng(mt_state *state,
-	       	blockio_dev_t *dev, uint16_t rev) {
-	uint8_t mesoblk[1<<dev->b->mesoblk_log];
-	memset(state, 0, sizeof(*state));
-	memset(mesoblk, 0, sizeof(mesoblk));
-	assert(sizeof(state->statevec) <= sizeof(mesoblk));
-	cipher_enc(dev->c, mesoblk, mesoblk, 0, rev, 0);
-	mts_seedfull(state, (uint32_t*)mesoblk);
-}
-
-blockio_info_t *uptranslate(blockio_info_t *bi) {
-	assert(bi);
-	uint8_t newrev = bi->layout_revision + 1;
-	blockio_dev_t *dev = bi->dev;
-	blockio_dev_rev_t *rev = &dev->rev[dev->layout_revision - newrev];
-	blockio_info_t *next, *test;
-	mt_state state;
-	int work = rev->work;
-	uint64_t seqno = rev->seqno - 1; // allow easy entry in while loop
-
-	initialize_resize_prng(&state, dev, newrev);
-
-	//VERBOSE("%p %d %d %llu %d %d", bi, newrev, dev->layout_revision - newrev,
-	//	       	seqno, rev->no_macroblocks, work);
-	VERBOSE("translating from rev %d to rev %d, starting at %ld",
-		       	bi->layout_revision, newrev, bi - dev->b->blockio_infos);
-
-	next = find_ordered_equal_or_first_after(dev,
-			bi->layout_revision, ULLONG_MAX);
-	int count = (dllarr_index(&dev->ordered, next) -
-			dllarr_index(&dev->ordered, bi));
-	uint64_t reindex[count];
-
-	assert(count);
-
-	while (work) {
-		do seqno++;
-		while (rds_iuniform(&state, 0, rev->no_macroblocks) >= work);
-
-		work--;
-
-		test = find_ordered_equal_or_first_after(dev, newrev, seqno);
-		if (test && test->next_seqno == seqno &&
-				test->layout_revision == newrev) continue;
-
-		/* keep the last 'count' values */
-		memmove(&reindex[1], &reindex[0], sizeof(reindex[0])*(count - 1));
-		reindex[0] = seqno;
-	}
-
-	count--;
-	goto entry;
-
-	while (count--) {
-		bi = next;
-entry:
-		//VERBOSE("update %u from %llu to %llu", bi - dev->b->blockio_infos,
-		//		bi->next_seqno, reindex[count]);
-		next = dllarr_next(&dev->ordered, bi);
-		assert(next);
-
-		bi->next_seqno = reindex[count];
-		bi->layout_revision++;
-		add_to_ordered(dllarr_remove(&dev->ordered, bi));
-	}
-
-	//blockio_verbose_ordered(dev);
-
-	/* return the first block of the next revision, usually this is
-	 * 'next' but in some cases this is bi (because bi was the only
-	 * one to be updated) */
-	return ((next->layout_revision == bi->layout_revision &&
-			next->next_seqno > bi->next_seqno) || next->layout_revision > bi->layout_revision)?bi:next;
-}
-#endif
-
 void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 		const char *name) {
 	int i, tmp_no_macroblocks = 0, tmp2 = 0;
@@ -532,7 +456,7 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 
 	assert(b && c);
 	assert(b->mesoblk_log < b->macroblock_log);
-	bitmap_init(&dev->status, 2*b->no_macroblocks);
+	bitmap_init(&dev->status, b->no_macroblocks);
 	dllarr_init(&dev->used_blocks, offsetof(blockio_info_t, ufs));
 	dllarr_init(&dev->free_blocks, offsetof(blockio_info_t, ufs));
 	dllarr_init(&dev->selected_blocks, offsetof(blockio_info_t, ufs));
@@ -753,7 +677,7 @@ void blockio_dev_read_header(blockio_dev_t *dev, uint32_t no,
 	//
 	// the seqno is used as IV for all the other mesoblocks
 	// in the datablock
-	cipher_dec(dev->c, BASE, BASE, 0, 0, 0);
+	cipher_dec(dev->c, BASE, BASE, 0, no, 0);
 
 	/* check magic */
 	if (memcmp(magic, MAGIC, sizeof(magic))) {
@@ -840,7 +764,7 @@ void blockio_dev_read_mesoblk(blockio_dev_t *dev,
 			((no + 1)<<dev->b->mesoblk_log) +
 			0, 1<<dev->b->mesoblk_log);
 	cipher_dec(dev->c, buf, buf, dev->b->blockio_infos[id].seqno,
-			no + 1, 0);
+			no + 1, id);
 }
 
 int blockio_check_data_hash(blockio_info_t *bi) {
@@ -936,7 +860,7 @@ void blockio_dev_write_current_macroblock(blockio_dev_t *dev) {
 	/* encrypt datablocks (also the unused ones) */
 	for (i = 1; i <= dev->mmpm; i++)
 		cipher_enc(dev->c, BASE + (i<<dev->b->mesoblk_log),
-			BASE + (i<<dev->b->mesoblk_log), dev->bi->seqno, i, 0);
+			BASE + (i<<dev->b->mesoblk_log), dev->bi->seqno, i, id);
 
 	/* calculate hash of data, store in index */
 	gcry_md_hash_buffer(GCRY_MD_SHA256, DATABLOCKS_HASH,
@@ -982,7 +906,7 @@ void blockio_dev_write_current_macroblock(blockio_dev_t *dev) {
 			(1<<dev->b->mesoblk_log) - 32 /* size of hash */);
 
 	/* encrypt index */
-	cipher_enc(dev->c, BASE, BASE, 0, 0, 0);
+	cipher_enc(dev->c, BASE, BASE, 0, id, 0);
 
 	dev->b->write(dev->io, BASE, id<<dev->b->macroblock_log,
 			1<<dev->b->macroblock_log);

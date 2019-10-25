@@ -62,6 +62,6 @@ uint32_t random_custom(random_t *r, uint32_t count) {
 
 void random_free(random_t *r) {
 	// we can't handle errors in cleanup functions
-	if (fclose(r->fp) == EOF)
+	if (r->fp && fclose(r->fp) == EOF)
 		WARNING("closing /dev/urandom: %s", strerror(errno));
 }

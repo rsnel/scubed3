@@ -30,7 +30,10 @@
 typedef struct blockio_s blockio_t;
 
 typedef struct blockio_info_s {
+	/* linked list for:
+	 * - usage by the juggler (block selection within a device) */
 	struct blockio_info_s *next; // for use with random juggler
+
 	dllarr_elt_t ord; // for ordered
 	dllarr_elt_t ufs; // for used, free and selected lists
 	uint64_t seqno, next_seqno;
@@ -89,6 +92,8 @@ struct blockio_s {
 	uint8_t macroblock_log;
 	uint32_t no_macroblocks; /* amount of raw macroblocks */
 	uint32_t bitmap_offset;
+	
+	dllarr_t unallocated;
 
 	uint8_t mesoblk_log;
 	uint16_t mmpm; /* max mesoblocks per macroblock */
@@ -98,7 +103,7 @@ struct blockio_s {
 	random_t r;
 
 	void *(*open)(const void*);
-	void *open_priv;
+	void *open_priv; /* filename, required for open */
 	void (*read)(void*, void*, uint64_t, uint32_t);
 	void (*write)(void*, const void*, uint64_t, uint32_t);
 	void (*close)(void*);
@@ -111,6 +116,8 @@ void blockio_dev_init(blockio_dev_t*, blockio_t*, cipher_t*, const char*);
 void blockio_dev_free(blockio_dev_t*);
 
 void blockio_dev_read_header(blockio_dev_t*, uint32_t, uint64_t*);
+
+void blockio_dev_scan_header(blockio_dev_t*, uint32_t, uint64_t*);
 
 blockio_info_t *blockio_dev_get_new_macroblock(blockio_dev_t*);
 
@@ -147,9 +154,9 @@ blockio_dev_macroblock_status_t blockio_dev_get_macroblock_status(
 		blockio_dev_t*, uint32_t);
 
 // returns errors -1: not enough blocks available, -2 out of memory
-int blockio_dev_allocate_macroblocks(blockio_dev_t*, uint16_t);
+int blockio_dev_allocate_macroblocks(blockio_dev_t*, uint32_t);
 
-int blockio_dev_free_macroblocks(blockio_dev_t*, uint16_t);
+int blockio_dev_free_macroblocks(blockio_dev_t*, uint32_t);
 
 void blockio_verbose_ordered(blockio_dev_t*);
 

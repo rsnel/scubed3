@@ -38,6 +38,8 @@ void juggler_init(juggler_t*, random_t *r);
 
 void juggler_add_macroblock(juggler_t*, blockio_info_t*);
 
+void juggler_notify_seqno(juggler_t*, uint64_t seqno);
+
 blockio_info_t *juggler_get_obsoleted(juggler_t*);
 
 blockio_info_t *juggler_get_devblock(juggler_t*, int);

@@ -82,7 +82,7 @@ static void *stream_open(const char *path) {
 #define NO_MACROBLOCKS_UINT32	(BASE + 0x078)
 #define RESERVED_BLOCKS_UINT32	(BASE + 0x07C)
 #define RESERVED_SPACE1024	(BASE + 0x080)
-#define NO_INDICES		(BASE + 0x100)
+#define NO_INDICES_UINT32	(BASE + 0x100)
 
 void blockio_free(blockio_t *b) {
 	assert(b);
@@ -96,7 +96,7 @@ void blockio_init_file(blockio_t *b, const char *path, uint8_t macroblock_log,
 	struct stat stat_info;
 	struct flock lock;
 	uint64_t tmp;
-	void *priv;
+	void *priv; /* FILE* */
 	assert(b);
 	assert(sizeof(off_t)==8);
 	assert(macroblock_log < 8*sizeof(uint32_t));
@@ -127,6 +127,9 @@ void blockio_init_file(blockio_t *b, const char *path, uint8_t macroblock_log,
 	b->write = stream_write;
 	b->close = stream_close;
 
+	/* each scubed device has it's own handle
+	 * to the file (for thead safity?), we open the
+	 * file here temporarily to look at it */
 	priv = stream_open(b->open_priv);
 
 	lock.l_type = F_WRLCK;
@@ -166,7 +169,12 @@ void blockio_init_file(blockio_t *b, const char *path, uint8_t macroblock_log,
 	b->no_macroblocks = tmp;
 
 	b->blockio_infos = ecalloc(sizeof(blockio_info_t), b->no_macroblocks);
-	random_init(&b->r, b->no_macroblocks);
+
+	dllarr_init(&b->unallocated, offsetof(blockio_info_t, ufs));
+	for (uint32_t i = 0; i < b->no_macroblocks; i++) 
+		dllarr_append(&b->unallocated, &b->blockio_infos[i]);
+
+	random_init(&b->r);
 	stream_close(priv);
 }
 
@@ -177,14 +185,15 @@ void blockio_dev_free(blockio_dev_t *dev) {
 	assert(dev);
 	//VERBOSE("closing \"%s\", %s", dev->name, dev->updated?"SHOULD BE WRITTEN":"no updates");
 	if (dev->updated) blockio_dev_write_current_macroblock(dev);
-	random_free(&dev->r);
 	bitmap_free(&dev->status);
 
-	for (i = 0; i < dev->rev[0].no_macroblocks; i++) {
+	for (i = 0; i < dev->b->no_macroblocks; i++) {
 		blockio_info_t *bi =
-			&dev->b->blockio_infos[dev->macroblock_ref[i]];
-		free(bi->indices);
-		bi->dev = NULL;
+			&dev->b->blockio_infos[i];
+		if (bi->dev == dev) {
+			free(bi->indices);
+			bi->dev = NULL;
+		}
 	}
 
 	dllarr_free(&dev->used_blocks);
@@ -192,7 +201,6 @@ void blockio_dev_free(blockio_dev_t *dev) {
 	dllarr_free(&dev->selected_blocks);
 	dllarr_free(&dev->ordered);
 	free(dev->tmp_macroblock);
-	free(dev->macroblock_ref);
 	free(dev->name);
 	if (dev->b && dev->b->close) dev->b->close(dev->io);
 }
@@ -219,9 +227,8 @@ void blockio_verbose_ordered(blockio_dev_t *dev) {
 				assert(0);
 		}
 
-		VERBOSE("i=%3d, id=%3d, rev=%d/%d, seq=%4ld, nseq=%4ld %s%s",
-				bi->ord.index, id, bi->layout_revision,
-				bi->hard_layout_revision,
+		VERBOSE("i=%3d, id=%3d, seq=%4ld, nseq=%4ld %s%s",
+				bi->ord.index, id,
 				bi->seqno, bi->next_seqno, state,
 				(id == dev->tail_macroblock)?
 				" >TAIL<":(dev->next_seqno - 1 == bi->seqno)?
@@ -232,6 +239,8 @@ void blockio_verbose_ordered(blockio_dev_t *dev) {
 	dllarr_iterate(&dev->ordered, (dllarr_iterator_t)verbose_ding, NULL);
 }
 
+/* do we need this function */
+#if 0
 blockio_info_t *find_ordered_equal_or_first_after(
 		blockio_dev_t *dev, uint16_t rev, uint64_t seqno) {
 	void *compare_rev_nseq(blockio_info_t *bi) {
@@ -244,8 +253,11 @@ blockio_info_t *find_ordered_equal_or_first_after(
 	return dllarr_iterate(&dev->ordered,
 			(dllarr_iterator_t)compare_rev_nseq, NULL);
 }
+#endif
 
 void add_to_ordered(blockio_info_t *bi) {
+	FATAL("add_to_ordered not implemented");
+#if 0
 	void *compare_rev_nseq(blockio_info_t *old, blockio_info_t *new) {
 		if (old->layout_revision == new->layout_revision &&
 				old->next_seqno < new->next_seqno) return NULL;
@@ -259,20 +271,19 @@ void add_to_ordered(blockio_info_t *bi) {
 	//VERBOSE("insert %p %d seq=%lld, nseq=%lld in ordered, at %p",
 	//		bi, bi - bi->dev->b->blockio_infos, bi->seqno,
 	//		bi->next_seqno, tmp);
-
-	dllarr_insert(&bi->dev->ordered, bi, tmp);
+	//dllarr_insert(&bi->dev->ordered, bi, tmp);
+#endif
 }
 
 /* put block in the 'in use' list, sort with sequence number */
 static void add_to_used(blockio_info_t *bi) {
 	void *compare_seqno(blockio_info_t *bi, uint64_t *seqno) {
-		//VERBOSE("checking %d: goal %llu <= %llu",
-		//		bi - bi->dev->b->blockio_infos,
-		//		*seqno, bi->seqno);
+		VERBOSE("checking %ld: goal %lu <= %lu",
+				bi - bi->dev->b->blockio_infos,
+				*seqno, bi->seqno);
 		if (*seqno > bi->seqno) return NULL;
 		else return bi;
 	}
-	assert(bi->no_indices);
 
 	dllarr_insert(&bi->dev->used_blocks, bi,
 			dllarr_iterate(&bi->dev->used_blocks,
@@ -280,6 +291,8 @@ static void add_to_used(blockio_info_t *bi) {
 				&bi->seqno));
 }
 
+/* we should not need this function anymore */
+#if 0
 static int last_diff(random_t *r, int last, int *first) {
         int i;
         assert(last >= 0);
@@ -292,43 +305,51 @@ static int last_diff(random_t *r, int last, int *first) {
 
         return 1;
 }
+#endif
 
+/* we should not need this function anymore */
+#if 0
 static void update_ordered(blockio_dev_t *dev, blockio_info_t *bi,
 		uint64_t next_seqno, uint16_t layout_revision) {
 	bi->next_seqno = next_seqno;
 	bi->layout_revision = dev->layout_revision;
 	add_to_ordered(dllarr_remove(&dev->ordered, bi));
 }
+#endif
 
 void blockio_dev_select_next_macroblock(blockio_dev_t *dev, int first) {
-	int number, different = 1, tmp2 = 0, tmp3;
-	uint32_t next_seqno_diff = 0;
+	//int number, different = 1, tmp2 = 0, tmp3;
+	//uint32_t next_seqno_diff = 0;
 
 	assert(!dev->bi);
 
 	dev->valid = 1;
 
-	number = dev->macroblock_ref[random_peek(&dev->r, 0)];
-	dev->bi = &dev->b->blockio_infos[number];
+	//dev->bi = &dev->b->blockio_infos[number];
 	dev->updated = 0;
 	//VERBOSE("select next: id=%d next_seqno=%lld, bi->seqno=%lld,
 	//	 	bi->next_seqno=%lld", number, dev->next_seqno,
 	//	 	dev->bi->seqno, dev->bi->next_seqno);
 	assert(dev->bi->next_seqno == 0 || dev->next_seqno == dev->bi->next_seqno);
 	dev->bi->seqno = dev->next_seqno++;
-	dev->bi->layout_revision = dev->layout_revision;
 
+	FATAL("did not implement blockio_dev_select_next_macroblock");
+#if 0
 	do next_seqno_diff++;
 	while (random_peek(&dev->r, next_seqno_diff) != random_peek(&dev->r, 0));
+#endif
 
+#if 0
 	update_ordered(dev, dev->bi, dev->bi->seqno +
 			next_seqno_diff, dev->layout_revision);
+#endif
 
 #if 0
 	VERBOSE("new block %d (local_id=%d) seqno=%lld next_seqno=%lld",
 			number, random_peek(&dev->r, 0),
 			dev->bi->seqno, dev->bi->next_seqno);
 #endif
+#if 0
 
 	if (first) {
 		assert(blockio_dev_get_macroblock_status(dev, number) == FREE);
@@ -340,7 +361,8 @@ void blockio_dev_select_next_macroblock(blockio_dev_t *dev, int first) {
 
 	while (different <= dev->keep_revisions) {
 		tmp2++;
-		tmp3 = dev->macroblock_ref[random_peek(&dev->r, tmp2)];
+		FATAL("not implemented!");
+		//tmp3 = dev->macroblock_ref[random_peek(&dev->r, tmp2)];
 		if (last_diff(&dev->r, tmp2, &dev->valid)) {
 			if (different != dev->keep_revisions) {
 				if (tmp2 + 1 >= dev->random_len) {
@@ -373,7 +395,7 @@ void blockio_dev_select_next_macroblock(blockio_dev_t *dev, int first) {
 	dev->random_len = tmp2;
 
 	random_pop(&dev->r);
-
+#endif
 }
 
 void blockio_dev_write_current_and_select_next_valid_macroblock(
@@ -409,13 +431,18 @@ uint8_t *hash_seqnos(blockio_dev_t *dev, uint8_t *hash_res, blockio_info_t *last
         return hash_res;
 }
 
+/* need this function? */
+#if 0
 /*static */void recon(blockio_dev_t *dev, const char *id,
 		uint16_t internal, uint64_t seqno) {
 	VERBOSE("recon (%s) %3d(%3d) %4ld", id,
 			dev->macroblock_ref[internal],
 			internal, seqno);
 }
+#endif
 
+/* nonsense function */
+#if 0
 static void load_tail_of_ordered_in_prng(blockio_dev_t *dev, uint64_t walking_seqno) {
 	blockio_info_t *bi = dllarr_last(&dev->ordered);
 
@@ -446,13 +473,14 @@ static void load_tail_of_ordered_in_prng(blockio_dev_t *dev, uint64_t walking_se
 					       	index)))->internal);
 	}
 }
+#endif
 
 void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 		const char *name) {
-	int i, tmp_no_macroblocks = 0, tmp2 = 0;
-	int no_different_selectblocks;
+	int i; //, tmp_no_macroblocks = 0; //, tmp2 = 0;
+	//int no_different_selectblocks;
 	uint64_t highest_seqno = 0;
-	uint8_t hash[32];
+	//uint8_t hash[32];
 
 	assert(b && c);
 	assert(b->mesoblk_log < b->macroblock_log);
@@ -468,30 +496,13 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 	dev->tmp_macroblock = ecalloc(1, 1<<b->macroblock_log);
 	dev->b = b;
 	dev->c = c;
-	dev->mmpm = (1<<(b->macroblock_log - b->mesoblk_log)) - 1;
 
 	/* read macroblock headers */
 	for (i = 0; i < b->no_macroblocks; i++)
-		blockio_dev_read_header(dev, i, &highest_seqno);
+		blockio_dev_scan_header(dev, i, &highest_seqno);
 
-	random_init(&dev->r, 0);
-	dev->next_seqno = highest_seqno + 1;
-
-	if (highest_seqno == 0) {
-		VERBOSE("device \"%s\" is empty; no macroblocks found",
-				dev->name);
-		return;
-	}
-
-	uint16_t rebuild_prng[dev->random_len - 1];
-	memset(&rebuild_prng[0], 0, sizeof(rebuild_prng));
-	dllarr_t *fos;
-
-	dev->macroblock_ref = ecalloc(dev->rev[0].no_macroblocks, sizeof(uint16_t));
-
-	tmp_no_macroblocks = dev->rev[0].no_macroblocks;
-	dev->rev[0].no_macroblocks = 0;
-
+	if (dllarr_count(&dev->used_blocks)) FATAL("we found blocks, blockio dev init cannot handle that currently");
+#if 0
 	/* check all macroblocks in the map */
 	for (i = 0; i < b->no_macroblocks; i++) {
 		blockio_info_t *bi = &b->blockio_infos[i];
@@ -582,41 +593,10 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 				break;
 		}
 	}
+#endif
+	//assert(tmp_no_macroblocks == dev->rev[0].no_macroblocks);
 
-	assert(tmp_no_macroblocks == dev->rev[0].no_macroblocks);
-
-	assert(tmp2 <= dev->random_len - 1);
-	//VERBOSE("we have %d different blocks to rebuild prng", tmp2);
-	dev->keep_revisions += tmp2 + 1;
-	//VERBOSE("keep_revisions = %d", dev->keep_revisions);
-	no_different_selectblocks = tmp2;
-	random_rescale(&dev->r, dev->rev[0].no_macroblocks);
-
-	/* first: fill in the blanks in rebuild_prng (if any) with random
-	 * choices of the filled in argument */
-	while (tmp2 < dev->random_len - 1)
-		rebuild_prng[tmp2++] = rebuild_prng[
-			random_custom(&dev->r, no_different_selectblocks)];
-
-	/* shuffle */
-	for (i = 0; i < tmp2 - 1; i++) {
-		uint16_t xchg = rebuild_prng[i];
-		uint16_t index;
-		index = random_custom(&dev->r, tmp2 - i) + i;
-		rebuild_prng[i] = rebuild_prng[index];
-		rebuild_prng[index] = xchg;
-		//VERBOSE("swapped %d and %d", i, index);
-	}
-
-	uint64_t walking_seqno = dev->next_seqno + dev->random_len;
-
-	/* find first nonzero revision */
-	blockio_info_t *bi = find_ordered_equal_or_first_after(dev, 0,
-			ULLONG_MAX);
-
-	if (bi->layout_revision + MACROBLOCK_HISTORY < dev->layout_revision)
-		ecch_throw(ECCH_DEFAULT, "not enough information available "
-				"to rebuild prng");
+	//assert(tmp2 <= dev->random_len - 1);
 
 #if 0
 	blockio_verbose_ordered(dev);
@@ -629,8 +609,8 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 
 	/*while (bi->layout_revision < dev->layout_revision) bi = uptranslate(bi);*/
 
-	load_tail_of_ordered_in_prng(dev, walking_seqno);
 
+#if 0
 	random_push(&dev->r, dev->b->blockio_infos[
 			dev->tail_macroblock].internal);
 	for (i = 0; i < tmp2; i++) random_push(&dev->r, rebuild_prng[i]);
@@ -652,9 +632,10 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 
 	/* select next block */
 	blockio_dev_select_next_macroblock(dev, 0);
+#endif
 }
 
-void blockio_dev_read_header(blockio_dev_t *dev, uint32_t no,
+void blockio_dev_scan_header(blockio_dev_t *dev, uint32_t no,
 		uint64_t *highest_seqno) {
 	assert(dev && dev->b && no < dev->b->no_macroblocks);
 	blockio_info_t *bi = &dev->b->blockio_infos[no];
@@ -664,7 +645,7 @@ void blockio_dev_read_header(blockio_dev_t *dev, uint32_t no,
 	bi = &dev->b->blockio_infos[no];
 
 	if (bi->dev) {
-		//VERBOSE("macroblock %d already taken", no);
+		VERBOSE("macroblock %d already taken", no);
 		return;
 	}
 
@@ -677,42 +658,36 @@ void blockio_dev_read_header(blockio_dev_t *dev, uint32_t no,
 	//
 	// the seqno is used as IV for all the other mesoblocks
 	// in the datablock
-	cipher_dec(dev->c, BASE, BASE, 0, no, 0);
+	cipher_dec(dev->c, BASE, BASE, 0, 0, no);
 
 	/* check magic */
-	if (memcmp(magic, MAGIC, sizeof(magic))) {
-		//DEBUG("magic \"%.*s\" not found in macroblock %u",
-	//			sizeof(magic), magic, no);
+	if (memcmp(magic, MAGIC64, sizeof(magic))) {
+		DEBUG("magic \"%.*s\" not found in macroblock %u",
+				(int)sizeof(magic), magic, no);
 		return;
-	}
+	} else DEBUG("magic \"%.*s\" found in macroblock %u", (int)sizeof(magic), magic, no);
+
 
 	/* check indexblock hash */
 	gcry_md_hash_buffer(GCRY_MD_SHA256, sha256, BASE + sizeof(sha256),
 			(1<<dev->b->mesoblk_log) - sizeof(sha256));
-	if (memcmp(INDEXBLOCK_HASH, sha256, sizeof(sha256))) {
+	if (memcmp(INDEXBLOCK_SHA256, sha256, sizeof(sha256))) {
 		DEBUG("sha256 hash of index block %d failed", no);
 		return;
 	}
 
-	/* check the macroblock log */
-	if (dev->b->macroblock_log != binio_read_uint8(MACROBLOCK_LOG))
-		FATAL("macroblock log doesn't agree (on disk %d, should be %d)",
-				binio_read_uint8(MACROBLOCK_LOG),
-				dev->b->macroblock_log);
-
-	/* check the mesoblock log */
-	if (dev->b->mesoblk_log != binio_read_uint8(MESOBLOCK_LOG))
-		FATAL("mesoblock log doesn't agree (on disk %d, should be %d)",
-				binio_read_uint8(MESOBLOCK_LOG),
-				dev->b->mesoblk_log);
-
 	/* block seems to belong to us */
-	memcpy(bi->data_hash, DATABLOCKS_HASH, 32);
-	memcpy(bi->seqnos_hash, SEQNOS_HASH, 32);
-	bi->seqno = binio_read_uint64_be(SEQNO);
-	bi->next_seqno = bi->seqno + binio_read_uint32_be(NEXT_SEQNO_DIFF);
-	bi->hard_layout_revision =
-		bi->layout_revision = binio_read_uint16_be(LAYOUT_REVISION);
+	memcpy(bi->data_hash, DATABLOCKS_SHA256, 32);
+	memcpy(bi->seqnos_hash, SEQNOS_SHA256, 32);
+	bi->seqno = binio_read_uint64_be(SEQNO_UINT64);
+	bi->next_seqno = binio_read_uint64_be(NEXT_SEQNO_UINT64);
+
+	dllarr_remove(&dev->b->unallocated, bi);
+	add_to_used(bi);
+
+	FATAL("blockio_dev_scan_header not completely implemented");
+
+#if 0
 	if (bi->seqno > *highest_seqno) {
 		*highest_seqno = bi->seqno;
 		dev->layout_revision = bi->layout_revision;
@@ -731,11 +706,13 @@ void blockio_dev_read_header(blockio_dev_t *dev, uint32_t no,
 		dev->random_len = binio_read_uint32_be(RANDOM_LEN);
 		bitmap_read(&dev->status, (uint32_t*)BITMAP);
 	}
+#endif
 
-	bi->no_nonobsolete = bi->no_indices = binio_read_uint32_be(NO_INDICES);
-	bi->indices = ecalloc(dev->mmpm, sizeof(uint32_t));
+	bi->no_nonobsolete = bi->no_indices =
+		binio_read_uint32_be(NO_INDICES_UINT32);
+	bi->indices = ecalloc(dev->b->mmpm, sizeof(uint32_t));
 	for (i = 1; i <= bi->no_indices; i++)
-		bi->indices[i-1] = *(((uint32_t*)NO_INDICES) + i);
+		bi->indices[i-1] = binio_read_uint32_be(((uint32_t*)NO_INDICES_UINT32) + i);
 
 	VERBOSE("block %u (seqno=%lu) of \"%s\" has %d indices, "
 			"next_seqno=%lu",
@@ -750,7 +727,7 @@ void blockio_dev_read_header(blockio_dev_t *dev, uint32_t no,
 void blockio_dev_read_mesoblk_part(blockio_dev_t *dev, void *buf, uint32_t id,
 		uint32_t no, uint32_t offset, uint32_t len) {
 	assert(dev->b && dev->b->read && id < dev->b->no_macroblocks &&
-			no < dev->mmpm);
+			no < dev->b->mmpm);
 	unsigned char mesoblk[1<<dev->b->mesoblk_log];
 
 	/* FIXME: do some caching */
@@ -786,6 +763,7 @@ int blockio_check_data_hash(blockio_info_t *bi) {
 	return 1;
 }
 
+#if 0
 void blockio_dev_write_nonsense_macroblock(blockio_dev_t *dev, uint16_t no) {
 	cipher_t c;
 	int i;
@@ -797,7 +775,7 @@ void blockio_dev_write_nonsense_macroblock(blockio_dev_t *dev, uint16_t no) {
 	if (fread(key, 32, 1, fp) != 1) ecch_throw(ECCH_DEFAULT, "unable to "
 			"read random data");
 	gcry_md_hash_buffer(GCRY_MD_SHA256, mesoblk_in, key, 32);
-	cipher_init(&c, "CBC_ESSIV(AES256)", 1024, key, 32);
+	cipher_init(&c, "CBC_ESSIV(AES256)", 1<<(dev->b->mesoblk_log - 4), key, 32);
 	fclose(fp);
 
 
@@ -812,6 +790,7 @@ void blockio_dev_write_nonsense_macroblock(blockio_dev_t *dev, uint16_t no) {
 	dev->b->write(dev->io, macroblock, no<<dev->b->macroblock_log,
 			1<<dev->b->macroblock_log);
 }
+#endif
 
 void blockio_dev_write_current_macroblock(blockio_dev_t *dev) {
 	uint32_t id = dev->bi - dev->b->blockio_infos;
@@ -826,9 +805,9 @@ void blockio_dev_write_current_macroblock(blockio_dev_t *dev) {
 		dev->wasted_gc += dev->bi->no_indices_gc;
 		dev->pre_emptive_gc += dev->bi->no_indices_preempt;
 		dev->useful += (dev->bi->no_indices - dev->bi->no_indices_gc);
-		dev->wasted_empty += dev->mmpm - dev->bi->no_indices;
+		dev->wasted_empty += dev->b->mmpm - dev->bi->no_indices;
 	} else {
-		dev->wasted_keep += dev->mmpm;
+		dev->wasted_keep += dev->b->mmpm;
 		if (blockio_dev_get_macroblock_status(dev, id) != SELECTFROM) {
 			dllarr_append(&dev->free_blocks, dev->bi);
 			if (!dev->updated) {
@@ -836,15 +815,16 @@ void blockio_dev_write_current_macroblock(blockio_dev_t *dev) {
 						"next_seqno=%lu)", id,
 		       				dev->bi->seqno,
 					       	dev->bi->next_seqno);
-				blockio_dev_write_nonsense_macroblock(dev, id);
+				FATAL("want to write nonsense block, but not implemented");
+				//blockio_dev_write_nonsense_macroblock(dev, id);
 				assert(!dev->bi->no_indices);
 				assert(!dev->bi->no_nonobsolete);
 				assert(!dev->bi->no_indices_gc);
 				assert(!dev->bi->no_indices_preempt);
 				dev->bi->seqno = 0;
 				dev->bi->next_seqno = 0;
-				dev->bi->layout_revision = 0;
-				dev->bi->hard_layout_revision = 0;
+				//dev->bi->layout_revision = 0;
+				//dev->bi->hard_layout_revision = 0;
 				add_to_ordered(dllarr_remove(&dev->ordered,
 							dev->bi));
 				dev->bi = NULL;
@@ -857,56 +837,52 @@ void blockio_dev_write_current_macroblock(blockio_dev_t *dev) {
 		       	dev->bi->seqno, dev->bi->next_seqno);
 	dev->writes++;
 
+
+	/* zero out the unused datablock,
+	 * so that we do not encrypt 'random' data */
+	for (i = dev->bi->no_indices + 1; i <= dev->b->mmpm; i++) {
+		memset(BASE + (i<<dev->b->mesoblk_log), 0, 1<<dev->b->mesoblk_log);
+	}
+
 	/* encrypt datablocks (also the unused ones) */
-	for (i = 1; i <= dev->mmpm; i++)
+	for (i = 1; i <= dev->b->mmpm; i++)
 		cipher_enc(dev->c, BASE + (i<<dev->b->mesoblk_log),
 			BASE + (i<<dev->b->mesoblk_log), dev->bi->seqno, i, id);
 
 	/* calculate hash of data, store in index */
-	gcry_md_hash_buffer(GCRY_MD_SHA256, DATABLOCKS_HASH,
+	gcry_md_hash_buffer(GCRY_MD_SHA256, DATABLOCKS_SHA256,
 			BASE + (1<<dev->b->mesoblk_log),
-			dev->mmpm<<dev->b->mesoblk_log);
+			dev->b->mmpm<<dev->b->mesoblk_log);
 	//verbose_buffer("sha256_data", DATABLOCKS_HASH, 32);
 
 	/* calculate hash of seqnos */
-	hash_seqnos(dev, SEQNOS_HASH, dev->bi);
+	hash_seqnos(dev, SEQNOS_SHA256, dev->bi);
 
 	/* write static data */
-	binio_write_uint64_be(SEQNO, dev->bi->seqno);
-	binio_write_uint32_be(NEXT_SEQNO_DIFF, dev->bi->next_seqno -
-			dev->bi->seqno);
-	memcpy(MAGIC, magic, sizeof(magic));
-	binio_write_uint16_be(TAIL_MACROBLOCK, dev->tail_macroblock);
-	binio_write_uint16_be(LAYOUT_REVISION, dev->layout_revision);
-	dev->bi->hard_layout_revision = dev->layout_revision;
-	binio_write_uint16_be(RESERVED_MACROBLOCKS, dev->reserved_macroblocks);
-	binio_write_uint32_be(RANDOM_LEN, dev->random_len);
-	binio_write_uint8(MACROBLOCK_LOG, dev->b->macroblock_log);
-	binio_write_uint8(MESOBLOCK_LOG, dev->b->mesoblk_log);
-
-	for (i = 0; i < MACROBLOCK_HISTORY; i++) {
-		binio_write_uint64_be(REV_SEQNOS + 8*i,
-				dev->rev[i].seqno);
-		binio_write_uint16_be(NO_MACROBLOCKS + 2*i,
-				dev->rev[i].no_macroblocks);
-		binio_write_uint16_be(REVISION_WORK + 2*i,
-				dev->rev[i].work);
-	}
+	binio_write_uint64_be(SEQNO_UINT64, dev->bi->seqno);
+	binio_write_uint64_be(NEXT_SEQNO_UINT64, dev->bi->next_seqno);
+	memcpy(MAGIC64, magic, sizeof(magic));
+	binio_write_uint32_be(RESERVED_BLOCKS_UINT32, dev->reserved_macroblocks);
+	binio_write_uint32_be(NO_MACROBLOCKS_UINT32, dev->no_macroblocks);
 
 	dev->bi->no_nonobsolete = dev->bi->no_indices;
-	binio_write_uint32_be(NO_INDICES, dev->bi->no_indices);
+	binio_write_uint32_be(NO_INDICES_UINT32, dev->bi->no_indices);
 	for (i = 1; i <= dev->bi->no_indices; i++)
-		*(((uint32_t*)NO_INDICES) + i) = dev->bi->indices[i-1];
+		binio_write_uint32_be(((uint32_t*)NO_INDICES_UINT32) + i, dev->bi->indices[i-1]);
 
-	bitmap_write((uint32_t*)BITMAP, &dev->status);
+	/* set unused indices to zero */
+	for (i = dev->bi->no_indices; i <= dev->b->mmpm; i++)
+		binio_write_uint32_be(((uint32_t*)NO_INDICES_UINT32) + i, 0);
+
+	bitmap_write((uint32_t*)(BASE + dev->b->bitmap_offset), &dev->status);
 
 	/* calculate hash of indexblock */
-	gcry_md_hash_buffer(GCRY_MD_SHA256, INDEXBLOCK_HASH,
+	gcry_md_hash_buffer(GCRY_MD_SHA256, INDEXBLOCK_SHA256,
 			dev->tmp_macroblock + 32 /* size of hash */,
 			(1<<dev->b->mesoblk_log) - 32 /* size of hash */);
 
 	/* encrypt index */
-	cipher_enc(dev->c, BASE, BASE, 0, id, 0);
+	cipher_enc(dev->c, BASE, BASE, 0, 0, id);
 
 	dev->b->write(dev->io, BASE, id<<dev->b->macroblock_log,
 			1<<dev->b->macroblock_log);
@@ -942,65 +918,9 @@ void blockio_dev_change_macroblock_status(blockio_dev_t *dev, uint32_t no,
 	blockio_dev_set_macroblock_status(dev, no, new);
 }
 
-void blockio_dev_update_statistics(blockio_dev_t *dev) {
-	FATAL("not implemented");
+int blockio_dev_free_macroblocks(blockio_dev_t *dev, uint32_t size) {
+	FATAL("blockio_dev_free_macroblocks is not implemented");
 #if 0
-	blockio_info_t *bi, *next;
-	uint64_t walking_seqno, stop_below;
-	int work;
-	//mt_state state;
-
-
-	stop_below = walking_seqno = dev->next_seqno + dev->random_len;
-	VERBOSE("reconstruction starts at seqno %lu", walking_seqno);
-	dev->rev[0].seqno = walking_seqno;
-
-	bi = find_ordered_equal_or_first_after(dev, dev->layout_revision - 1,
-                	walking_seqno);
-
-	work = dllarr_count(&dev->ordered) - dllarr_index(&dev->ordered, bi);
-	VERBOSE("work=%d", work);
-	dev->rev[0].work = work;
-
-	/* produce seed for PRNG, these actions must be reproduced
- 	 * by the loader */
-
-	//initialize_resize_prng(&state, dev, dev->layout_revision);
-
-	walking_seqno--;
-
-	while (work) {
-        	next = dllarr_next(&dev->ordered, bi);
-
-		do walking_seqno++;
-        	while (rds_iuniform(&state, 0,
-					dev->rev[0].no_macroblocks) >= work);
-
-		work--;
-
-        	bi->next_seqno = walking_seqno;
-        	bi->layout_revision++;
-
-        	add_to_ordered(dllarr_remove(&dev->ordered, bi));
-
-        	bi = next;
-	}
-
-	// safeguard important contents of prng
-	uint16_t random_store[dev->random_len];
-	while (dev->random_len--)
-		random_store[dev->random_len] = random_pop(&dev->r);
-
-	// load PRNG with just created numbers
-	load_tail_of_ordered_in_prng(dev, stop_below);
-
-	// restore PRNG
-	while (2*dev->random_len < sizeof(random_store))
-		random_push(&dev->r, random_store[dev->random_len++]);
-#endif
-}
-
-int blockio_dev_free_macroblocks(blockio_dev_t *dev, uint16_t size) {
 	blockio_info_t *bi = dllarr_first(&dev->free_blocks);
 	int count = 0;
 	VERBOSE("remove %d blocks", size);
@@ -1025,9 +945,14 @@ int blockio_dev_free_macroblocks(blockio_dev_t *dev, uint16_t size) {
 	}
 
 	return 0;
+#endif
 }
 
-int blockio_dev_allocate_macroblocks(blockio_dev_t *dev, uint16_t size) {
+int blockio_dev_allocate_macroblocks(blockio_dev_t *dev, uint32_t size) {
+	VERBOSE("we got a request to add %d macroblocks to %s", size, dev->name);
+	VERBOSE("there are %d unallocated macroblocks", dllarr_count(&dev->b->unallocated));
+	FATAL("function not implemented");
+#if 0
 	// 16 bit arithmetic
 	assert(dev->rev[0].no_macroblocks < dev->rev[0].no_macroblocks + size);
 
@@ -1088,5 +1013,6 @@ int blockio_dev_allocate_macroblocks(blockio_dev_t *dev, uint16_t size) {
 	if (dev->layout_revision != 1) blockio_dev_update_statistics(dev);
 
 	return 0;
+#endif
 }
 

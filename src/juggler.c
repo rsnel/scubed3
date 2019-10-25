@@ -35,6 +35,10 @@ void juggler_init(juggler_t *j, random_t *r) {
 	j->seqno = 0;
 }
 
+void juggler_notify_seqno(juggler_t *j, uint64_t seqno) {
+	if (seqno > j->seqno) j->seqno = seqno;
+}
+
 void juggler_add_macroblock(juggler_t *j, blockio_info_t *b) {
 	assert(j && b);
 	assert(!b->next);
@@ -52,10 +56,10 @@ void juggler_add_macroblock(juggler_t *j, blockio_info_t *b) {
 		b->next = *iterate;
 		*iterate = b;
 		j->no_scheduled++;
-		if (b->seqno > j->seqno) j->seqno = b->seqno;
+		juggler_notify_seqno(j, b->seqno);
 	} else assert(0); // nonsensical block 
 }
-		
+
 blockio_info_t *juggler_get_obsoleted(juggler_t *j) {
 	assert(j);
 	blockio_info_t *ret = j->scheduled;

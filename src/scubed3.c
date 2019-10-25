@@ -441,7 +441,7 @@ int main(int argc, char **argv) {
 	};
 	int ret;
 	struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
-	blockio_t b;
+	blockio_t b = { };
 
 	verbose_init(argv[0]);
 

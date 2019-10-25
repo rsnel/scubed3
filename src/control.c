@@ -239,12 +239,12 @@ static int control_status(int s, control_thread_priv_t *priv, char *argv[]) {
 		.macroblocks_left = priv->b->no_macroblocks
 	};
         int rep(control_status_priv_t *priv, fuse_io_entry_t *entry) {
-		size_t size = ((entry->d.rev[0].no_macroblocks - entry->d.reserved_macroblocks)*entry->d.mmpm);
-		priv->macroblocks_left -= entry->d.rev[0].no_macroblocks;
+		size_t size = ((entry->d.no_macroblocks - entry->d.reserved_macroblocks)*entry->d.b->mmpm);
+		priv->macroblocks_left -= entry->d.no_macroblocks;
                 return control_write_line(priv->s,
 				"%07u blocks in %s (%.1fMiB)%s%s%s%s%s\n",
-				entry->d.rev[0].no_macroblocks, entry->head.key,
-				((entry->d.rev[0].no_macroblocks >= entry->d.reserved_macroblocks)?
+				entry->d.no_macroblocks, entry->head.key,
+				((entry->d.no_macroblocks >= entry->d.reserved_macroblocks)?
 				 	size<<entry->d.b->mesoblk_log:0)/(1024.*1024.),
 				entry->inuse?" [U]":"",
 				entry->close_on_release?" [C]":"",
@@ -314,7 +314,7 @@ static int control_open_create_common(int s, control_thread_priv_t *priv, char *
 		if (unbase16(argv[2], key_len)) ecch_throw(ECCH_DEFAULT, "cipher "
 				"key not valid base16 (invalid chars)");
 
-		cipher_init(&entry->c, argv[1], 1024,
+		cipher_init(&entry->c, argv[1], 1<<(priv->b->mesoblk_log - 4),
 				(unsigned char*)argv[2], key_len/2);
 
 		// encrypt zeroed buffer and hash the result
@@ -333,17 +333,17 @@ static int control_open_create_common(int s, control_thread_priv_t *priv, char *
 		blockio_dev_init(&entry->d, priv->b, &entry->c, argv[0]);
 
 		/* if we used 'create' we should not have found any blocks */
-		if (add && entry->d.rev[0].no_macroblocks)
+		if (add && entry->d.no_macroblocks)
 			ecch_throw(ECCH_DEFAULT, "unable to create device: "
 					"it already exists, use `open' instead");
 
 
 		/* if we used 'open' we expect to find at least one block */
-		if (!add & !entry->d.rev[0].no_macroblocks)
+		if (!add & !entry->d.no_macroblocks)
 			ecch_throw(ECCH_DEFAULT, "unable to open device: passphrase wrong?");
 
 		entry->size = 0;
-		if (entry->d.rev[0].no_macroblocks > entry->d.reserved_macroblocks) entry->size = ((entry->d.rev[0].no_macroblocks-entry->d.reserved_macroblocks)<<entry->d.b->mesoblk_log)*entry->d.mmpm;
+		if (entry->d.no_macroblocks > entry->d.reserved_macroblocks) entry->size = ((entry->d.no_macroblocks-entry->d.reserved_macroblocks)<<entry->d.b->mesoblk_log)*entry->d.b->mmpm;
 		scubed3_init(&entry->l, &entry->d);
 
 		// really only used for test
@@ -464,10 +464,7 @@ static int control_info(int s, control_thread_priv_t *priv, char *argv[]) {
 	if (control_write_status(s, 0)) return -1;
 
 	if (control_write_line(s, "no_macroblocks=%d\n",
-				entry->d.rev[0].no_macroblocks)) return -1;
-
-	if (control_write_line(s, "keep_revisions=%d\n",
-				entry->d.keep_revisions)) return -1;
+				entry->d.no_macroblocks)) return -1;
 
 	if (control_write_line(s, "reserved_macroblocks=%d\n",
 				entry->d.reserved_macroblocks)) return -1;
@@ -500,9 +497,6 @@ static int control_info(int s, control_thread_priv_t *priv, char *argv[]) {
 		return -1;
 
 	if (control_write_line(s, "wasted_empty=%d\n",entry->d.wasted_empty))
-		return -1;
-
-	if (control_write_line(s, "layout_revision=%d\n",entry->d.layout_revision))
 		return -1;
 
 	if (entry->d.bi) {
@@ -538,7 +532,7 @@ static int control_close(int s, control_thread_priv_t *priv, char *argv[]) {
 }
 
 static int control_resize(int s, control_thread_priv_t *priv, char *argv[]) {
-	int size = 0, reserved = 0, keep = 0; // shut compiler up
+	int size = 0, reserved = 0; // shut compiler up
 	int err;
 	fuse_io_entry_t *entry = hashtbl_find_element_bykey(priv->h, argv[0]);
 	blockio_dev_t *dev;
@@ -564,7 +558,7 @@ static int control_resize(int s, control_thread_priv_t *priv, char *argv[]) {
 	}
 
 	if (size < dev->no_macroblocks) {
-		blockio_dev_free_macroblocks(dev, dev->rev[0].no_macroblocks - size);
+		blockio_dev_free_macroblocks(dev, dev->no_macroblocks - size);
 		hashtbl_unlock_element_byptr(entry);
 		return control_write_complete(s, 1, "shrinking device is not yet supported");
 	}
@@ -576,7 +570,7 @@ static int control_resize(int s, control_thread_priv_t *priv, char *argv[]) {
 				"has only %d blocks", dev->b->no_macroblocks);
 	}
 
-	size -= dev->rev[0].no_macroblocks;
+	size -= dev->no_macroblocks;
 
 	if (size == 0) {
 		hashtbl_unlock_element_byptr(entry);
@@ -592,17 +586,16 @@ static int control_resize(int s, control_thread_priv_t *priv, char *argv[]) {
 				"available for resize":"out of memory error");
 	}
 
-	dev->keep_revisions = keep;
 	dev->reserved_macroblocks = reserved;
 
 	if (!dev->bi) blockio_dev_select_next_macroblock(dev, 1);
 
 	dev->updated = 1;
 
-	if (entry->d.rev[0].no_macroblocks > entry->d.reserved_macroblocks)
-		entry->size = ((entry->d.rev[0].no_macroblocks -
+	if (entry->d.no_macroblocks > entry->d.reserved_macroblocks)
+		entry->size = ((entry->d.no_macroblocks -
 					entry->d.reserved_macroblocks)<<
-				entry->d.b->mesoblk_log)*entry->d.mmpm;
+				entry->d.b->mesoblk_log)*entry->d.b->mmpm;
 	scubed3_reinit(&entry->l);
 
 	hashtbl_unlock_element_byptr(entry);

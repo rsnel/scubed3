@@ -41,11 +41,16 @@
 #define BUF_SIZE 1024
 #define CONV_SIZE 512
 
-#define DEFAULT_PASSPHRASE_HASH		"SHA256"
+#define DEFAULT_KDF_HASH		"SHA256"
+#define DEFAULT_KDF_ITERATIONS		16*1024*1024
+#define DEFAULT_KDF_FUNCTION		"PBKDF2"
 #define DEFAULT_CIPHER_STRING		"CBC_ESSIV(AES256)"
 #define KEY_LENGTH	32
 
 #define MAX_RESULT_LINES 128
+
+// PBKDF2 requires salt
+const void *kdf_salt = "scubed3_prod";
 
 typedef struct result_s {
 	char buf[BUF_SIZE];
@@ -277,19 +282,26 @@ int my_getpass(char **lineptr, size_t *n, FILE *stream) {
 }
 
 static int ctl_open_create_common(ctl_priv_t *priv, char *argv[], int create) {
-	uint8_t *hash;
+	uint8_t hash[32];
 	char *pw = NULL, *pw2 = NULL;
 	size_t pw_len, pw2_len;
 	int i, ret;
-	int algo;
-	gcry_md_hd_t hd;
+	int algo, subalgo;
 
 	if (do_server_command(priv->s, 1, "check-available %s", argv[0]))
 		return -1;
 	if (result.status == -1) return 0;
 
-	algo = gcry_md_map_name("SHA256");
-	assert(algo && gcry_md_get_algo_dlen(algo));
+	if (!strcmp(DEFAULT_KDF_FUNCTION, "PBKDF2"))
+		algo = GCRY_KDF_PBKDF2;
+	else {
+		ERROR("unknown key derivation function %s", DEFAULT_KDF_FUNCTION);
+		return -1;
+	}
+
+	subalgo = gcry_md_map_name(DEFAULT_KDF_HASH);
+	assert(subalgo);
+
 	printf("Enter passphrase: ");
 	if (my_getpass(&pw, &pw_len, stdin) == -1) {
 		ERROR("unable to get password");
@@ -316,22 +328,29 @@ static int ctl_open_create_common(ctl_priv_t *priv, char *argv[], int create) {
 		free(pw2);
 	}
 
-	gcry_call(md_open, &hd, algo, GCRY_MD_FLAG_SECURE);
-	assert(gcry_md_is_secure(hd));
+	assert(pw_len > 0);
+	if (pw_len == 1) WARNING("empty passphrase used, this is not very secure");
 
-	gcry_md_write(hd, pw, pw_len - 1);
+	VERBOSE("computing %d iterations of %s(%s), please wait...",
+			DEFAULT_KDF_ITERATIONS,
+			DEFAULT_KDF_FUNCTION,
+			DEFAULT_KDF_HASH);
+
+	gcry_call(kdf_derive, pw, pw_len - 1,
+			algo, subalgo, kdf_salt, strlen(kdf_salt),
+			DEFAULT_KDF_ITERATIONS, 32, hash);
+
 	wipememory(pw,pw_len);
 	free(pw);
 
-	hash = gcry_md_read(hd, algo);
-	assert(hash);
+	char hash_text[2*gcry_md_get_algo_dlen(subalgo)], *ptr = hash_text;
 
-	char hash_text[2*gcry_md_get_algo_dlen(algo)], *ptr = hash_text;
-
-	for (i = 0; i < gcry_md_get_algo_dlen(algo); i++)
+	for (i = 0; i < gcry_md_get_algo_dlen(subalgo); i++)
 		ptr += snprintf(ptr, 3, "%02x", hash[i]);
 
-	gcry_md_close(hd);
+	// WARNING: sizeof(hash) must be cast to int... see below
+	wipememory(hash, (int)sizeof(hash));
+	//gcry_md_close(hd);
 
 	// WARNING: sizeof(hash_text) must be cast to int... see below
 	ret = do_server_command(priv->s, 1, "%s-internal %s %s %.*s",
@@ -665,7 +684,9 @@ int main(int argc, char **argv) {
 	int i, connections = 0;
 	char *line = NULL;
 	struct sockaddr_un remote;
-	assert(!strcmp("SHA256", DEFAULT_PASSPHRASE_HASH));
+	assert(!strcmp("SHA256", DEFAULT_KDF_HASH));
+	assert(!strcmp("PBKDF2", DEFAULT_KDF_FUNCTION));
+	assert(DEFAULT_KDF_ITERATIONS == 16*1024*1024);
 	assert(!strcmp("CBC_ESSIV(AES256)", DEFAULT_CIPHER_STRING));
 
 	verbose_init(argv[0]);
@@ -695,7 +716,7 @@ int main(int argc, char **argv) {
 	strcpy(remote.sun_path, CONTROL_SOCKET);
 	len = strlen(remote.sun_path) + sizeof(remote.sun_family);
 	if (connect(priv.s, (struct sockaddr*)&remote, len) == -1)
-		FATAL("connect: %s", strerror(errno));
+		FATAL("connecting to socket %s: %s", remote.sun_path, strerror(errno));
 
 
 	if (do_server_command(priv.s, 0, "static-info")) FATAL("unable to "
@@ -712,8 +733,8 @@ int main(int argc, char **argv) {
 	if (!connections) {
 		printf("scubed3ctl-" VERSION ", connected to scubed3-%s\n",
 				result.argv[2]);
-		printf("default cipher is %s, passphrase hash is %s\n",
-				DEFAULT_CIPHER_STRING, DEFAULT_PASSPHRASE_HASH);
+		printf("cipher: %s, KDF: %s(%s/%d)\n",
+				DEFAULT_CIPHER_STRING, DEFAULT_KDF_FUNCTION, DEFAULT_KDF_HASH, DEFAULT_KDF_ITERATIONS);
 	} else {
 		printf("re-establised connection\n");
 	}

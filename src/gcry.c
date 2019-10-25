@@ -56,17 +56,3 @@ void gcry_fatal(int err, const char *postfix) {
 	ecch_throw(ECCH_DEFAULT, "gcry_%s: %s", postfix, msg);
 }
 
-uint32_t gcry_fastranduint32(uint32_t max) {
-	uint64_t rd;
-	gcry_create_nonce(&rd, sizeof(rd));
-
-	return (uint32_t)(((double)max)*rd/(UINT64_MAX+1.0));
-}
-
-uint32_t gcry_randuint32(uint32_t max) {
-	uint64_t rd;
-	gcry_randomize(&rd, sizeof(rd), GCRY_VERY_STRONG_RANDOM);
-
-	return (uint32_t)(((double)max)*rd/(UINT64_MAX+1.0));
-}
-

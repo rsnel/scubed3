@@ -39,8 +39,4 @@ void gcry_global_init(void);
 
 void gcry_fatal(int, const char*);
 
-uint32_t gcry_randuint32(uint32_t);
-
-uint32_t gcry_fastranduint32(uint32_t);
-
 #endif /* INCLUDE_SCUBED3_GCRY_H */

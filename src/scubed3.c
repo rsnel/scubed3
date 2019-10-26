@@ -110,6 +110,8 @@ void copy_old_block_to_current(scubed3_t *l) {
 }
 
 static void pre_emptive_gc(scubed3_t *l) {
+	WARNING("pre_emptive_gc not implemented");
+#if 0
 	blockio_info_t *bi = dllarr_first(&l->dev->ordered);
 	assert(l->output_initialized);
 	assert(!l->dev->bi->no_indices_preempt);
@@ -150,6 +152,7 @@ static void pre_emptive_gc(scubed3_t *l) {
 	if (l->dev->bi->no_indices_preempt) l->dev->updated = 1;
 
 	//DEBUG("saved %d additional indices", l->dev->bi->no_indices_preempt);
+#endif
 }
 
 void select_new_macroblock(scubed3_t *l) {

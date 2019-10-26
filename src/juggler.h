@@ -26,7 +26,7 @@
  * that can be inferred by looking at the
  * contents of the disk, so that the juggler
  * can be easily be restarted without loss of
- * randomness */
+ * state (for example: between runs of scubed3 */
 typedef struct juggler_s {
 	blockio_info_t *scheduled, *unscheduled;
 	uint32_t no_scheduled, no_unscheduled;

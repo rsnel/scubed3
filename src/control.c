@@ -157,12 +157,16 @@ static int control_cycle(int s, control_thread_priv_t *priv, char *argv[]) {
 	return control_write_complete(s, 0, "see debug output");
 }
 
-static int control_verbose_ordered(int s, control_thread_priv_t *priv, char *argv[]) {
+static int control_verbose_juggler(int s, control_thread_priv_t *priv, char *argv[]) {
 	fuse_io_entry_t *entry = hashtbl_find_element_bykey(priv->h, argv[0]);
 	if (!entry) return control_write_complete(s, 1,
 			"partition \"%s\" not found", argv[0]);
 
-	blockio_verbose_ordered(&entry->d);
+	uint32_t getnum(blockio_info_t *bi, void *priv) {
+		return bi - (blockio_info_t*)priv;
+	}
+
+	juggler_verbose(&entry->d.j, getnum, entry->d.b->blockio_infos);
 
 	hashtbl_unlock_element_byptr(entry);
 
@@ -473,9 +477,9 @@ static int control_info(int s, control_thread_priv_t *priv, char *argv[]) {
 				dllarr_count(&entry->d.used_blocks)))
 		return -1;
 
-	if (control_write_line(s, "selected=%d\n",
+	/*if (control_write_line(s, "selected=%d\n",
 				dllarr_count(&entry->d.selected_blocks)))
-		return -1;
+		return -1;*/
 
 	if (control_write_line(s, "free=%d\n",
 				dllarr_count(&entry->d.free_blocks)))
@@ -635,8 +639,8 @@ static control_command_t control_commands[] = {
 		.argc = 2,
 		.usage = " NAME COUNT"
 	}, {
-		.head.key = "verbose-ordered",
-		.command = control_verbose_ordered,
+		.head.key = "verbose-juggler",
+		.command = control_verbose_juggler,
 		.argc = 1,
 		.usage = " NAME"
 	}, {

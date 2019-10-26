@@ -69,6 +69,14 @@ void *dllarr_prepend(dllarr_t*, void*);
 
 void *dllarr_remove(dllarr_t*, void*);
 
+/* pop/shift interface */
+
+/* remove and return first element or NULL if empty */
+void *dllarr_shift(dllarr_t*);
+
+/* remove and return last element or NULL if empty */
+void *dllarr_pop(dllarr_t*);
+
 /* array interface */
 
 void *dllarr_nth(dllarr_t*, int);

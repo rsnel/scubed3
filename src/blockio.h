@@ -27,12 +27,17 @@
 #include "random.h"
 #include "pthd.h"
 
+typedef struct blockio_info_s blockio_info_t;
+
+#include "juggler.h"
+
+
 typedef struct blockio_s blockio_t;
 
-typedef struct blockio_info_s {
+struct blockio_info_s {
 	struct blockio_info_s *next; // for use with random juggler
 
-	dllarr_elt_t ord; // for ordered
+	//dllarr_elt_t ord; // for ordered
 	dllarr_elt_t ufs; // for used, free and selected lists
 	uint64_t seqno, next_seqno;
 	char data_hash[32];
@@ -46,7 +51,7 @@ typedef struct blockio_info_s {
 
 	/* the scubed device associated with this block, if any */
 	struct blockio_dev_s *dev;
-} blockio_info_t;
+};
 
 typedef struct blockio_dev_s {
 	char *name;
@@ -59,12 +64,14 @@ typedef struct blockio_dev_s {
 	uint32_t tail_macroblock; /* tbe block that must be cleaned out */
 	uint32_t no_macroblocks;
 	uint32_t reserved_macroblocks;
-	uint64_t next_seqno;
-	blockio_info_t *bi;
+	/*uint64_t next_seqno;*/
+
+	blockio_info_t *bi; /* current block */
 	int valid; /* what is this ?!?! */
 
-	dllarr_t used_blocks, free_blocks, selected_blocks;
-	dllarr_t ordered;
+	juggler_t j;
+	dllarr_t used_blocks, free_blocks; //, selected_blocks;
+	//dllarr_t ordered;
 
 	/* here we build the macroblock
 	 * to be written out to disk */
@@ -157,6 +164,6 @@ int blockio_dev_allocate_macroblocks(blockio_dev_t*, uint32_t);
 
 int blockio_dev_free_macroblocks(blockio_dev_t*, uint32_t);
 
-void blockio_verbose_ordered(blockio_dev_t*);
+//void blockio_verbose_ordered(blockio_dev_t*);
 
 #endif /* INCLUDE_SCUBED3_BLOCKIO_H */

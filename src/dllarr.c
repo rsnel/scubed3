@@ -213,6 +213,18 @@ void *dllarr_remove(dllarr_t *a, void *at) {
 	return at;
 }
 
+void *dllarr_shift(dllarr_t *a) {
+	void *elt = dllarr_first(a);
+	if (!elt) return NULL;
+	else return dllarr_remove(a, elt);
+}
+
+void *dllarr_pop(dllarr_t *a) {
+	void *elt = dllarr_last(a);
+	if (!elt) return NULL;
+	else return dllarr_remove(a, elt);
+}
+
 void *dllarr_nth(dllarr_t *a, int n) {
 	dllarr_assert(a);
 	assert(n >= 0 && n < a->tail.index);

@@ -34,7 +34,7 @@ int bitmap_getbit(bitmap_t*, uint32_t);
 
 uint32_t bitmap_getbits(bitmap_t*, uint32_t, uint8_t);
 
-uint32_t bitmap_size(uint32_t);
+uint32_t bitmap_size(bitmap_t*);
 
 void bitmap_setbit(bitmap_t*, uint32_t);
 

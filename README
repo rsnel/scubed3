@@ -173,9 +173,16 @@ Layout of macroblock:
 ......
 0x0004FC uint32_t idx0xff
 0x000500 bitmap: each bit represents a macroblock of the base device
-		 0 this block is not unwritten or not allocated to us
-		 1 this block is unwritten and allocated to us
-0x003FFF last 8 bits of bitmap
+		 0 this block may be ours: if so, it has our signature
+		   on disk (otherwise we wouldn't be able to know that
+		   it is ours) and we don't care about the contents of
+		   this block
+		 1 this block is ours: it may not have our signature yet
+		   because it has never been written
+		(notice that it only makes sense not to care about the contents
+ 		of a block if there are no older revisions of that data available
+		that we DO care about...)
+0x003FFC last 32 bits of bitmap (the bitmap is stored in units of 32 bits)
 0x004000 mesoblock1
 0x008000 mesoblock2
 0x00C000 mesoblock3

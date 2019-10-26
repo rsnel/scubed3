@@ -55,8 +55,6 @@ void obsolete_mesoblk(scubed3_t *l, blockio_info_t *bi, uint32_t no) {
 
 	/* if the whole block is obsolete, remove it from the active list */
 	if (!bi->no_nonobsolete) {
-		blockio_dev_change_macroblock_status(l->dev,
-				bi - l->dev->b->blockio_infos, HAS_DATA, FREE);
 		dllarr_move(&l->dev->free_blocks, &l->dev->used_blocks, bi);
 		bi->no_indices = 0;
 		bi->no_indices_gc = 0;
@@ -89,7 +87,7 @@ void copy_old_block_to_current(scubed3_t *l) {
 	int k;
 	uint32_t index;
 	if (blockio_dev_get_macroblock_status(l->dev,
-				l->dev->tail_macroblock) == HAS_DATA) {
+				l->dev->tail_macroblock) == ALLOCATED) {
 		blockio_info_t *bi =
 			&l->dev->b->blockio_infos[l->dev->tail_macroblock];
 

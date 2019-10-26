@@ -42,7 +42,7 @@
 #define CONV_SIZE 512
 
 #define DEFAULT_KDF_HASH		"SHA256"
-#define DEFAULT_KDF_ITERATIONS		16*1024*1024
+#define DEFAULT_KDF_ITERATIONS		1
 #define DEFAULT_KDF_FUNCTION		"PBKDF2"
 #define DEFAULT_CIPHER_STRING		"CBC_ESSIV(AES256)"
 #define KEY_LENGTH	32
@@ -655,12 +655,16 @@ int main(int argc, char **argv) {
 	int i, connections = 0;
 	char *line = NULL;
 	struct sockaddr_un remote;
-	assert(!strcmp("SHA256", DEFAULT_KDF_HASH));
-	assert(!strcmp("PBKDF2", DEFAULT_KDF_FUNCTION));
-	assert(DEFAULT_KDF_ITERATIONS == 16*1024*1024);
-	assert(!strcmp("CBC_ESSIV(AES256)", DEFAULT_CIPHER_STRING));
 
 	verbose_init(argv[0]);
+
+	assert(!strcmp("SHA256", DEFAULT_KDF_HASH));
+	assert(!strcmp("PBKDF2", DEFAULT_KDF_FUNCTION));
+	if (DEFAULT_KDF_ITERATIONS < 16*1024*1024) {
+		WARNING("low amount of KDF iterations < 16777216, for testing purposes only");
+	} else assert(DEFAULT_KDF_ITERATIONS == 16*1024*1024);
+	assert(!strcmp("CBC_ESSIV(AES256)", DEFAULT_CIPHER_STRING));
+
 
 	/* lock me into memory; don't leak info to swap */
 	if (mlockall(MCL_CURRENT|MCL_FUTURE)<0)

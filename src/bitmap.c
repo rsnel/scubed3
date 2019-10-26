@@ -125,23 +125,23 @@ void bitmap_free(bitmap_t *b) {
 	free(b->bits);
 }
 
-uint32_t bitmap_size(uint32_t no_bits) {
-	return (2 + (no_bits+31)/32)*sizeof(uint32_t);
+uint32_t bitmap_size(bitmap_t *b) {
+	return ((b->no_bits+31)/32)*sizeof(uint32_t);
 }
 
 void bitmap_read(bitmap_t *b, const uint32_t *in) {
 	int i;
 	assert(b && in);
-	b->no_set = binio_read_uint32_be(in++);
+	b->no_set = 0;
 	for (i = 0; i < (b->no_bits+31)/32; i++) {
 		b->bits[i] = binio_read_uint32_be(in++);
+		b->no_set += __builtin_popcount(b->bits[i]);
 	}
 }
 
 void bitmap_write(uint32_t *out, bitmap_t *b) {
 	int i;
 	assert(b && out);
-	binio_write_uint32_be(out++, b->no_set);
 	for (i = 0; i < (b->no_bits+31)/32; i++) {
 		binio_write_uint32_be(out++, b->bits[i]);
 	}

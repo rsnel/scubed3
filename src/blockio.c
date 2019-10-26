@@ -119,8 +119,8 @@ void blockio_init_file(blockio_t *b, const char *path, uint8_t macroblock_log,
         VERBOSE("required minimumsize of indexblock excluding macroblock index "
 			"is %d bytes", b->bitmap_offset);
 
-        size_t max_macroblocks = ((1L<<mesoblk_log) - b->bitmap_offset)<<3; /* *8 */
-        VERBOSE("maximum amount of macroblocks supported %ld", max_macroblocks);
+        b->max_macroblocks = ((1L<<mesoblk_log) - b->bitmap_offset)<<3; /* *8 */
+        VERBOSE("maximum amount of macroblocks supported %d", b->max_macroblocks);
 
 	b->open = (void* (*)(const void*))stream_open;
 	b->read = stream_read;
@@ -165,7 +165,7 @@ void blockio_init_file(blockio_t *b, const char *path, uint8_t macroblock_log,
 
 	/* check if the device or file is not too large */
 	tmp >>= b->macroblock_log;
-	if (tmp > max_macroblocks) FATAL("device is too large");
+	if (tmp > b->max_macroblocks) FATAL("device is too large");
 	b->no_macroblocks = tmp;
 
 	b->blockio_infos = ecalloc(sizeof(blockio_info_t), b->no_macroblocks);
@@ -209,19 +209,12 @@ void blockio_verbose_ordered(blockio_dev_t *dev) {
 	void *verbose_ding(blockio_info_t *bi) {
 		int id = bi - dev->b->blockio_infos;
 		char *state;
-		char buf[16];
 		switch (blockio_dev_get_macroblock_status(dev, id)) {
-			case HAS_DATA:
-				//state = "DATA";
-				snprintf(buf, 16, "DATA %d", bi->no_nonobsolete);
-				state = buf;
+			case ALLOCATED: 
+				state = "ALLOCATED";
 				break;
-			case FREE:
-				if (bi->seqno) state = "FREE";
-				else state = "UNUSED";
-				break;
-			case SELECTFROM:
-				state = "SELECT";
+			case NOT_ALLOCATED:
+				state = "NOT_ALLOCATED";
 				break;
 			default:
 				assert(0);
@@ -484,18 +477,20 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 
 	assert(b && c);
 	assert(b->mesoblk_log < b->macroblock_log);
-	bitmap_init(&dev->status, b->no_macroblocks);
+	bitmap_init(&dev->status, b->max_macroblocks);
 	dllarr_init(&dev->used_blocks, offsetof(blockio_info_t, ufs));
 	dllarr_init(&dev->free_blocks, offsetof(blockio_info_t, ufs));
 	dllarr_init(&dev->selected_blocks, offsetof(blockio_info_t, ufs));
 	dllarr_init(&dev->ordered, offsetof(blockio_info_t, ord));
 
+	dev->b = b;
+	dev->c = c;
+	assert(bitmap_size(&dev->status) + 260 + (dev->b->mmpm<<2) == 1<<dev->b->mesoblk_log);
+
 	assert(b->open);
 	dev->io = (b->open)(b->open_priv);
 
 	dev->tmp_macroblock = ecalloc(1, 1<<b->macroblock_log);
-	dev->b = b;
-	dev->c = c;
 
 	/* read macroblock headers */
 	for (i = 0; i < b->no_macroblocks; i++)
@@ -799,14 +794,16 @@ void blockio_dev_write_current_macroblock(blockio_dev_t *dev) {
 
 	/* the current block is not on any list, put it on the correct one */
 	if (dev->bi->no_indices) {
-		blockio_dev_change_macroblock_status(dev,
-				id, FREE, HAS_DATA);
+		//blockio_dev_change_macroblock_status(dev,
+		//		id, FREE, HAS_DATA);
 		dllarr_append(&dev->used_blocks, dev->bi);
 		dev->wasted_gc += dev->bi->no_indices_gc;
 		dev->pre_emptive_gc += dev->bi->no_indices_preempt;
 		dev->useful += (dev->bi->no_indices - dev->bi->no_indices_gc);
 		dev->wasted_empty += dev->b->mmpm - dev->bi->no_indices;
 	} else {
+		FATAL("what to do if no indices?");
+#if 0
 		dev->wasted_keep += dev->b->mmpm;
 		if (blockio_dev_get_macroblock_status(dev, id) != SELECTFROM) {
 			dllarr_append(&dev->free_blocks, dev->bi);
@@ -831,6 +828,7 @@ void blockio_dev_write_current_macroblock(blockio_dev_t *dev) {
 				return;
 			}
 		}
+#endif
 	}
 
 	DEBUG("write block %u (seqno=%lu, next_seqno=%lu)", id,
@@ -896,11 +894,8 @@ static void blockio_dev_set_macroblock_status(blockio_dev_t *dev, uint32_t raw_n
 	assert(dev);
 	assert(raw_no < dev->b->no_macroblocks);
 
-	if (status&1) bitmap_setbit_safe(&dev->status, raw_no<<1);
-	else bitmap_clearbit_safe(&dev->status, raw_no<<1);
-
-	if (status&2) bitmap_setbit_safe(&dev->status, (raw_no<<1) + 1);
-	else bitmap_clearbit_safe(&dev->status, (raw_no<<1) + 1);
+	if (status&1) bitmap_setbit_safe(&dev->status, raw_no);
+	else bitmap_clearbit_safe(&dev->status, raw_no);
 }
 
 blockio_dev_macroblock_status_t blockio_dev_get_macroblock_status(
@@ -951,6 +946,7 @@ int blockio_dev_free_macroblocks(blockio_dev_t *dev, uint32_t size) {
 int blockio_dev_allocate_macroblocks(blockio_dev_t *dev, uint32_t size) {
 	VERBOSE("we got a request to add %d macroblocks to %s", size, dev->name);
 	VERBOSE("there are %d unallocated macroblocks", dllarr_count(&dev->b->unallocated));
+	VERBOSE("random=%d", random_custom(&dev->b->r, dllarr_count(&dev->b->unallocated)));
 	FATAL("function not implemented");
 #if 0
 	// 16 bit arithmetic

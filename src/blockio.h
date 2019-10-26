@@ -30,8 +30,6 @@
 typedef struct blockio_s blockio_t;
 
 typedef struct blockio_info_s {
-	/* linked list for:
-	 * - usage by the juggler (block selection within a device) */
 	struct blockio_info_s *next; // for use with random juggler
 
 	dllarr_elt_t ord; // for ordered
@@ -54,7 +52,7 @@ typedef struct blockio_dev_s {
 	char *name;
 	blockio_t *b;
 	cipher_t *c;
-	int updated;
+	int updated; /* do we need to write this block? */
 	bitmap_t status; // record status of all macroblocks with
 			 // respect to this device
 
@@ -63,7 +61,7 @@ typedef struct blockio_dev_s {
 	uint32_t reserved_macroblocks;
 	uint64_t next_seqno;
 	blockio_info_t *bi;
-	int valid;
+	int valid; /* what is this ?!?! */
 
 	dllarr_t used_blocks, free_blocks, selected_blocks;
 	dllarr_t ordered;
@@ -91,6 +89,7 @@ struct blockio_s {
 	uint32_t macroblock_size;
 	uint8_t macroblock_log;
 	uint32_t no_macroblocks; /* amount of raw macroblocks */
+	uint32_t max_macroblocks;
 	uint32_t bitmap_offset;
 	
 	dllarr_t unallocated;
@@ -140,7 +139,7 @@ void blockio_dev_write_current_and_select_next_valid_macroblock(
 		blockio_dev_t*);
 
 typedef enum blockio_dev_macroblock_status_e {
-		NOT_ALLOCATED, HAS_DATA, FREE, SELECTFROM }
+		NOT_ALLOCATED, ALLOCATED }
 	blockio_dev_macroblock_status_t;
 
 //void blockio_dev_set_macroblock_status(blockio_dev_t*,

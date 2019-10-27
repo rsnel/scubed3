@@ -338,10 +338,10 @@ static int control_open_create_common(int s, control_thread_priv_t *priv, char *
 		blockio_dev_init(&entry->d, priv->b, &entry->c, argv[0]);
 
 		/* if we used 'create' we should not have found any blocks */
-		if (add && entry->d.no_macroblocks)
+		if (add && entry->d.no_macroblocks) {
 			ecch_throw(ECCH_DEFAULT, "unable to create device: "
 					"it already exists, use `open' instead");
-
+		}
 
 		/* if we used 'open' we expect to find at least one block */
 		if (!add & !entry->d.no_macroblocks)
@@ -349,7 +349,11 @@ static int control_open_create_common(int s, control_thread_priv_t *priv, char *
 
 		entry->size = 0;
 		if (entry->d.no_macroblocks > entry->d.reserved_macroblocks) entry->size = ((entry->d.no_macroblocks-entry->d.reserved_macroblocks)<<entry->d.b->mesoblk_log)*entry->d.b->mmpm;
+
 		scubed3_init(&entry->l, &entry->d);
+
+		assert(!entry->d.bi);
+		blockio_dev_select_next_macroblock(&entry->d);
 
 		// really only used for test
 		//ecch_throw(ECCH_DEFAULT, "break off, we're testing");
@@ -565,8 +569,6 @@ static int control_resize(int s, control_thread_priv_t *priv, char *argv[]) {
 
 	dev->reserved_macroblocks = reserved;
 
-	if (!dev->bi) blockio_dev_select_next_macroblock(dev);
-
 	dev->updated = 1;
 
 	if (entry->d.no_macroblocks > entry->d.reserved_macroblocks)
@@ -576,6 +578,8 @@ static int control_resize(int s, control_thread_priv_t *priv, char *argv[]) {
 	scubed3_reinit(&entry->l);
 
 	hashtbl_unlock_element_byptr(entry);
+
+	if (!dev->bi) blockio_dev_select_next_macroblock(dev);
 
 	return control_write_silent_success(s);
 }

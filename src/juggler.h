@@ -35,6 +35,8 @@ typedef struct juggler_s {
 	random_t *r;
 } juggler_t;
 
+uint32_t juggler_count(juggler_t*j);
+
 void juggler_init(juggler_t*, random_t *r);
 
 void juggler_add_macroblock(juggler_t*, blockio_info_t*);

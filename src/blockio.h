@@ -53,6 +53,7 @@ typedef struct blockio_dev_s {
 	char *name;
 	blockio_t *b;
 	cipher_t *c;
+	dllarr_t replay;
 	int updated; /* do we need to write this block? */
 	bitmap_t status; // record status of all macroblocks with
 			 // respect to this device
@@ -109,13 +110,13 @@ uint32_t blockio_get_macroblock_index(blockio_info_t*);
 
 void blockio_init_file(blockio_t*, const char*, uint8_t, uint8_t);
 
-void blockio_dev_init(blockio_dev_t*, blockio_t*, cipher_t*, const char*);
+void blockio_dev_init(blockio_dev_t*, blockio_t*, cipher_t*,
+		const char*);
 
 void blockio_dev_free(blockio_dev_t*);
 
-void blockio_dev_scan_header(dllarr_t*, blockio_dev_t*, blockio_info_t*);
-
-void blockio_dev_read_header(blockio_info_t*);
+void blockio_dev_scan_header(dllarr_t*, blockio_dev_t*,
+		blockio_info_t*, uint64_t*);
 
 blockio_info_t *blockio_dev_get_new_macroblock(blockio_dev_t*);
 
@@ -142,6 +143,9 @@ typedef enum blockio_dev_macroblock_status_e {
 void blockio_dev_change_macroblock_status(blockio_info_t*,
 		blockio_dev_macroblock_status_t);
 
+blockio_dev_macroblock_status_t blockio_dev_get_macroblock_status_bynum(
+		blockio_dev_t*, uint32_t);
+
 blockio_dev_macroblock_status_t blockio_dev_get_macroblock_status(
 		blockio_info_t*);
 
@@ -149,5 +153,7 @@ blockio_dev_macroblock_status_t blockio_dev_get_macroblock_status(
 int blockio_dev_allocate_macroblocks(blockio_dev_t*, uint32_t);
 
 int blockio_dev_free_macroblocks(blockio_dev_t*, uint32_t);
+
+void blockio_prepare_block(blockio_info_t*);
 
 #endif /* INCLUDE_SCUBED3_BLOCKIO_H */

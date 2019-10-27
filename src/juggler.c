@@ -36,6 +36,10 @@ void juggler_init(juggler_t *j, random_t *r) {
 	j->seqno = 0;
 }
 
+uint32_t juggler_count(juggler_t *j) {
+	return j->no_scheduled + j->no_unscheduled;
+}
+
 void juggler_notify_seqno(juggler_t *j, uint64_t seqno) {
 	if (seqno > j->seqno) j->seqno = seqno;
 }
@@ -43,12 +47,12 @@ void juggler_notify_seqno(juggler_t *j, uint64_t seqno) {
 void juggler_add_macroblock(juggler_t *j, blockio_info_t *b) {
 	assert(j && b);
 	assert(!b->next);
-	if (b->seqno == b->next_seqno) { // empty block
+	if (b->seqno == 0 && b->next_seqno == 0) { // new block
 		assert(!b->next_seqno);
 		j->no_unscheduled++;
 		b->next = j->unscheduled;
 		j->unscheduled = b;
-	} else if (b->seqno < b->next_seqno) { // block that is in use
+	} else  if (b->seqno < b->next_seqno) { // block that is in use
 		blockio_info_t **iterate = &j->scheduled;
 		assert(b->next_seqno > b->seqno);
 		while (*iterate && (*iterate)->next_seqno < b->next_seqno)
@@ -119,7 +123,7 @@ blockio_info_t *juggler_get_devblock(juggler_t *j, int discard) {
 		//VERBOSE("no scheduled block to output, select from unscheduled blocks");
 		assert(j->unscheduled && j->no_unscheduled != 0);
 		uint32_t index = random_custom(j->r, j->no_unscheduled);
-		//VERBOSE("requested index is %u", index);
+		VERBOSE("requested index is %u", index);
 		iterate = &j->unscheduled;
 		while (index--) iterate = &((*iterate)->next);
 		next = *iterate;

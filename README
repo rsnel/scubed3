@@ -51,7 +51,7 @@ Paranoia levels
 
 When a new macroblock needs to be selected:
 
-Level 0: not paranoid
+Level 0: not paranoid (NOT IMPLEMENTED YET)
 
 it is selected from all allocated blocks based on it's emptyness, the most
 empty block gets selected.
@@ -61,7 +61,7 @@ Level 1: moderately paranoid
 it is randomly selected from all allocated blocks. This hurts write
 performance.
 
-Level 2: just paranoid
+Level 2: just paranoid (NOT IMPLEMENTED YET)
 
 a random block of the device is selected. If it happens to be allocated to the
 current device, it is used. If it happens to be allocated to another device, it
@@ -72,9 +72,9 @@ this kind of media keeps an internal record about the order in whichs blocks
 are written to it) It is only safe if all scubed3 devices are known to and
 (if active) managed by the scubed3 deamon managing the current device.
 
-[implemented as: select device (weighted by size), and write a random block]
+[can be implemented as: select device (weighted by size), and write a random block]
 
-Level 3: extremely paranoid
+Level 3: extremely paranoid (NOT IMPLEMENTED YET)
 
 while active, the daemon writes blocks to random locations at regular intervals
 to hide any real activity, this severely hurts performance. Considerations
@@ -87,7 +87,8 @@ How to start
 You need to provide a set of macroblocks to scubed3, to which it has read/write
 access. Normally this is either a file or a block device, but it may be
 anything. (you would, however, need to write a custom blockio_init_* function
-and provide read, write and close methods to it)
+and provide read, write and close methods to it if it is not a file or a block
+device)
 
 
 Control protocol
@@ -99,6 +100,8 @@ with a linefeed '\n'.
 
 A response starts with "OK\n", or "ERR\n". One or more lines follow.
 The last line must be ".\n". This terminates the message.
+
+The command scubed3ctl uses this interface to communicate with scubed3.
 
 Commands:
 
@@ -113,7 +116,7 @@ opens a scubed partition
 * NAME is the name, like root or swap, whatever, the name has no real meaning,
 you can open any partition under any name
 
-* MODE is the ciphermode, eg CBC_LARGE(AES), ABL4(SERPENT256).
+* MODE is the ciphermode, eg CBC_LARGE(AES)
 
 * KEY is the cipher key bas16 encoded (hex).
 
@@ -129,18 +132,6 @@ resizes a scubed partition
 Example calculation if indexblock size
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Suppose the device consists of 10 macroblocks. To not to overwrite the current
-rivision while writing the new rivision when, in addition, writing random
-blocks. A certain amount of wiggleroom has to be taken into account. Calculations
-in 'testing/' point to the the following conjecture:
-
-	If a device consists of n macroblocks, the maximum number of usable
-	macroblocks is about 1/4th of n. To be safe, the system default is
-	floor(1/4n).
-
-To be efficient, some more space needs to be wasted, this is specified in
-reserved_blocks.
-
 For this example we assume the following. Macroblock size 4MB (m). Mesoblock
 size 16kB (s). So, there are 256 mesoblocks per macroblock. Mesoblock
 0 is the indexblock, the other ones are data blocks.
@@ -151,10 +142,11 @@ support (the size of a backing device can change, so scubed3 should be able to
 deal with it, up to a maximum size).
 
 The useful size of the device is
-	(1<<(macroblock_log - mesoblock_log) - 1)(simultaneous_blocks - reserved_blocks)
+	(1<<(macroblock_log - mesoblock_log) - 1)(no_macroblocks - reserved_blocks)
 
-Note that the usable size is limited by 2^32*(1<<mesoblock_log), because the device is partitioned
-in mesoblocks, and we have 32 bits available to index the mesoblocks.
+Note that the usable size is limited by 2^32*(1<<mesoblock_log) - 1, because the
+device is partitioned in mesoblocks, and we have 32 bits available to index
+the mesoblocks.
 
 Layout of macroblock:
 
@@ -173,12 +165,15 @@ Layout of macroblock:
 ......
 0x0004FC uint32_t idx0xff
 0x000500 bitmap: each bit represents a macroblock of the base device
-		 0 this block may be ours: if so, it has our signature
+		 0 FREE
+		   this block may be ours: if so, it has our signature
 		   on disk (otherwise we wouldn't be able to know that
 		   it is ours) and we don't care about the contents of
 		   this block
-		 1 this block is ours: it may not have our signature yet
-		   because it has never been written
+		 1 USED
+		   this block is ours: it may not have our signature yet
+		   because it has never been written and we care about
+		   the data
 		(notice that it only makes sense not to care about the contents
  		of a block if there are no older revisions of that data available
 		that we DO care about...)

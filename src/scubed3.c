@@ -287,9 +287,16 @@ void scubed3_init(scubed3_t *l, blockio_dev_t *dev) {
 
 	if (!dev->no_macroblocks) return;
 
-	FATAL("replay not implemented");
-	//debug_stuff(l);
-	//dllarr_iterate(&dev->used_blocks, (dllarr_iterator_t)replay, l);
+	VERBOSE("%d block(s) to replay", dllarr_count(&dev->replay));
+
+	dllarr_iterate(&dev->replay, (dllarr_iterator_t)replay, l);
+
+	blockio_info_t *bi;
+
+	while ((bi = dllarr_last(&dev->replay))) {
+		dllarr_remove(&dev->replay, bi);
+		juggler_add_macroblock(&dev->j, bi);
+	}
 }
 
 void blockio_dev_fake_mesoblk_part(blockio_dev_t *dev, void *addr,

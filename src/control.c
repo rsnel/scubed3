@@ -353,7 +353,7 @@ static int control_open_create_common(int s, control_thread_priv_t *priv, char *
 		scubed3_init(&entry->l, &entry->d);
 
 		assert(!entry->d.bi);
-		blockio_dev_select_next_macroblock(&entry->d);
+		if (entry->size > 0) blockio_dev_select_next_macroblock(&entry->d);
 
 		// really only used for test
 		//ecch_throw(ECCH_DEFAULT, "break off, we're testing");

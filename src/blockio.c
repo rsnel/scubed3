@@ -225,7 +225,6 @@ void blockio_dev_free(blockio_dev_t *dev) {
 		dllarr_append(&dev->b->unallocated, bi);
 	}
 
-
 	pthd_mutex_unlock(&dev->b->unallocated_mutex);
 
 	dllarr_free(&dev->replay);
@@ -368,8 +367,8 @@ void blockio_dev_scan_header(dllarr_t *replay, blockio_dev_t *dev,
 
 	/* check magic */
 	if (memcmp(magic, MAGIC64, sizeof(magic))) {
-		DEBUG("magic \"%.*s\" not found in macroblock %u",
-				(int)sizeof(magic), magic, no);
+//		DEBUG("magic \"%.*s\" not found in macroblock %u",
+//				(int)sizeof(magic), magic, no);
 		return;
 	} else DEBUG("magic \"%.*s\" found in macroblock %u",
 			(int)sizeof(magic), magic, no);
@@ -398,7 +397,7 @@ void blockio_dev_scan_header(dllarr_t *replay, blockio_dev_t *dev,
 	bi->no_nonobsolete = bi->no_indices =
 		binio_read_uint32_be(NO_INDICES_UINT32);
 	bi->indices = ecalloc(dev->b->mmpm, sizeof(uint32_t));
-	VERBOSE("bi->no_indices = %d, bi->indices = %p", bi->no_indices, bi->indices);
+	//VERBOSE("bi->no_indices = %d, bi->indices = %p", bi->no_indices, bi->indices);
 	for (i = 1; i <= bi->no_indices; i++) {
 		VERBOSE("i=%d", i);
 		bi->indices[i-1] = binio_read_uint32_be(
@@ -424,12 +423,14 @@ void blockio_dev_scan_header(dllarr_t *replay, blockio_dev_t *dev,
 
 		bitmap_read(&dev->status, (uint32_t*)BITMAP);
 
+		memcpy(dev->seqnos_hash, SEQNOS_SHA256, 32);
+
 		dev->no_macroblocks = binio_read_uint32_be(
 				NO_MACROBLOCKS_UINT32);
 		dev->reserved_macroblocks = binio_read_uint32_be(
 				RESERVED_BLOCKS_UINT32);
 
-		VERBOSE("block %u is candidate for highest seqno", no);
+		//VERBOSE("block %u is candidate for highest seqno", no);
 	}
 
 	/* mark the block as ours */

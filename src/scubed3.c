@@ -57,8 +57,6 @@ void obsolete_mesoblk(scubed3_t *l, blockio_info_t *bi, uint32_t no) {
 	if (!bi->no_nonobsolete) {
 		WARNING("move from active list is not implemented");
 		bi->no_indices = 0;
-		//bi->no_indices_gc = 0;
-		//bi->no_indices_preempt = 0;
 	}
 }
 
@@ -162,9 +160,8 @@ void select_new_macroblock(scubed3_t *l) {
 	do {
 		blockio_dev_write_current_and_select_next_macroblock(l->dev);
 		copy_old_block_to_current(l);
-		//l->dev->bi->no_indices_gc = l->dev->bi->no_indices;
 		DEBUG("new block %lu (seqno=%lu) has %u mesoblocks due "
-				"to GC of block %uFIXME",
+				"to GC of block %u",
 				id(l->dev->bi), l->dev->bi->seqno,
 				l->dev->bi->no_indices,
 				blockio_get_macroblock_index(
@@ -297,6 +294,11 @@ void scubed3_init(scubed3_t *l, blockio_dev_t *dev) {
 		dllarr_remove(&dev->replay, bi);
 		juggler_add_macroblock(&dev->j, bi);
 	}
+	
+	char hash[32];
+	juggler_hash_scheduled_seqnos(&dev->j, hash);
+	if (memcmp(hash, dev->seqnos_hash, 32)) 
+		WARNING("hash seqno's is wrong, at least one block seems to be missing");
 }
 
 void blockio_dev_fake_mesoblk_part(blockio_dev_t *dev, void *addr,

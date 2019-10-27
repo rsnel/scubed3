@@ -42,7 +42,7 @@
 #define CONV_SIZE 512
 
 #define DEFAULT_KDF_HASH		"SHA256"
-#define DEFAULT_KDF_ITERATIONS		2
+#define DEFAULT_KDF_ITERATIONS		16777216
 #define DEFAULT_KDF_FUNCTION		"PBKDF2"
 #define DEFAULT_CIPHER_STRING		"CBC_ESSIV(AES256)"
 #define KEY_LENGTH	32
@@ -120,19 +120,6 @@ int vwrite_line(int s, const char *format, va_list ap) {
 	free(string);
 	return 0;
 }
-
-#if 0
-int write_line(int s, const char *format, ...) {
-	int ret;
-	va_list ap;
-
-	va_start(ap, format);
-	ret = vwrite_line(s, format, ap);
-	va_end(ap);
-
-	return ret;
-}
-#endif
 
 int do_server_command(int s, int echo, char *format, ...) {
 	int ret = 0, buf_len = 0, start = 0, i, done = 0;

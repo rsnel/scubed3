@@ -53,6 +53,7 @@ typedef struct blockio_dev_s {
 	char *name;
 	blockio_t *b;
 	cipher_t *c;
+	char seqnos_hash[32];
 	dllarr_t replay;
 	int updated; /* do we need to write this block? */
 	bitmap_t status; // record status of all macroblocks with

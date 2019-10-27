@@ -20,7 +20,6 @@
 
 #include <stdint.h>
 
-//#include "scubed3.h"
 #include "dllarr.h"
 #include "cipher.h"
 #include "bitmap.h"
@@ -37,16 +36,13 @@ typedef struct blockio_s blockio_t;
 struct blockio_info_s {
 	struct blockio_info_s *next; // for use with random juggler
 
-	//dllarr_elt_t ord; // for ordered
-	dllarr_elt_t ufs; // for used, free and selected lists
+	dllarr_elt_t ur; // for unallocated and replay (possibly juggler?)
 	uint64_t seqno, next_seqno;
 	char data_hash[32];
-	char seqnos_hash[32];
+	//char seqnos_hash[32];
 
 	uint32_t no_indices;
-	uint32_t no_indices_gc;
 	uint32_t no_nonobsolete;
-	uint32_t no_indices_preempt;
 	uint32_t *indices;
 
 	/* the scubed device associated with this block, if any */
@@ -61,16 +57,13 @@ typedef struct blockio_dev_s {
 	bitmap_t status; // record status of all macroblocks with
 			 // respect to this device
 
-	uint32_t tail_macroblock; /* tbe block that must be cleaned out */
 	uint32_t no_macroblocks;
 	uint32_t reserved_macroblocks;
-	/*uint64_t next_seqno;*/
 
 	blockio_info_t *bi; /* current block */
+	blockio_info_t *tail_macroblock; /* tbe block that must be cleaned out */
 
 	juggler_t j;
-	//dllarr_t used_blocks, free_blocks; //, selected_blocks;
-	//dllarr_t ordered;
 
 	/* here we build the macroblock
 	 * to be written out to disk */
@@ -82,14 +75,6 @@ typedef struct blockio_dev_s {
 	/* stats */
 
 	uint32_t writes; // no macroblocks
-
-	/* stats in mesoblocks */
-
-	uint64_t useful;
-	uint64_t wasted_keep;
-	uint64_t wasted_gc;
-	uint64_t wasted_empty;
-	uint64_t pre_emptive_gc;
 
 	void *io;
 } blockio_dev_t;
@@ -120,19 +105,19 @@ struct blockio_s {
 	void (*close)(void*);
 };
 
+uint32_t blockio_get_macroblock_index(blockio_info_t*);
+
 void blockio_init_file(blockio_t*, const char*, uint8_t, uint8_t);
 
 void blockio_dev_init(blockio_dev_t*, blockio_t*, cipher_t*, const char*);
 
 void blockio_dev_free(blockio_dev_t*);
 
-void blockio_dev_read_header(blockio_dev_t*, uint32_t, uint64_t*);
+void blockio_dev_scan_header(dllarr_t*, blockio_dev_t*, blockio_info_t*);
 
-void blockio_dev_scan_header(blockio_dev_t*, uint32_t, uint64_t*);
+void blockio_dev_read_header(blockio_info_t*);
 
 blockio_info_t *blockio_dev_get_new_macroblock(blockio_dev_t*);
-
-blockio_info_t *blockio_dev_gc_which_macroblock(blockio_dev_t*, uint32_t);
 
 void blockio_dev_read_mesoblk(blockio_dev_t*, void*, uint32_t, uint32_t);
 
@@ -154,21 +139,15 @@ typedef enum blockio_dev_macroblock_status_e {
 		FREE, USED }
 	blockio_dev_macroblock_status_t;
 
-//void blockio_dev_set_macroblock_status(blockio_dev_t*,
-//		uint32_t, blockio_dev_macroblock_status_t);
-
-void blockio_dev_change_macroblock_status(blockio_dev_t*,
-		uint32_t, blockio_dev_macroblock_status_t,
+void blockio_dev_change_macroblock_status(blockio_info_t*,
 		blockio_dev_macroblock_status_t);
 
 blockio_dev_macroblock_status_t blockio_dev_get_macroblock_status(
-		blockio_dev_t*, uint32_t);
+		blockio_info_t*);
 
-// returns errors -1: not enough blocks available, -2 out of memory
+// can return error -1: not enough blocks available
 int blockio_dev_allocate_macroblocks(blockio_dev_t*, uint32_t);
 
 int blockio_dev_free_macroblocks(blockio_dev_t*, uint32_t);
-
-//void blockio_verbose_ordered(blockio_dev_t*);
 
 #endif /* INCLUDE_SCUBED3_BLOCKIO_H */

@@ -56,10 +56,9 @@ void obsolete_mesoblk(scubed3_t *l, blockio_info_t *bi, uint32_t no) {
 	/* if the whole block is obsolete, remove it from the active list */
 	if (!bi->no_nonobsolete) {
 		WARNING("move from active list is not implemented");
-		//dllarr_move(&l->dev->free_blocks, &l->dev->used_blocks, bi);
 		bi->no_indices = 0;
-		bi->no_indices_gc = 0;
-		bi->no_indices_preempt = 0;
+		//bi->no_indices_gc = 0;
+		//bi->no_indices_preempt = 0;
 	}
 }
 
@@ -87,10 +86,10 @@ static inline char *mesoblk(scubed3_t *l, uint16_t no) {
 void copy_old_block_to_current(scubed3_t *l) {
 	int k;
 	uint32_t index;
-	if (blockio_dev_get_macroblock_status(l->dev,
+	if (l->dev->tail_macroblock &&
+			blockio_dev_get_macroblock_status(
 				l->dev->tail_macroblock) == USED) {
-		blockio_info_t *bi =
-			&l->dev->b->blockio_infos[l->dev->tail_macroblock];
+		blockio_info_t *bi = l->dev->tail_macroblock;
 
 		for (k = 0; k < bi->no_indices; k++) {
 			if (bi->indices[k] >= l->no_block_indices) continue;
@@ -156,18 +155,20 @@ static void pre_emptive_gc(scubed3_t *l) {
 #endif
 }
 
+// FIXME the following two functions look almost the same...  
 void select_new_macroblock(scubed3_t *l) {
 	assert(l->output_initialized);
 	pre_emptive_gc(l);
 	do {
 		blockio_dev_write_current_and_select_next_macroblock(l->dev);
 		copy_old_block_to_current(l);
-		l->dev->bi->no_indices_gc = l->dev->bi->no_indices;
+		//l->dev->bi->no_indices_gc = l->dev->bi->no_indices;
 		DEBUG("new block %lu (seqno=%lu) has %u mesoblocks due "
 				"to GC of block %uFIXME",
 				id(l->dev->bi), l->dev->bi->seqno,
 				l->dev->bi->no_indices,
-				l->dev->tail_macroblock);
+				blockio_get_macroblock_index(
+					l->dev->tail_macroblock));
 	} while (l->dev->bi->no_indices == l->dev->b->mmpm);
 }
 
@@ -177,7 +178,9 @@ void initialize_output(scubed3_t *l) {
 		DEBUG("new block %lu (seqno=%lu) has %u mesoblocks due "
 				"to GC of block %u",
 				id(l->dev->bi), l->dev->bi->seqno,
-				l->dev->bi->no_indices, l->dev->tail_macroblock);
+				l->dev->bi->no_indices,
+				blockio_get_macroblock_index(
+					l->dev->tail_macroblock));
 
 		l->output_initialized = 1;
 	}

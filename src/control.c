@@ -465,7 +465,6 @@ static int control_info(int s, control_thread_priv_t *priv, char *argv[]) {
 	if (!entry) return control_write_complete(s, 1,
 			"partition \"%s\" not found", argv[0]);
 
-		// UNLOCK ELEMENTS NEEDED
 	if (control_write_status(s, 0)) return -1;
 
 	if (control_write_line(s, "no_macroblocks=%d\n",
@@ -474,34 +473,7 @@ static int control_info(int s, control_thread_priv_t *priv, char *argv[]) {
 	if (control_write_line(s, "reserved_macroblocks=%d\n",
 				entry->d.reserved_macroblocks)) return -1;
 
-	/*if (control_write_line(s, "used=%d\n",
-				dllarr_count(&entry->d.used_blocks)))
-		return -1; */
-
-	/*if (control_write_line(s, "selected=%d\n",
-				dllarr_count(&entry->d.selected_blocks)))
-		return -1;*/
-
-	/*if (control_write_line(s, "free=%d\n",
-				dllarr_count(&entry->d.free_blocks)))
-		return -1; */
-
 	if (control_write_line(s, "writes=%d\n",entry->d.writes))
-		return -1;
-
-	if (control_write_line(s, "useful=%d\n",entry->d.useful))
-		return -1;
-
-	if (control_write_line(s, "wasted_keep=%d\n",entry->d.wasted_keep))
-		return -1;
-
-	if (control_write_line(s, "wasted_gc=%d\n",entry->d.wasted_gc))
-		return -1;
-
-	if (control_write_line(s, "pre_emptive_gc=%d\n",entry->d.pre_emptive_gc))
-		return -1;
-
-	if (control_write_line(s, "wasted_empty=%d\n",entry->d.wasted_empty))
 		return -1;
 
 	if (entry->d.bi) {
@@ -816,19 +788,3 @@ void *control_thread(void *arg) {
 	pthread_exit(NULL);
 }
 
-
-#if 0
-		fprintf(stderr, "all macroblocks: ");
-		for (i = 0; i < dev->b->no_macroblocks; i++) {
-			fprintf(stderr, "%d",
-					bitmap_getbits(&dev->status, i<<1, 2));
-		}
-		fprintf(stderr, "\n");
-
-		fprintf(stderr, "our macroblocks: ");
-		for (i = 0; i < dev->no_macroblocks; i++) {
-			fprintf(stderr, "%d",
-					blockio_dev_get_macroblock_status_old(dev, i));
-		}
-		fprintf(stderr, "\n");
-#endif

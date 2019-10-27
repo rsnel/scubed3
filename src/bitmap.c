@@ -23,13 +23,12 @@
 #include "verbose.h"
 #include "bitmap.h"
 #include "binio.h"
+#include "util.h"
 
 void bitmap_init(bitmap_t *b, uint32_t no_bits) {
 	assert(b);
-	if (!(b->bits = calloc(((no_bits+31)/32), sizeof(uint32_t))))
-		FATAL("error allocating %ld bytes: %s",
-				sizeof(uint32_t)*((no_bits+31)/32),
-				strerror(errno));
+
+	b->bits = ecalloc(((no_bits+31)/32), sizeof(uint32_t));
 	b->no_bits = no_bits;
 	b->no_set = 0;
 }

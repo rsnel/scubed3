@@ -27,8 +27,8 @@ static void *null_init(const char *name, size_t no_blocks,
 	return (void*)no_blocks;
 }
 
-static void null_cipher(void *priv, uint8_t *out,
-		const uint8_t *in, const uint8_t *iv) {
+static void null_cipher(void *priv, char *out,
+		const char *in, const char *iv) {
 	if (in != out) memmove(out, in, (size_t)priv*16);
 }
 

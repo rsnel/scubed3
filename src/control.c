@@ -175,6 +175,7 @@ static int control_verbose_juggler(int s, control_thread_priv_t *priv, char *arg
 
 static int control_check_data_integrity(int s, control_thread_priv_t *priv,
 		char *argv[]) {
+#if 0
 	void *check_block(blockio_info_t *bi, blockio_dev_t *dev) {
 		if (blockio_check_data_hash(bi)) {
 			VERBOSE("%ld %ld OK", bi - dev->b->blockio_infos,
@@ -193,14 +194,14 @@ static int control_check_data_integrity(int s, control_thread_priv_t *priv,
 			&entry->d);
 
 	hashtbl_unlock_element_byptr(entry);
-
-	return control_write_complete(s, 0, "see debug output");
+#endif
+	return control_write_complete(s, 1, "not implemented");
 }
 
 static int control_static_info(int s, control_thread_priv_t *priv, char *argv[]) {
 	return control_write_complete(s, 0, "%s\n%d\n%s",
 			priv->mountpoint,
-			priv->b->no_macroblocks,
+			priv->b->total_macroblocks,
 			VERSION);
 }
 
@@ -240,7 +241,7 @@ typedef struct control_status_priv_s {
 static int control_status(int s, control_thread_priv_t *priv, char *argv[]) {
 	control_status_priv_t status_priv = {
 		.s = s,
-		.macroblocks_left = priv->b->no_macroblocks
+		.macroblocks_left = priv->b->total_macroblocks
 	};
         int rep(control_status_priv_t *priv, fuse_io_entry_t *entry) {
 		size_t size = ((entry->d.no_macroblocks - entry->d.reserved_macroblocks)*entry->d.b->mmpm);
@@ -262,7 +263,7 @@ static int control_status(int s, control_thread_priv_t *priv, char *argv[]) {
 	if (hashtbl_ts_traverse(priv->h, (int (*)(void*, hashtbl_elt_t*))rep, &status_priv)) return -1;
 
 	if (control_write_line(s, "%07u blocks unclaimed\n", status_priv.macroblocks_left)) return -1;
-	if (control_write_line(s, "%07u blocks total\n", priv->b->no_macroblocks)) return -1;
+	if (control_write_line(s, "%07u blocks total\n", priv->b->total_macroblocks)) return -1;
 
 	return control_write_terminate(s);
 }
@@ -323,7 +324,7 @@ static int control_open_create_common(int s, control_thread_priv_t *priv, char *
 
 		// encrypt zeroed buffer and hash the result
 		// the output of the hash is used to ID ciphermode + key
-		cipher_enc(&entry->c, (unsigned char*)buf, (unsigned char*)buf, 0, 0, 0);
+		cipher_enc(&entry->c, buf, buf, 0, 0, 0);
 		gcry_md_hash_buffer(GCRY_MD_SHA256, entry->unique_id.id, buf, sizeof(buf));
 		entry->unique_id.head.key = entry->unique_id.id;
 		entry->unique_id.name = allocname;
@@ -473,17 +474,17 @@ static int control_info(int s, control_thread_priv_t *priv, char *argv[]) {
 	if (control_write_line(s, "reserved_macroblocks=%d\n",
 				entry->d.reserved_macroblocks)) return -1;
 
-	if (control_write_line(s, "used=%d\n",
+	/*if (control_write_line(s, "used=%d\n",
 				dllarr_count(&entry->d.used_blocks)))
-		return -1;
+		return -1; */
 
 	/*if (control_write_line(s, "selected=%d\n",
 				dllarr_count(&entry->d.selected_blocks)))
 		return -1;*/
 
-	if (control_write_line(s, "free=%d\n",
+	/*if (control_write_line(s, "free=%d\n",
 				dllarr_count(&entry->d.free_blocks)))
-		return -1;
+		return -1; */
 
 	if (control_write_line(s, "writes=%d\n",entry->d.writes))
 		return -1;
@@ -567,11 +568,11 @@ static int control_resize(int s, control_thread_priv_t *priv, char *argv[]) {
 		return control_write_complete(s, 1, "shrinking device is not yet supported");
 	}
 
-	if (size > dev->b->no_macroblocks) {
+	if (size > dev->b->total_macroblocks) {
 		hashtbl_unlock_element_byptr(entry);
 		return control_write_complete(s, 1,
 				"not enough blocks available, base device "
-				"has only %d blocks", dev->b->no_macroblocks);
+				"has only %d blocks", dev->b->total_macroblocks);
 	}
 
 	size -= dev->no_macroblocks;
@@ -585,14 +586,14 @@ static int control_resize(int s, control_thread_priv_t *priv, char *argv[]) {
 
 	if ((err = blockio_dev_allocate_macroblocks(dev, size))) {
 		hashtbl_unlock_element_byptr(entry);
-		return control_write_complete(s, 1,
-				(err == -1)?"not enough unclaimed blocks "
-				"available for resize":"out of memory error");
+		assert(err == -1);
+		return control_write_complete(s, 1, "not enough unclaimed "
+				"blocks available for resize");
 	}
 
 	dev->reserved_macroblocks = reserved;
 
-	if (!dev->bi) blockio_dev_select_next_macroblock(dev, 1);
+	if (!dev->bi) blockio_dev_select_next_macroblock(dev);
 
 	dev->updated = 1;
 

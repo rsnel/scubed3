@@ -21,6 +21,7 @@
 #include <stdint.h>
 #include "blockio.h"
 #include "random.h"
+#include "dllarr.h"
 
 /* the juggler keeps only information
  * that can be inferred by looking at the
@@ -45,6 +46,10 @@ blockio_info_t *juggler_get_obsoleted(juggler_t*);
 blockio_info_t *juggler_get_devblock(juggler_t*, int);
 
 void juggler_verbose(juggler_t*, uint32_t (*getnum)(blockio_info_t*, void*), void*);
+
+char *juggler_hash_scheduled_seqnos(juggler_t*, char*);
+
+void juggler_free_and_empty_into(juggler_t*, void *(*append)(dllarr_t*, void*), dllarr_t*);
 
 void juggler_free(juggler_t*);
 

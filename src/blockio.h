@@ -67,15 +67,17 @@ typedef struct blockio_dev_s {
 	/*uint64_t next_seqno;*/
 
 	blockio_info_t *bi; /* current block */
-	int valid; /* what is this ?!?! */
 
 	juggler_t j;
-	dllarr_t used_blocks, free_blocks; //, selected_blocks;
+	//dllarr_t used_blocks, free_blocks; //, selected_blocks;
 	//dllarr_t ordered;
 
 	/* here we build the macroblock
 	 * to be written out to disk */
-	uint8_t *tmp_macroblock;
+	char *tmp_macroblock;
+
+	// use one random_t per dev, to avoid locking issues
+	random_t r;
 
 	/* stats */
 
@@ -95,18 +97,21 @@ typedef struct blockio_dev_s {
 struct blockio_s {
 	uint32_t macroblock_size;
 	uint8_t macroblock_log;
-	uint32_t no_macroblocks; /* amount of raw macroblocks */
+	uint32_t total_macroblocks; /* amount of raw macroblocks */
 	uint32_t max_macroblocks;
 	uint32_t bitmap_offset;
 	
+	/* the mutex protects the unallocated list
+	 * and the associated *bi->dev pointer in each
+	 * blockio_info_t, which is * NULL if and only if
+	 * the block is in unallocated */
+	pthread_mutex_t unallocated_mutex;
 	dllarr_t unallocated;
 
 	uint8_t mesoblk_log;
 	uint16_t mmpm; /* max mesoblocks per macroblock */
 
 	blockio_info_t *blockio_infos;
-
-	random_t r;
 
 	void *(*open)(const void*);
 	void *open_priv; /* filename, required for open */
@@ -140,13 +145,13 @@ void blockio_dev_write_current_macroblock(blockio_dev_t*);
 
 void blockio_free(blockio_t*);
 
-void blockio_dev_select_next_macroblock(blockio_dev_t*, int);
+void blockio_dev_select_next_macroblock(blockio_dev_t*);
 
-void blockio_dev_write_current_and_select_next_valid_macroblock(
+void blockio_dev_write_current_and_select_next_macroblock(
 		blockio_dev_t*);
 
 typedef enum blockio_dev_macroblock_status_e {
-		NOT_ALLOCATED, ALLOCATED }
+		FREE, USED }
 	blockio_dev_macroblock_status_t;
 
 //void blockio_dev_set_macroblock_status(blockio_dev_t*,

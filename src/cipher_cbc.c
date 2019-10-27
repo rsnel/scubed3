@@ -23,7 +23,7 @@
 #include "binio.h"
 #include "cipher.h"
 
-typedef unsigned char block_t[16];
+typedef char block_t[16];
 
 typedef struct cbc_plain_s {
 	gcry_cipher_hd_t hd;
@@ -79,8 +79,8 @@ static void *init_essiv(const char *name, size_t no_blocks,
 	return priv;
 }
 
-static void enc_plain(void *priv, uint8_t *out,
-		const uint8_t *in, const uint8_t *iv) {
+static void enc_plain(void *priv, char *out,
+		const char *in, const char *iv) {
 	cbc_plain_t *ctx = priv;
 	int i = ctx->no_blocks;
 
@@ -95,8 +95,8 @@ static void enc_plain(void *priv, uint8_t *out,
 	} while (1);
 }
 
-static void enc_essiv(void *priv, uint8_t *out,
-		const uint8_t *in, const uint8_t *iv) {
+static void enc_essiv(void *priv, char *out,
+		const char *in, const char *iv) {
 	block_t newiv;
 	cbc_essiv_t *ctx = priv;
 
@@ -105,11 +105,11 @@ static void enc_essiv(void *priv, uint8_t *out,
 	enc_plain(ctx->plain, out, in, newiv);
 }
 
-static void dec_plain(void *priv, uint8_t *out,
-		const uint8_t *in, const uint8_t *iv) {
+static void dec_plain(void *priv, char *out,
+		const char *in, const char *iv) {
 	cbc_plain_t *ctx = priv;
 	block_t tmp, tmp2;
-	const uint8_t *gcry_in = in;
+	const char *gcry_in = in;
 	size_t gcry_inlen = 16;
 	int i = ctx->no_blocks;
 
@@ -134,8 +134,8 @@ static void dec_plain(void *priv, uint8_t *out,
 	wipememory(tmp2, 16);
 }
 
-static void dec_essiv(void *priv, uint8_t *out,
-		const uint8_t *in, const uint8_t *iv) {
+static void dec_essiv(void *priv, char *out,
+		const char *in, const char *iv) {
 	block_t newiv;
 	cbc_essiv_t *ctx = priv;
 

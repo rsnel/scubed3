@@ -24,6 +24,7 @@
 #include "verbose.h"
 #include "util.h"
 #include "blockio.h"
+#include "binio.h"
 #include "juggler.h"
 
 void juggler_init(juggler_t *j, random_t *r) {
@@ -82,6 +83,25 @@ int juggler_discard_possible(juggler_t *j, blockio_info_t *next) {
 	if (!next && j->no_unscheduled < 2) return 0;
 
 	return 1;
+}
+
+char *juggler_hash_scheduled_seqnos(juggler_t *j, char *hash_res) {
+	gcry_md_hd_t hd;
+	char buf[sizeof(uint64_t)];
+
+	blockio_info_t *bi = j->scheduled;
+
+	gcry_call(md_open, &hd, GCRY_MD_SHA256, 0);
+
+	if (bi) do {
+		binio_write_uint64_be(buf, bi->seqno);
+		gcry_md_write(hd, buf, sizeof(uint64_t));
+	} while ((bi = bi->next));
+
+	memcpy(hash_res, gcry_md_read(hd, 0), 32);
+	gcry_md_close(hd);
+
+	return hash_res;
 }
 
 blockio_info_t *juggler_get_devblock(juggler_t *j, int discard) {
@@ -179,18 +199,23 @@ void juggler_verbose(juggler_t *j, uint32_t (*getnum)(blockio_info_t*, void*), v
 	show_list("unscheduled", j->unscheduled, getnum, priv);
 }
 
-static void empty_list(blockio_info_t *head) {
+static void empty_list(blockio_info_t *head, void *(*append)(dllarr_t*, void*), dllarr_t *list) {
 	blockio_info_t *next;
 
 	while (head) {
 		next = head->next;
 		head->next = NULL;
+		if (append) append(list, head);
 		head = next;
 	}
 }
 
+void juggler_free_and_empty_into(juggler_t *j, void *(*append)(dllarr_t*, void*), dllarr_t *list) {
+	empty_list(j->scheduled, append, list);
+	empty_list(j->unscheduled, append, list);
+}
+
 void juggler_free(juggler_t *j) {
-	empty_list(j->scheduled);
-	empty_list(j->unscheduled);
+	juggler_free_and_empty_into(j, NULL, NULL);
 }
 

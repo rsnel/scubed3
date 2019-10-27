@@ -37,8 +37,8 @@
 
 typedef struct cipher_spec_s {
 	void *(*init)(const char*, size_t, const void*, size_t);
-	void (*enc)(void*, uint8_t*, const uint8_t*, const uint8_t*);
-	void (*dec)(void*, uint8_t*, const uint8_t*, const uint8_t*);
+	void (*enc)(void*, char*, const char*, const char*);
+	void (*dec)(void*, char*, const char*, const char*);
 	void (*free)(void*);
 	const char *name;
 } cipher_spec_t;
@@ -55,9 +55,9 @@ typedef struct cipher_s {
 
 void cipher_init(cipher_t*, const char*, size_t, const void*, size_t);
 
-void cipher_enc(cipher_t*, uint8_t*, const uint8_t*, uint64_t, uint32_t, uint32_t);
+void cipher_enc(cipher_t*, char*, const char*, uint64_t, uint32_t, uint32_t);
 
-void cipher_dec(cipher_t*, uint8_t*, const uint8_t*, uint64_t, uint32_t, uint32_t);
+void cipher_dec(cipher_t*, char*, const char*, uint64_t, uint32_t, uint32_t);
 
 void cipher_free(cipher_t*);
 

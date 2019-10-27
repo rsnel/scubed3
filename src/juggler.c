@@ -123,7 +123,7 @@ blockio_info_t *juggler_get_devblock(juggler_t *j, int discard) {
 		//VERBOSE("no scheduled block to output, select from unscheduled blocks");
 		assert(j->unscheduled && j->no_unscheduled != 0);
 		uint32_t index = random_custom(j->r, j->no_unscheduled);
-		VERBOSE("requested index is %u", index);
+		//VERBOSE("requested index is %u", index);
 		iterate = &j->unscheduled;
 		while (index--) iterate = &((*iterate)->next);
 		next = *iterate;

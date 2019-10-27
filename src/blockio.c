@@ -193,8 +193,8 @@ static const char magic[8] = "SSS3v0.1";
 void blockio_dev_free(blockio_dev_t *dev) {
 	int i;
 	assert(dev);
-	//VERBOSE("closing \"%s\", %s", dev->name,
-	//		dev->updated?"SHOULD BE WRITTEN":"no updates");
+	VERBOSE("closing \"%s\", %s", dev->name,
+			dev->updated?"SHOULD BE WRITTEN":"no updates");
 	if (dev->updated) blockio_dev_write_current_macroblock(dev);
 	random_free(&dev->r);
 	bitmap_free(&dev->status);
@@ -236,7 +236,6 @@ void blockio_dev_free(blockio_dev_t *dev) {
 void blockio_dev_select_next_macroblock(blockio_dev_t *dev) {
 	assert(!dev->bi);
 
-	DEBUG("blockio_dev_select_next_macroblock(dev=%p)", dev);
 	dev->updated = 0;
 
 	dev->bi = juggler_get_devblock(&dev->j, 0);
@@ -354,7 +353,7 @@ void blockio_dev_scan_header(dllarr_t *replay, blockio_dev_t *dev,
 	}
 
 	/* read header */
-	dev->b->read(dev->io, BASE, no<<dev->b->macroblock_log,
+	dev->b->read(dev->io, BASE, ((off_t)no)<<dev->b->macroblock_log,
 			1<<dev->b->mesoblk_log);
 
 	// decrypt indexblock with IV=0: ciphertext is unique due to
@@ -370,8 +369,9 @@ void blockio_dev_scan_header(dllarr_t *replay, blockio_dev_t *dev,
 //		DEBUG("magic \"%.*s\" not found in macroblock %u",
 //				(int)sizeof(magic), magic, no);
 		return;
-	} else DEBUG("magic \"%.*s\" found in macroblock %u",
-			(int)sizeof(magic), magic, no);
+	} //else DEBUG("magic \"%.*s\" found in macroblock %u",
+	//		(int)sizeof(magic), magic, no);
+
 
 	/* check indexblock hash */
 	gcry_md_hash_buffer(GCRY_MD_SHA256, sha256, BASE + sizeof(sha256),
@@ -397,9 +397,8 @@ void blockio_dev_scan_header(dllarr_t *replay, blockio_dev_t *dev,
 	bi->no_nonobsolete = bi->no_indices =
 		binio_read_uint32_be(NO_INDICES_UINT32);
 	bi->indices = ecalloc(dev->b->mmpm, sizeof(uint32_t));
-	//VERBOSE("bi->no_indices = %d, bi->indices = %p", bi->no_indices, bi->indices);
+	
 	for (i = 1; i <= bi->no_indices; i++) {
-		VERBOSE("i=%d", i);
 		bi->indices[i-1] = binio_read_uint32_be(
 				((uint32_t*)NO_INDICES_UINT32) + i);
 	}
@@ -450,7 +449,7 @@ void blockio_dev_read_mesoblk_part(blockio_dev_t *dev, void *buf, uint32_t id,
 
 void blockio_dev_read_mesoblk(blockio_dev_t *dev,
 		void *buf, uint32_t id, uint32_t no) {
-	dev->b->read(dev->io, buf, (id<<dev->b->macroblock_log) +
+	dev->b->read(dev->io, buf, (((off_t)id)<<dev->b->macroblock_log) +
 			((no + 1)<<dev->b->mesoblk_log) +
 			0, 1<<dev->b->mesoblk_log);
 	cipher_dec(dev->c, buf, buf, dev->b->blockio_infos[id].seqno,
@@ -464,7 +463,7 @@ int blockio_check_data_hash(blockio_info_t *bi) {
 	char data[size];
 	char hash[32];
 	bi->dev->b->read(bi->dev->io, data,
-			(id<<bi->dev->b->macroblock_log) +
+			(((off_t)id)<<bi->dev->b->macroblock_log) +
 			(1<<bi->dev->b->mesoblk_log), size);
 
 	gcry_md_hash_buffer(GCRY_MD_SHA256, hash, data, size);
@@ -522,8 +521,8 @@ void blockio_dev_write_current_macroblock(blockio_dev_t *dev) {
 		binio_write_uint32_be(((uint32_t*)NO_INDICES_UINT32) + i,
 				dev->bi->indices[i-1]);
 
-	/* set unused indices to zero */
-	for (i = dev->bi->no_indices; i <= dev->b->mmpm; i++)
+	/* set unused indices to zero, continue with last value of i */
+	for (; i <= dev->b->mmpm; i++)
 		binio_write_uint32_be(((uint32_t*)NO_INDICES_UINT32) + i, 0);
 
 	bitmap_write((uint32_t*)(BASE + dev->b->bitmap_offset), &dev->status);
@@ -536,7 +535,7 @@ void blockio_dev_write_current_macroblock(blockio_dev_t *dev) {
 	/* encrypt index */
 	cipher_enc(dev->c, BASE, BASE, 0, 0, id);
 
-	dev->b->write(dev->io, BASE, id<<dev->b->macroblock_log,
+	dev->b->write(dev->io, BASE, ((off_t)id)<<dev->b->macroblock_log,
 			1<<dev->b->macroblock_log);
 
 	dev->bi = NULL; /* there is no current block */

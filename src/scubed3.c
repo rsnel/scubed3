@@ -55,7 +55,7 @@ void obsolete_mesoblk(scubed3_t *l, blockio_info_t *bi, uint32_t no) {
 
 	/* if the whole block is obsolete, remove it from the active list */
 	if (!bi->no_nonobsolete) {
-		WARNING("move from active list is not implemented");
+		//WARNING("move from active list is not implemented");
 		bi->no_indices = 0;
 	}
 }
@@ -72,7 +72,8 @@ static inline void update_block_indices(scubed3_t *l, uint32_t offset,
 
 static void add_blockref(scubed3_t *l, uint32_t offset) {
 	l->dev->bi->indices[l->dev->bi->no_indices] = offset;
-	update_block_indices(l, offset, id(l->dev->bi), l->dev->bi->no_indices);
+	update_block_indices(l, offset, id(l->dev->bi),
+			l->dev->bi->no_indices);
 	l->dev->bi->no_indices++;
 }
 
@@ -96,17 +97,18 @@ void copy_old_block_to_current(scubed3_t *l) {
 			if (index != 0xFFFFFFFF &&
 					&l->dev->b->blockio_infos[ID] == bi) {
 				blockio_dev_read_mesoblk(l->dev, mesoblk(l,
-						l->dev->bi->no_indices), id(bi), k);
+						l->dev->bi->no_indices),
+						id(bi), k);
 
 				add_blockref(l, bi->indices[k]);
 
 				obsolete_mesoblk(l, bi, k);
 			}
 		}
-
 	}
 }
 
+/*
 static void pre_emptive_gc(scubed3_t *l) {
 	WARNING("pre_emptive_gc not implemented");
 #if 0
@@ -152,15 +154,16 @@ static void pre_emptive_gc(scubed3_t *l) {
 	//DEBUG("saved %d additional indices", l->dev->bi->no_indices_preempt);
 #endif
 }
+*/
 
 // FIXME the following two functions look almost the same...  
 void select_new_macroblock(scubed3_t *l) {
 	assert(l->output_initialized);
-	pre_emptive_gc(l);
+	//pre_emptive_gc(l);
 	do {
 		blockio_dev_write_current_and_select_next_macroblock(l->dev);
 		copy_old_block_to_current(l);
-		DEBUG("new block %lu (seqno=%lu) has %u mesoblocks due "
+		if (l->dev->tail_macroblock) DEBUG("new block %lu (seqno=%lu) has %u mesoblocks due "
 				"to GC of block %u",
 				id(l->dev->bi), l->dev->bi->seqno,
 				l->dev->bi->no_indices,
@@ -172,7 +175,7 @@ void select_new_macroblock(scubed3_t *l) {
 void initialize_output(scubed3_t *l) {
 	if (!l->output_initialized) {
 		copy_old_block_to_current(l);
-		DEBUG("new block %lu (seqno=%lu) has %u mesoblocks due "
+		if (l->dev->tail_macroblock) DEBUG("new block %lu (seqno=%lu) has %u mesoblocks due "
 				"to GC of block %u",
 				id(l->dev->bi), l->dev->bi->seqno,
 				l->dev->bi->no_indices,
@@ -186,14 +189,14 @@ void initialize_output(scubed3_t *l) {
 void scubed3_cycle(scubed3_t *l) {
 	/* output ONE block, run GC if possible and useful */
 	if (l->output_initialized) { /* output is initialized */
-		pre_emptive_gc(l);
+		//pre_emptive_gc(l);
 		blockio_dev_write_current_macroblock(l->dev);
 		blockio_dev_select_next_macroblock(l->dev);
 		l->output_initialized = 0;
 	} else {
 		copy_old_block_to_current(l);
 		l->output_initialized = 1;
-		if (!l->cycle_goal) pre_emptive_gc(l);
+		//if (!l->cycle_goal) pre_emptive_gc(l);
 		blockio_dev_write_current_macroblock(l->dev);
 		blockio_dev_select_next_macroblock(l->dev);
 		l->output_initialized = 0;
@@ -232,7 +235,7 @@ void debug_stuff(scubed3_t *l) {
 
 void scubed3_free(scubed3_t *l) {
 	//VERBOSE("freeing scubed3 partition");
-	if (l->output_initialized) pre_emptive_gc(l);
+	//if (l->output_initialized) pre_emptive_gc(l);
 	free(l->block_indices);
 }
 
@@ -246,12 +249,14 @@ void scubed3_reinit(scubed3_t *l) {
 
 	if (old_no_block_indices == l->no_block_indices) return;
 
-	if (old_no_block_indices > l->no_block_indices) FATAL("scubed3_reinit shrinking not supported");
+	if (old_no_block_indices > l->no_block_indices)
+		FATAL("scubed3_reinit shrinking not supported");
 
 #if 0
 	/* obsolete all mesoblocks beyond end of device (if shrinking) */
 	while (old_no_block_indices > l->no_block_indices)
-		obsolete_mesoblk_byidx(l, l->block_indices[--old_no_block_indices]);
+		obsolete_mesoblk_byidx(l,
+				l->block_indices[--old_no_block_indices]);
 #endif
 	VERBOSE("scubed3_reinit enlarge");
 
@@ -277,10 +282,10 @@ void scubed3_init(scubed3_t *l, blockio_dev_t *dev) {
 	else l->no_block_indices = (dev->no_macroblocks -
 			dev->reserved_macroblocks)*dev->b->mmpm;
 
-	VERBOSE("l->no_block_indices=%d", l->no_block_indices);
 	l->block_indices = ecalloc(l->no_block_indices, sizeof(uint32_t));
 
-	for (i = 0; i < l->no_block_indices; i++) l->block_indices[i] = 0xFFFFFFFF;
+	for (i = 0; i < l->no_block_indices; i++)
+		l->block_indices[i] = 0xFFFFFFFF;
 
 	if (!dev->no_macroblocks) return;
 
@@ -298,7 +303,8 @@ void scubed3_init(scubed3_t *l, blockio_dev_t *dev) {
 	char hash[32];
 	juggler_hash_scheduled_seqnos(&dev->j, hash);
 	if (memcmp(hash, dev->seqnos_hash, 32)) 
-		WARNING("hash seqno's is wrong, at least one block seems to be missing");
+		WARNING("hash seqno's is wrong, "
+				"at least one block seems to be missing");
 }
 
 void blockio_dev_fake_mesoblk_part(blockio_dev_t *dev, void *addr,
@@ -377,7 +383,8 @@ int do_read(scubed3_t *l, uint32_t mesoff, uint32_t muoff, uint32_t size,
 	else if (index == 0xFFFFFFFF) /* never written */
 		memset(out, 0, size);
 	else /* we are on disk */
-		blockio_dev_read_mesoblk_part(l->dev, out, ID, NO, muoff, size);
+		blockio_dev_read_mesoblk_part(l->dev,
+				out, ID, NO, muoff, size);
 	return 0;
 }
 
@@ -390,11 +397,12 @@ int do_req(scubed3_t *l, scubed3_io_t cmd, uint64_t r_offset, size_t size,
 	int (*action)(scubed3_t*, uint32_t, uint32_t, uint32_t, char*) =
 		(cmd == SCUBED3_WRITE)?do_write:do_read;
 
-//	VERBOSE("do_req: %s offset=%lld size=%d on \"%s\"",
-//			(cmd == SCUBED3_WRITE)?"write":"read",
-//			r_offset, size, l->dev->name);
+	//VERBOSE("do_req: %s offset=%ld size=%ld on \"%s\"",
+	//		(cmd == SCUBED3_WRITE)?"write":"read",
+	//		r_offset, size, l->dev->name);
 
-	if ((r_offset + size - 1)>>l->dev->b->mesoblk_log >= l->no_block_indices) {
+	if ((r_offset + size - 1)>>l->dev->b->mesoblk_log >=
+			l->no_block_indices) {
 		WARNING("%s access past end of device \"%s\"", 
 				(cmd == SCUBED3_WRITE)?"write":"read",
 				l->dev->name);
@@ -431,16 +439,13 @@ int main(int argc, char **argv) {
 		char *base;
 		uint8_t mesoblock_log;
 		uint8_t macroblock_log;
-		uint32_t reserved;
 	} options = {
 		.base = NULL,
 		.mesoblock_log = 14,
-		.reserved = 2,
 		.macroblock_log = 22
 	};
 	struct fuse_opt scubed3_opts[] = {
 		SCUBED3_OPT_KEY("-b %s", base, 0),
-		SCUBED3_OPT_KEY("-r %d", reserved, 0),
 		SCUBED3_OPT_KEY("-m %d", mesoblock_log, 0),
 		SCUBED3_OPT_KEY("-M %d", macroblock_log, 0),
 		FUSE_OPT_END

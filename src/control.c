@@ -569,8 +569,6 @@ static int control_resize(int s, control_thread_priv_t *priv, char *argv[]) {
 
 	dev->reserved_macroblocks = reserved;
 
-	dev->updated = 1;
-
 	if (entry->d.no_macroblocks > entry->d.reserved_macroblocks)
 		entry->size = ((entry->d.no_macroblocks -
 					entry->d.reserved_macroblocks)<<
@@ -580,6 +578,8 @@ static int control_resize(int s, control_thread_priv_t *priv, char *argv[]) {
 	hashtbl_unlock_element_byptr(entry);
 
 	if (!dev->bi) blockio_dev_select_next_macroblock(dev);
+
+	dev->updated = 1;
 
 	return control_write_silent_success(s);
 }
@@ -727,7 +727,7 @@ void *control_thread(void *arg) {
 	unlink(local.sun_path);
 	len = strlen(local.sun_path) + sizeof(local.sun_family);
 	if (bind(s, (struct sockaddr*)&local, len) == -1)
-		FATAL("bind: %s", strerror(errno));
+		FATAL("bind()ing to %s: %s", local.sun_path, strerror(errno));
 
 	if (chmod(CONTROL_SOCKET, S_IRUSR|S_IWUSR) == -1)
 		FATAL("chmod: %s", strerror(errno));

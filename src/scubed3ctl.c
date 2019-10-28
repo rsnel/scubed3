@@ -42,8 +42,7 @@
 #define CONV_SIZE 512
 
 #define DEFAULT_KDF_HASH		"SHA256"
-#define DEFAULT_KDF_ITERATIONS		7
-//#define DEFAULT_KDF_ITERATIONS		16777216
+#define DEFAULT_KDF_ITERATIONS		16777216
 #define DEFAULT_KDF_FUNCTION		"PBKDF2"
 #define DEFAULT_CIPHER_STRING		"CBC_ESSIV(AES256)"
 #define KEY_LENGTH	32
@@ -51,7 +50,9 @@
 #define MAX_RESULT_LINES 128
 
 // PBKDF2 requires salt
-const void *kdf_salt = "scubed3_prod";
+const char *kdf_salt = "scubed3_prod";
+const char *control_socket = CONTROL_SOCKET;
+unsigned long kdf_iterations = DEFAULT_KDF_ITERATIONS;
 
 typedef struct result_s {
 	char buf[BUF_SIZE];
@@ -150,19 +151,26 @@ int do_server_command(int s, int echo, char *format, ...) {
 					done = 1;
 					if (!status_known)
 						WARNING("message terminates "
-								"without known "
+								"without "
+								"known "
 								"status");
 					break;
 				}
 				if (status_known) {
 					if (echo) printf("%s\n",
 							result.buf + start);
-					if (result.argc == MAX_RESULT_LINES) FATAL("too many lines in response");
-					result.argv[result.argc++] = result.buf + start;
-				} else if (!strcmp(result.buf + start, "ERR") ||
-						!strcmp(result.buf + start, "OK")) {
+					if (result.argc == MAX_RESULT_LINES)
+						FATAL("too many lines "
+								"in response");
+					result.argv[result.argc++] =
+						result.buf + start;
+				} else if (!strcmp(result.buf + start,
+							"ERR") ||
+						!strcmp(result.buf + start,
+							"OK")) {
 					status_known = 1;
-					if (!strcmp(result.buf + start, "ERR")) {
+					if (!strcmp(result.buf + start,
+								"ERR")) {
 						ret = -1;
 						result.status = -1;
 					}
@@ -198,7 +206,8 @@ typedef struct ctl_command_s {
 	char *usage;
 } ctl_command_t;
 
-int do_local_command(ctl_priv_t *priv, ctl_command_t *cmnd, char *format, ...) {
+int do_local_command(ctl_priv_t *priv,
+		ctl_command_t *cmnd, char *format, ...) {
 	int argc = 0, ret;
 	char *args;
 	char *argv[MAX_ARGC+1];
@@ -283,7 +292,8 @@ static int ctl_open_create_common(ctl_priv_t *priv, char *argv[], int create) {
 	if (!strcmp(DEFAULT_KDF_FUNCTION, "PBKDF2"))
 		algo = GCRY_KDF_PBKDF2;
 	else {
-		ERROR("unknown key derivation function %s", DEFAULT_KDF_FUNCTION);
+		ERROR("unknown key derivation function %s",
+				DEFAULT_KDF_FUNCTION);
 		return -1;
 	}
 
@@ -317,16 +327,23 @@ static int ctl_open_create_common(ctl_priv_t *priv, char *argv[], int create) {
 	}
 
 	assert(pw_len > 0);
-	if (pw_len == 1) WARNING("empty passphrase used, this is not very secure");
+	if (pw_len == 1) WARNING("empty passphrase used, "
+			"this is not very secure");
 
-	VERBOSE("computing %d iterations of %s(%s), please wait...",
-			DEFAULT_KDF_ITERATIONS,
-			DEFAULT_KDF_FUNCTION,
-			DEFAULT_KDF_HASH);
+	/* when the number of iterations is high, let
+	 * the user know that computing the key
+	 * may take some time, the threshold is somewhat
+	 * arbitrary, but it seems useful the let the user
+	 * know that computing the KDF may take some time */
+	if (kdf_iterations >= 10000)
+		VERBOSE("computing %ld iterations of %s(%s), please wait...",
+				kdf_iterations,
+				DEFAULT_KDF_FUNCTION,
+				DEFAULT_KDF_HASH);
 
 	gcry_call(kdf_derive, pw, pw_len - 1,
 			algo, subalgo, kdf_salt, strlen(kdf_salt),
-			DEFAULT_KDF_ITERATIONS, 32, hash);
+			kdf_iterations, 32, hash);
 
 	wipememory(pw, pw_len);
 	free(pw);
@@ -430,7 +447,8 @@ static int parse_info(ctl_priv_t *priv, int no, ...) {
 		for (i = 0; i < no; i++) {
 			if (!strcmp(result.argv[j], names[i])) {
 				if (done[i]) {
-					printf("double response from the server");
+					printf("double response "
+							"from the server");
 					return -1;
 				}
 
@@ -448,7 +466,8 @@ static int parse_info(ctl_priv_t *priv, int no, ...) {
 
 #define DEFAULT_KEEP_REVISIONS 3
 #define DEFAULT_INCREMENT 4
-#define DEFAULT_RESERVED_MACROBLOCKS (DEFAULT_KEEP_REVISIONS + DEFAULT_INCREMENT)
+#define DEFAULT_RESERVED_MACROBLOCKS \
+	(DEFAULT_KEEP_REVISIONS + DEFAULT_INCREMENT)
 
 static int ctl_resize(ctl_priv_t *priv, char *argv[]) {
 	int no_macroblocks, new, reserved_macroblocks;
@@ -532,8 +551,9 @@ static int ctl_mount(ctl_priv_t *priv, char *argv[]) {
 	if (do_server_command(priv->s, 0, "info %s", argv[0])) return -1;
 	if (result.status) {
 		// we try to open the partition
-		do_local_command(priv, hashtbl_find_element_bykey(&priv->c, "open"), "%s", argv[0]);
-		//if (ctl_open(priv, argv)) return -1;
+		do_local_command(priv, hashtbl_find_element_bykey(&priv->c,
+					"open"), "%s", argv[0]);
+
 		if (result.status) return 0;
 		if (do_server_command(priv->s, 0, "set-close-on-release %s 1",
 				argv[0])) return -1;
@@ -638,21 +658,51 @@ int ctl_call(ctl_priv_t *priv, char *command) {
 #define NO_COMMANDS (sizeof(ctl_commands)/sizeof(ctl_commands[0]))
 
 int main(int argc, char **argv) {
+	char *endptr;
 	ctl_priv_t priv;
 	socklen_t len;
-	int i, connections = 0;
+	int opt, i, connections = 0;
 	char *line = NULL;
 	struct sockaddr_un remote;
 
 	verbose_init(argv[0]);
 
+	opterr = 0;
+	while ((opt = getopt(argc, argv, "+s:i:a:h")) != -1) {
+		switch (opt) {
+			case 'h':
+				printf("Usage:\n$ %s [-s KDF_SALT] [-r KDF_ITERATIONS] [-a SOCKET_ADDRESS]\n", exec_name); //argv[0]);
+				exit(0);
+			case 'a':
+				if (strlen(optarg) == 0) FATAL("socket address may not be empty");
+				control_socket = optarg;
+				break;
+			case 's':
+				if (strlen(optarg) == 0) FATAL("salt must not be empty");
+				if (strcmp(optarg, kdf_salt)) WARNING("using custom value for salt, if you forget your salt, you lose access to your devices");
+				kdf_salt = optarg;
+				break;
+			case 'i':
+				kdf_iterations = strtoul(optarg, &endptr, 10);
+				if (*endptr != '\0') FATAL("error in converting %s to unsigned long", optarg);
+				if (kdf_iterations != DEFAULT_KDF_ITERATIONS) WARNING("using custom value for iterations, if you forget this value, you lose access to your devices");
+				break;
+			case '?':
+				FATAL("unrecognized option %c, use -h for help", optopt);
+			default:
+				assert(0);
+		}
+	}
+	if (optind != argc) FATAL("unrecognized argument(s), use -h for help");
+
 	assert(!strcmp("SHA256", DEFAULT_KDF_HASH));
 	assert(!strcmp("PBKDF2", DEFAULT_KDF_FUNCTION));
-	if (DEFAULT_KDF_ITERATIONS < 16*1024*1024) {
-		WARNING("low amount of KDF iterations < 16777216, for testing purposes only");
-	} else assert(DEFAULT_KDF_ITERATIONS == 16*1024*1024);
+	if (kdf_iterations < 1000000) {
+		WARNING("low number of KDF iterations < 1000000, "
+				"this is bad for security");
+	} 
+	assert(DEFAULT_KDF_ITERATIONS == 16*1024*1024);
 	assert(!strcmp("CBC_ESSIV(AES256)", DEFAULT_CIPHER_STRING));
-
 
 	/* lock me into memory; don't leak info to swap */
 	if (mlockall(MCL_CURRENT|MCL_FUTURE)<0)
@@ -673,13 +723,12 @@ int main(int argc, char **argv) {
 	if ((priv.s = socket(AF_UNIX, SOCK_STREAM, 0)) == -1)
 		FATAL("socket: %s", strerror(errno));
 
-	//setsockopt(priv.s, SOL_SOCKET, SO_NOSIGPIPE, (void *)&set, sizeof(int));
-
 	remote.sun_family = AF_UNIX;
-	strcpy(remote.sun_path, CONTROL_SOCKET);
+	strcpy(remote.sun_path, control_socket);
 	len = strlen(remote.sun_path) + sizeof(remote.sun_family);
 	if (connect(priv.s, (struct sockaddr*)&remote, len) == -1)
-		FATAL("connecting to socket %s: %s", remote.sun_path, strerror(errno));
+		FATAL("connecting to socket %s: %s",
+				remote.sun_path, strerror(errno));
 
 
 	if (do_server_command(priv.s, 0, "static-info")) FATAL("unable to "
@@ -691,13 +740,15 @@ int main(int argc, char **argv) {
 	if (!priv.mountpoint) FATAL("out of memory");
 
 	if (parse_int(&priv.no_macroblocks, result.argv[1]))
-		FATAL("unable to read the number of macroblocks from the server");
+		FATAL("unable to read the number of macroblocks "
+				"from the server");
 
 	if (!connections) {
 		printf("scubed3ctl-" VERSION ", connected to scubed3-%s\n",
 				result.argv[2]);
-		printf("cipher: %s, KDF: %s(%s/%d)\n",
-				DEFAULT_CIPHER_STRING, DEFAULT_KDF_FUNCTION, DEFAULT_KDF_HASH, DEFAULT_KDF_ITERATIONS);
+		printf("cipher: %s, KDF: %s(%s/%ld)\n",
+				DEFAULT_CIPHER_STRING, DEFAULT_KDF_FUNCTION,
+				DEFAULT_KDF_HASH, kdf_iterations);
 	} else {
 		printf("re-establised connection\n");
 	}
@@ -712,7 +763,8 @@ int main(int argc, char **argv) {
 		/* exit is a special case */
 		if (!line || !strcmp(line, "exit") || !strcmp(line, "quit") ||
 				!strcmp(line, "q") || !strcmp(line, "x") ||
-				!strcmp(line, "bye") || !strcmp(line, "kthxbye") ||
+				!strcmp(line, "bye") ||
+				!strcmp(line, "kthxbye") ||
 				!strcmp(line, "thanks")) {
 			if (!line) printf("^D\n");
 			do_server_command(priv.s, 1, "exit");

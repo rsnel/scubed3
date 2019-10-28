@@ -345,7 +345,7 @@ static int control_open_create_common(int s, control_thread_priv_t *priv, char *
 
 		/* if we used 'open' we expect to find at least one block */
 		if (!add & !entry->d.no_macroblocks)
-			ecch_throw(ECCH_DEFAULT, "unable to open device: passphrase wrong?");
+			ecch_throw(ECCH_DEFAULT, "no blocks found: passphrase wrong?");
 
 		entry->size = 0;
 		if (entry->d.no_macroblocks > entry->d.reserved_macroblocks) entry->size = ((entry->d.no_macroblocks-entry->d.reserved_macroblocks)<<entry->d.b->mesoblk_log)*entry->d.b->mmpm;

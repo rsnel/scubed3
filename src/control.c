@@ -206,7 +206,8 @@ static int control_static_info(int s, control_thread_priv_t *priv, char *argv[])
 }
 
 static int control_exit(int s, control_thread_priv_t *priv, char *argv[]) {
-	control_write_complete(s, 0, "kthxbye!");
+	control_write_silent_success(s);
+	//control_write_complete(s, 0, "kthxbye!");
 	//VERBOSE("closing connection");
 	return -1; // close connection
 }

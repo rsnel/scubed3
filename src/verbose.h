@@ -28,22 +28,24 @@
 extern char *exec_name;
 extern int debug;
 extern int verbose;
-#define WARNING(a,...) WHINE("warning:" a, ## __VA_ARGS__)
+extern int quiet;
+
+#define WARNING(a,...) do { if (!quiet) WHINE("warning:" a, ## __VA_ARGS__); } while (0)
 #define ERROR(a,...) WHINE("error:" a, ## __VA_ARGS__)
 #define DEBUG(a,...) do { \
 	if (debug) WHINE("debug:" a, ## __VA_ARGS__); } while (0)
 #define VERBOSE(a,...) do { if (verbose) WHINE(a, ## __VA_ARGS__); } while (0)
 #define ABORT(msg,...)	do { \
 	WHINE(msg, ## __VA_ARGS__); \
-	abort(); \
+	exit(EXIT_FAILURE); \
 } while (0)
 #define BUG(msg,...)            ABORT("fatal:BUG:" msg, ## __VA_ARGS__)
 #define FATAL(msg,...)            ABORT("fatal:" msg, ## __VA_ARGS__)
+
 void verbose_init(char*);
 
 void verbose_md5(const char*);
 
 void verbose_buffer(const char*, const void*, size_t);
-
 
 #endif /* INCLUDE_SCUBED3_VERBOSE_H */

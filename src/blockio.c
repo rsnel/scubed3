@@ -348,7 +348,7 @@ void blockio_dev_scan_header(dllarr_t *replay, blockio_dev_t *dev,
 	char sha256[32];
 
 	if (bi->dev) {
-		VERBOSE("macroblock %d already taken", no);
+		//VERBOSE("macroblock %d already taken", no);
 		return;
 	}
 

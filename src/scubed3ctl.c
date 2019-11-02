@@ -37,11 +37,13 @@
 #include "verbose.h"
 #include "control.h"
 #include "gcry.h"
+#include "util.h"
 
 #define BUF_SIZE 1024
 #define CONV_SIZE 512
 
 #define DEFAULT_KDF_HASH		"SHA256"
+#define	DEFAULT_KDF_SALT		"scubed3_prod"
 #define DEFAULT_KDF_ITERATIONS		16777216
 #define DEFAULT_KDF_FUNCTION		"PBKDF2"
 #define DEFAULT_CIPHER_STRING		"CBC_ESSIV(AES256)"
@@ -50,9 +52,16 @@
 #define MAX_RESULT_LINES 128
 
 // PBKDF2 requires salt
-const char *kdf_salt = "scubed3_prod";
+const char *command_option = NULL;
+const char *kdf_salt = DEFAULT_KDF_SALT;
 const char *control_socket = CONTROL_SOCKET;
 unsigned long kdf_iterations = DEFAULT_KDF_ITERATIONS;
+int assume_yes = 0;
+
+/* in non-interactive mode, the exit status of
+ * scubed3ctl must match the exit status of the
+ * command that was requested using -c */
+int exit_status = EXIT_SUCCESS;
 
 typedef struct result_s {
 	char buf[BUF_SIZE];
@@ -78,6 +87,8 @@ int vvar_system(const char *format, va_list ap) {
 	wipememory(string, len);
 
 	free(string);
+	if (ret) exit_status = EXIT_FAILURE;
+
 	return ret;
 }
 
@@ -173,6 +184,7 @@ int do_server_command(int s, int echo, char *format, ...) {
 								"ERR")) {
 						ret = -1;
 						result.status = -1;
+						exit_status = EXIT_FAILURE;
 					}
 				} else {
 					ERROR("malformed response, "
@@ -221,6 +233,8 @@ int do_local_command(ctl_priv_t *priv,
 
 	argv[argc] = args;
 
+	assert(argv[argc]);
+
 	while (*argv[argc] != '\0') {
 		while (*argv[argc] == ' ') argv[argc]++;
 
@@ -244,7 +258,7 @@ int do_local_command(ctl_priv_t *priv,
 		if (*argv[argc] == ' ') *argv[argc]++ = '\0';
 	}
 
-	if (*argv[0] == '\0') argc--;
+	if (*argv[0] == '\0' && argc > 0) argc--;
 	if (argc != cmnd->argc ) {
 		printf("usage: %s%s\n", cmnd->head.key, cmnd->usage);
 		free(args);
@@ -319,6 +333,7 @@ static int ctl_open_create_common(ctl_priv_t *priv, char *argv[], int create) {
 			free(pw);
 			free(pw2);
 			printf("passphrases do not match\n");
+			exit_status = EXIT_FAILURE;
 			return 0;
 		}
 
@@ -375,6 +390,16 @@ static int ctl_open(ctl_priv_t *priv, char *argv[]) {
 	return ctl_open_create_common(priv, argv, 0);
 }
 
+static int ctl_help(ctl_priv_t *priv, char *argv[]) {
+	printf("Internal commands:\n\n");
+	printf("create NAME\n");
+	printf("open NAME\n");
+	printf("close NAME\n");
+	printf("mount NAME MOUNTPOINT\n");
+	printf("umount NAME\n");
+	return 0;
+}
+
 static int ctl_create(ctl_priv_t *priv, char *argv[]) {
 	return ctl_open_create_common(priv, argv, 1);
 }
@@ -382,6 +407,10 @@ static int ctl_create(ctl_priv_t *priv, char *argv[]) {
 int yesno(const char *prompt) {
 	//char answer[4];
 	char *answer;
+	if (assume_yes >= 3) {
+		printf("%s Yes (assumed)\n", prompt);
+		return 1;
+	}
 label:
 	answer = readline(prompt);
 	while (*answer == ' ') answer++;
@@ -412,10 +441,12 @@ static int parse_int(int *r, const char *in) {
 
 	if (errno && (ret == LONG_MIN || ret == LONG_MAX)) {
 		printf("integer out of range\n");
+		exit_status = EXIT_FAILURE;
 		return -1;
 	}
 	if (*end != '\0') {
 		printf("unable to parse ->%s<-\n", in);
+		exit_status = EXIT_FAILURE;
 		return -1;
 	}
 	*r = ret;
@@ -439,6 +470,7 @@ static int parse_info(ctl_priv_t *priv, int no, ...) {
 	for (j = 0; j < result.argc; j++) {
 		if (!(is = strchr(result.argv[j], '='))) {
 			printf("malformed response from server\n");
+			exit_status = EXIT_FAILURE;
 			return -1;
 		}
 
@@ -449,6 +481,7 @@ static int parse_info(ctl_priv_t *priv, int no, ...) {
 				if (done[i]) {
 					printf("double response "
 							"from the server");
+					exit_status = EXIT_FAILURE;
 					return -1;
 				}
 
@@ -502,24 +535,28 @@ static int ctl_resize(ctl_priv_t *priv, char *argv[]) {
 		return 0;
 	}
 
-	if (new > no_macroblocks) {
-		char *prompt = "\
+	/* only show this warning if quiet is not active or assume_yes
+	 * is not active */
+	if (!quiet || assume_yes < 3) {
+		if (new > no_macroblocks) {
+			char *prompt = "\
 only safe if ALL your scubed3 partitions are open, continue? [No] ";
-		warning();
-		printf("allocating %d blocks for %s from the unclaimed pool, "
-				"this is\n", new - no_macroblocks, argv[0]);
+			warning();
+			printf("allocating %d blocks for %s from the unclaimed pool, "
+					"this is\n", new - no_macroblocks, argv[0]);
 
-		if (!yesno(prompt)) return 0;
-	} else {
-		assert(no_macroblocks > new);
-		warning();
-		printf("removing %d blocks from the end of %s, those blocks\n",
-				no_macroblocks - new, argv[0]);
-		printf("will be added to the unclaimed pool, if you have a "
-				"filesystem on it\n");
+			if (!yesno(prompt)) return 0;
+		} else {
+			assert(no_macroblocks > new);
+			warning();
+			printf("removing %d blocks from the end of %s, those blocks\n",
+					no_macroblocks - new, argv[0]);
+			printf("will be added to the unclaimed pool, if you have a "
+					"filesystem on it\n");
 
-		if (!yesno("you must resize it before typing Yes, "
-					"continue? [No] ")) return 0;
+			if (!yesno("you must resize it before typing Yes, "
+						"continue? [No] ")) return 0;
+		}
 	}
 
 	return do_server_command(priv->s, 1, "resize-internal %s %d %d",
@@ -601,6 +638,11 @@ static int ctl_umount(ctl_priv_t *priv, char *argv[]) {
 
 static ctl_command_t ctl_commands[] = {
 	{
+		.head.key = "help",
+		.command = ctl_help,
+		.argc = 0,
+		.usage = ""
+	}, {
 		.head.key = "create",
 		.command = ctl_create,
 		.argc = 1,
@@ -649,10 +691,33 @@ int ctl_call(ctl_priv_t *priv, char *command) {
 	if ((tmp = strchr(command, ' '))) *tmp = '\0'; // temprary terminator
 	cmnd = hashtbl_find_element_bykey(&priv->c, command);
 	if (tmp) *tmp = ' '; // replace space
+	else tmp="";
 
 	/* execute */
 	if (cmnd) return do_local_command(priv, cmnd, "%s", tmp);
 	else return do_server_command(priv->s, 1, "%s", command);
+}
+
+void show_help() {
+	printf("%s is a program to connect with the scubed3 process to\n", exec_name);
+	printf("manage scubed3 partitions (also known as hidden volumes)\n");
+	printf("\n");
+	printf("Usage:\n\n$ %s [-s KDF_SALT] [-i KDF_ITERATIONS] [-a SOCKET_ADDRESS] \\\n", exec_name); //argv[0]);
+	printf("                [-YYY] [-c COMMAND] [-v] [-q] [-d]\n");
+	printf("\nOptions (defaults shown in parentheses):\n\n");
+	printf("-s KDF_SALT       salt used for KDF (%s)\n", DEFAULT_KDF_SALT);
+	printf("-i KDF_ITERATIONS iterations done by KDF (%u)\n", DEFAULT_KDF_ITERATIONS);
+	printf("-a SOCKET_ADDRESS addres of scubed3 socket (%s)\n", CONTROL_SOCKET);
+	printf("-Y                assume Yes to questions, this option is DANGEROUS\n");
+	printf("                  and must be specified 3 times to take effect\n");
+	printf("-c COMMAND        non interactive mode, run COMMAND and exit,\n");
+	printf("                  if the command has spaces, it must be quoted\n");
+	printf("-v                show verbose output\n");
+	printf("-d                show debug output\n");
+	printf("-q                do not show warnings, if \"assume Yes\" is active\n");
+	printf("                  the warnings when shrinking/enlarging scubed3\n");
+	printf("                  partitions is also not shown\n");
+	printf("\nMore information:\n\nType \"help\" at the s3> prompt. You only get the prompt\nif the connection to the scubed3 process succeeds\n");
 }
 
 #define NO_COMMANDS (sizeof(ctl_commands)/sizeof(ctl_commands[0]))
@@ -661,31 +726,51 @@ int main(int argc, char **argv) {
 	char *endptr;
 	ctl_priv_t priv;
 	socklen_t len;
-	int opt, i, connections = 0;
+	int ret, opt, i, connections = 0;
 	char *line = NULL;
 	struct sockaddr_un remote;
 
+	/* since we have options to enable verbose and debug, it
+	 * makes no sense to enable them by default */
+	verbose = 0;
+	debug = 0;
 	verbose_init(argv[0]);
 
 	opterr = 0;
-	while ((opt = getopt(argc, argv, "+s:i:a:h")) != -1) {
+	while ((opt = getopt(argc, argv, "+s:i:a:hYc:vdq")) != -1) {
 		switch (opt) {
+			case 'q':
+				quiet = 1;
+				break;
+			case 'v':
+				verbose = 1;
+				break;
+			case 'd':
+				debug = 1;
+				break;
 			case 'h':
-				printf("Usage:\n$ %s [-s KDF_SALT] [-r KDF_ITERATIONS] [-a SOCKET_ADDRESS]\n", exec_name); //argv[0]);
+				show_help();
 				exit(0);
+			case 'c':
+				if (command_option) FATAL("only one -c option may be specified");
+				if (strlen(optarg) == 0) FATAL("command may not be empty");
+				command_option = optarg;
+				break;
 			case 'a':
 				if (strlen(optarg) == 0) FATAL("socket address may not be empty");
 				control_socket = optarg;
 				break;
 			case 's':
 				if (strlen(optarg) == 0) FATAL("salt must not be empty");
-				if (strcmp(optarg, kdf_salt)) WARNING("using custom value for salt, if you forget your salt, you lose access to your devices");
 				kdf_salt = optarg;
 				break;
 			case 'i':
 				kdf_iterations = strtoul(optarg, &endptr, 10);
 				if (*endptr != '\0') FATAL("error in converting %s to unsigned long", optarg);
-				if (kdf_iterations != DEFAULT_KDF_ITERATIONS) WARNING("using custom value for iterations, if you forget this value, you lose access to your devices");
+				break;
+			case 'Y':
+				VERBOSE("assuming yes");
+				assume_yes++;
 				break;
 			case '?':
 				FATAL("unrecognized option %c, use -h for help", optopt);
@@ -697,6 +782,12 @@ int main(int argc, char **argv) {
 
 	assert(!strcmp("SHA256", DEFAULT_KDF_HASH));
 	assert(!strcmp("PBKDF2", DEFAULT_KDF_FUNCTION));
+	if (strcmp(DEFAULT_KDF_SALT, kdf_salt))
+		WARNING("using custom value for salt, if you forget your salt, "
+				"you may lose access to your devices");
+	if (kdf_iterations != DEFAULT_KDF_ITERATIONS)
+		WARNING("using custom value for iterations, if you forget this "
+				"value, you may lose access to your devices");
 	if (kdf_iterations < 1000000) {
 		WARNING("low number of KDF iterations < 1000000, "
 				"this is bad for security");
@@ -705,7 +796,7 @@ int main(int argc, char **argv) {
 	assert(!strcmp("CBC_ESSIV(AES256)", DEFAULT_CIPHER_STRING));
 
 	/* lock me into memory; don't leak info to swap */
-	if (mlockall(MCL_CURRENT|MCL_FUTURE)<0)
+	if (mlockall(MCL_CURRENT|MCL_FUTURE) < 0)
 		WARNING("failed locking process in RAM (not root?): %s",
 				strerror(errno));
 
@@ -744,9 +835,9 @@ int main(int argc, char **argv) {
 				"from the server");
 
 	if (!connections) {
-		printf("scubed3ctl-" VERSION ", connected to scubed3-%s\n",
+		VERBOSE("scubed3ctl-" VERSION ", connected to scubed3-%s",
 				result.argv[2]);
-		printf("cipher: %s, KDF: %s(%s/%ld)\n",
+		VERBOSE("cipher: %s, KDF: %s(%s/%ld)",
 				DEFAULT_CIPHER_STRING, DEFAULT_KDF_FUNCTION,
 				DEFAULT_KDF_HASH, kdf_iterations);
 	} else {
@@ -757,7 +848,11 @@ int main(int argc, char **argv) {
 
 	do {
 		if (line) free(line);
-		line = readline("s3> ");
+		if (command_option) {
+			line = estrdup(command_option);
+		} else line = readline("s3> ");
+
+		// do not store history!
 		//if (line && *line) add_history(line);
 
 		/* exit is a special case */
@@ -771,7 +866,14 @@ int main(int argc, char **argv) {
 			break;
 		}
 
-	} while (!ctl_call(&priv, line));
+		ret = ctl_call(&priv, line);
+
+		if (command_option) {
+			do_server_command(priv.s, 1, "exit");
+			break;
+		}
+
+	} while (!ret);
 
 	free(line);
 
@@ -779,5 +881,5 @@ int main(int argc, char **argv) {
 
 	close(priv.s);
 
-	exit(0);
+	exit(command_option?exit_status:0);
 }

@@ -21,8 +21,9 @@
 #include "verbose.h"
 
 char *exec_name = NULL;
-int debug = 1;
+int debug = 0;
 int verbose = 1;
+int quiet = 0;
 
 void verbose_init(char *argv0) {
 	/* stolen from wget */

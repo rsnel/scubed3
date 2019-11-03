@@ -139,14 +139,12 @@ if the device is umounted, it will also be closed.
     0001024 blocks total
     s3>
 
-License
-~~~~~~~
+## License
 
 GPL v3 or (at your option) any later version
 
 
-Terminoloy
-~~~~~~~~~~
+## Terminoloy
 
 base device: this file/device/database holds all macroblocks, our worst case
 threat-model assumes an adversary can make snapshots of it at will, each block
@@ -166,19 +164,21 @@ information on where the mesoblock belongs on the scubed3 partition.
 indexblock: the first mesoblock in each macroblock contains information
 about the other mesoblocks in said macroblock
 
-ESSIV is a function that turns an uint64_t and two uint32_t's in a 128 bit
+
+## Encryption
+
+ESSIV is a function that turns an `uint64_t` and two `uint32_t`'s in a 128 bit
 block for use as IV.
 
-indexblocks are encrypted with IV = ESSIV(0, macroblock_number, 0)
+indexblocks are encrypted with `IV = ESSIV(0, macroblock_number, 0)`
 
-mesoblocks are encrypted with IV = ESSIV(seqno, macroblock_number, index)
+mesoblocks are encrypted with `IV = ESSIV(seqno, macroblock_number, index)`
 
-the indexblock IV will repeat when the same disk block is written
+the indexblock IV will repeat when the same disk block is written, this is not a problem, because the first 32 bytes of an indexblock are equal to the hash of the rest of the indexblock and the indexblock contains a unique number (the sequence number)
 
 the mesoblock IV will never repeat (as long as the seqno is not reset)
 
-Threat model
-~~~~~~~~~~~~
+## Threat model
 
 The adversary has full knowledge about the macroblocks (including history) and
 may even have write access to them. This adversary may have keys to some
@@ -187,8 +187,7 @@ partitions to which the adversary has no keys.  Only paranoia level 3 protects
 completely against this. We assume the adversary cannot detect read access.
 
 
-Paranoia levels
-~~~~~~~~~~~~~~~
+## Paranoia levels
 
 When a new macroblock needs to be selected:
 
@@ -206,7 +205,7 @@ Level 2: just paranoid (NOT IMPLEMENTED YET)
 
 a random block of the device is selected. If it happens to be allocated to the
 current device, it is used. If it happens to be allocated to another device, it
-is updated with a new seqno (therefore every bit will change with a probalility
+is updated with a new seqno (therefore every bit will change with a probability
 of .5). If the block is unallocated, it will be added to the device, another
 block will be deleted. (this level of paranoia is required for flash media,
 this kind of media keeps an internal record about the order in whichs blocks
@@ -222,18 +221,7 @@ to hide any real activity, this severely hurts performance. Considerations
 of level 2 apply. It will wear out your flash very efficiently.
 
 
-How to start
-~~~~~~~~~~~~
-
-You need to provide a set of macroblocks to scubed3, to which it has read/write
-access. Normally this is either a file or a block device, but it may be
-anything. (you would, however, need to write a custom blockio_init_* function
-and provide read, write and close methods to it if it is not a file or a block
-device)
-
-
-Control protocol
-~~~~~~~~~~~~~~~~
+## Control protocol
 
 /MOUNTPOINT/.control is a file to which commands can be written, and
 scubed3's response can be read. A command is a line of text terminated
@@ -257,7 +245,7 @@ opens a scubed partition
 * NAME is the name, like root or swap, whatever, the name has no real meaning,
 you can open any partition under any name
 
-* MODE is the ciphermode, eg CBC_LARGE(AES)
+* MODE is the ciphermode, eg `CBC_LARGE(AES)`
 
 * KEY is the cipher key bas16 encoded (hex).
 
@@ -270,8 +258,7 @@ resizes a scubed partition
 * MACROBLOCKS, the amount of macroblocks owned by the partition
 
 
-Example calculation of indexblock size
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+## Example calculation of indexblock size
 
 For this example we assume the following. Macroblock size 4MB (m). Mesoblock
 size 16kB (s). So, there are 256 mesoblocks per macroblock. Mesoblock
@@ -283,29 +270,30 @@ support (the size of a backing device can change, so scubed3 should be able to
 deal with it, up to a maximum size).
 
 The useful size of the device is
-	(1<<(macroblock_log - mesoblock_log) - 1)(no_macroblocks - reserved_blocks)
 
-Note that the usable size is limited by 2^32*(1<<mesoblock_log) - 1, because the
+    (1<<(macroblock_log - mesoblock_log) - 1)(no_macroblocks - reserved_blocks)
+
+Note that the usable size is limited by `2^32*(1<<mesoblock_log) - 1`, because the
 device is partitioned in mesoblocks, and we have 32 bits available to index
 the mesoblocks.
 
 Layout of macroblock:
 
-0x000000 SHA256_HASH_INDEXBLOCK hash of 0x000020 - 0x003FFF
-0x000020 SHA256_HASH_DATA (hash of ciphertext)
-0x000040 SHA256_HASH_SEQNOS  /* seqnos of used macroblocks */
-0x000060 uint64_t seqno
-0x000068 uint64_t next_seqno
-0x000070 8byte literal "SSS3v0.1"
-0x000078 uint32_t no_macroblocks
-0x00007C uint32_t reserved_blocks
-0x000080 uint8_t[128] reserved space, MUST be 0
-0x000100 uint32_t no_indices
-0x000104 uint32_t idx0x01
-0x000108 uint32_t idx0x02
-......
-0x0004FC uint32_t idx0xff
-0x000500 bitmap: each bit represents a macroblock of the base device
+    0x000000 SHA256_HASH_INDEXBLOCK hash of 0x000020 - 0x003FFF
+    0x000020 SHA256_HASH_DATA (hash of ciphertext)
+    0x000040 SHA256_HASH_SEQNOS  /* seqnos of used macroblocks */
+    0x000060 uint64_t seqno
+    0x000068 uint64_t next_seqno
+    0x000070 8byte literal "SSS3v0.1"
+    0x000078 uint32_t no_macroblocks
+    0x00007C uint32_t reserved_blocks
+    0x000080 uint8_t[128] reserved space, MUST be 0
+    0x000100 uint32_t no_indices
+    0x000104 uint32_t idx0x01
+    0x000108 uint32_t idx0x02
+    ......
+    0x0004FC uint32_t idx0xff
+    0x000500 bitmap: each bit represents a macroblock of the base device
 		 0 FREE
 		   this block may be ours: if so, it has our signature
 		   on disk (otherwise we wouldn't be able to know that
@@ -318,19 +306,19 @@ Layout of macroblock:
 		(notice that it only makes sense not to care about the contents
  		of a block if there are no older revisions of that data available
 		that we DO care about...)
-0x003FFC last 32 bits of bitmap (the bitmap is stored in units of 32 bits)
-0x004000 mesoblock1
-0x008000 mesoblock2
-0x00C000 mesoblock3
-........
-0x3FC000 mesoblock255
-0x400000 end
+    0x003FFC last 32 bits of bitmap (the bitmap is stored in units of 32 bits)
+    0x004000 mesoblock1
+    0x008000 mesoblock2
+    0x00C000 mesoblock3
+    ........
+    0x3FC000 mesoblock255
+    0x400000 end
 
-There is space to index 0x4000 - 0x0500 = 0x3B00 = 15104 bytes,
-which corresponds to a base device size of 15104*8 = 120832 macroblocks,
-which correspond to 4MiB * 120832 = 472GiB
+There is space to index `0x4000 - 0x0500 = 0x3B00 = 15104` bytes,
+which corresponds to a base device size of `15104*8 = 120832` macroblocks,
+which correspond to `4MiB * 120832 = 472GiB`
 
-Maximum usable size of the device is 2^32*(1<<mesoblock_log) = 64TiB, which is
+Maximum usable size of the device is `2^32*(1<<mesoblock_log) = 64TiB`, which is
 sufficient in the light of the maximum size of the backing device.
 
 In general the indexblock requires:
@@ -338,9 +326,9 @@ In general the indexblock requires:
 - 4 bytes for every mesoblock in a macroblock
 - 1 bit for every macroblock
 
-Random block selection
-~~~~~~~~~~~~~~~~~~~~~~
+## Random block selection
 
 How to randomly select blocks and assign roles to them?
 
+To be continued.
 

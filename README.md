@@ -25,8 +25,11 @@ it will only work on a per-device basis.
 
 ## Tutorial
 
-Create a partition, file or logical volume of, say, `4GiB`. And a mountpoint `/mnt/scubed3`. Then
-run
+Create a partition, file or logical volume of, say, `4GiB`. You will also need
+at least two mountpoints, one for `scubed3` (/mnt/scubed3) itself and any number for the
+`scubed3` devices you create (/mnt/test).
+
+Then run
 
     # scubed3 -f -b /dev/PARTITION /mnt/scubed3
 
@@ -52,6 +55,86 @@ it outputs some information and gives you a `s3>` prompt
     scubed3ctl:cipher: CBC_ESSIV(AES256), KDF: PBKDF2(SHA256/16777216)
     s3>
 
+The command `p` shows information about the disk
+
+    s3> p
+    0001024 blocks unclaimed
+    0001024 blocks total
+    s3>
+
+Let's create a new device. The command to do that is `create` and it will ask you for a passphrase
+associated to the new device. Since the device is new, `scubed3` can't know if you typed the
+passphrase correctly, so you have to type it twice
+
+    s3> create foo
+    Enter passphrase:
+    Verify passphrase:
+    scubed3ctl:computing 16777216 iterations of PBKDF2(SHA256), please wait...
+    s3> p
+    0000000 blocks in foo (0.0MiB)
+    0001024 blocks unclaimed
+    0001024 blocks total
+    s3>
+
+The device is created, but it has no blocks yet. Nothing has been written to disk. To
+allocate some blocks to this device use the command `resize`, we also create a filesystem
+on it, mount it at `/mnt/test`, give permissions to `USERNAME` on the mounted filesystem
+and query the status of the disk with `p`.
+
+    s3> resize foo 32
+    ---WARNING---WARNING---WARNING---WARNING---WARNING---WARNING---WARNING---
+    allocating 32 blocks for foo from the unclaimed pool, this is
+    only safe if ALL your scubed3 partitions are open, continue? [No] Yes
+    s3> mke2fs foo
+    mke2fs 1.44.5 (15-Dec-2018)
+    Creating filesystem with 97920 1k blocks and 24480 inodes
+    Filesystem UUID: 704b5a90-6897-452b-95d9-f0c0d585330b
+    Superblock backups stored on blocks:
+            8193, 24577, 40961, 57345, 73729
+    
+    Allocating group tables: done
+    Writing inode tables: done
+    Writing superblocks and filesystem accounting information: done
+    
+    
+    s3> mount foo /mnt/test
+    s3> chown USERNAME foo
+    s3> p
+    0000032 blocks in foo (95.6MiB) [U] [MNT /mnt/test]
+    0000992 blocks unclaimed
+    0001024 blocks total
+    s3>
+
+Now the command `p` shows that `foo` is in use `[U]` and mounted at `/mnt/test`.
+You can put some files in `/mnt/test` and then `umount` and `close` it.
+
+    s3> umount foo
+    s3> close foo
+    s3> p
+    0001024 blocks unclaimed
+    0001024 blocks total
+    s3>
+
+It is as if nothing happened. If you want access to `foo` again, you can use the `mount` command
+directly.
+
+    s3> mount foo /mnt/test
+    Enter passphrase:
+    scubed3ctl:computing 16777216 iterations of PBKDF2(SHA256), please wait...
+    s3> p
+    0000032 blocks in foo (95.6MiB) [U] [C] [MNT /mnt/test]
+    0000992 blocks unclaimed
+    0001024 blocks total
+    s3>
+
+In addition to `[U]` and `[MNT /mnt/test]` we also see the `[C]` flag. This means that
+if the device is umounted, it will also be closed.
+
+    s> umount foo
+    s> p
+    0001024 blocks unclaimed
+    0001024 blocks total
+    s3>
 
 License
 ~~~~~~~

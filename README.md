@@ -42,9 +42,11 @@ The `-f` option keeps `scubed3` in the foreground, so you can see the verbose ou
     scubed3:maximum amount of macroblocks supported 120832
     scubed3:listening for connection with scubed3ctl on /tmp/scubed3
 
-Internally `scubed3` uses `FUSE`, https://github.com/libfuse/libfuse, to make hidden devices available
-to the OS. It also uses a unix domain socket to communicate with the outside world. The program
-`scubed3ctl` is a client to connect to a running `scubed3` process. If you run it as follows
+Internally `scubed3` uses `FUSE`, [Filesystem in
+Userspace](https://github.com/libfuse/libfuse), to make hidden devices
+available to the OS. It also uses a unix domain socket to communicate with the
+outside world. The program `scubed3ctl` is a client to connect to a running
+`scubed3` process. If you run it as follows
 
     # scubed3ctl -v -d
 
@@ -62,9 +64,10 @@ The command `p` shows information about the disk
     0001024 blocks total
     s3>
 
-Let's create a new device. The command to do that is `create` and it will ask you for a passphrase
-associated to the new device. Since the device is new, `scubed3` can't know if you typed the
-passphrase correctly, so you have to type it twice
+Let's create a new device. The command to do that is `create` and it will ask
+you for a passphrase associated to the new device. Since the device is new,
+`scubed3` can't know if you typed the passphrase correctly, so you have to type
+it twice
 
     s3> create foo
     Enter passphrase:
@@ -76,10 +79,10 @@ passphrase correctly, so you have to type it twice
     0001024 blocks total
     s3>
 
-The device is created, but it has no blocks yet. Nothing has been written to disk. To
-allocate some blocks to this device use the command `resize`, we also create a filesystem
-on it, mount it at `/mnt/test`, give permissions to `USERNAME` on the mounted filesystem
-and query the status of the disk with `p`.
+The device is created, but it has no blocks yet. Nothing has been written to
+disk. To allocate some blocks to this device use the command `resize`, we also
+create a filesystem on it, mount it at `/mnt/test`, give permissions to
+`USERNAME` on the mounted filesystem and query the status of the disk with `p`.
 
     s3> resize foo 32
     ---WARNING---WARNING---WARNING---WARNING---WARNING---WARNING---WARNING---
@@ -91,12 +94,12 @@ and query the status of the disk with `p`.
     Filesystem UUID: 704b5a90-6897-452b-95d9-f0c0d585330b
     Superblock backups stored on blocks:
             8193, 24577, 40961, 57345, 73729
-    
+
     Allocating group tables: done
     Writing inode tables: done
     Writing superblocks and filesystem accounting information: done
-    
-    
+
+
     s3> mount foo /mnt/test
     s3> chown USERNAME foo
     s3> p

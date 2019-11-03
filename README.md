@@ -1,5 +1,6 @@
-Scubed3
-~~~~~~~
+# Scubed3
+
+## Introduction
 
 Scubed3 stands for Simple Steganographic Store 3. It is the successor of
 [scubed](https://penta.snel.it/~rsnel/scubed/) and the humiliating failure that
@@ -22,22 +23,35 @@ VAPORWARE WARNING: completely random block selection is not implemented yet,
 it will only work on a per-device basis.
 
 
-Quick example
-~~~~~~~~~~~~~
+## Tutorial
 
 Create a partition, file or logical volume of, say, `4GiB`. And a mountpoint `/mnt/scubed3`. Then
 run
 
-	# scubed3 -f -b /dev/PARTITION /mnt/scubed3
+    # scubed3 -f -b /dev/PARTITION /mnt/scubed3
 
 The `-f` option keeps `scubed3` in the forground, so you can see the verbose output. It responds with
 
-	scubed3:version UNKNOWN Copyright (C) 2019, Rik Snel <rik@snel.it>
-	scubed3:mesoblock size 16384 bytes, macroblock size 4194304 bytes
-	scubed3:256 mesoblocks per macroblock, including index
-	scubed3:required minimumsize of indexblock excluding macroblock index is 1280 bytes
-	scubed3:maximum amount of macroblocks supported 120832
-	scubed3:listening for connection with scubed3ctl on /tmp/scubed3
+    scubed3:version UNKNOWN Copyright (C) 2019, Rik Snel <rik@snel.it>
+    scubed3:mesoblock size 16384 bytes, macroblock size 4194304 bytes
+    scubed3:256 mesoblocks per macroblock, including index
+    scubed3:required minimumsize of indexblock excluding macroblock index is 1280 bytes
+    scubed3:maximum amount of macroblocks supported 120832
+    scubed3:listening for connection with scubed3ctl on /tmp/scubed3
+
+Internally `scubed3` uses `fuse`, the userspace filesystem, to make hidden devices available
+to the OS. It also uses a unix domain socket to communicate with the outside world. The program
+`scubed3ctl` is a client to connect to a running `scubed3` process. If you run it as follows
+
+    # scubed3ctl -v -d
+
+it outputs some information and gives you a `s3>` prompt
+
+    scubed3ctl:debug:using version 1.8.4 of libgcrypt
+    scubed3ctl:scubed3ctl-UNKNOWN, connected to scubed3-UNKNOWN
+    scubed3ctl:cipher: CBC_ESSIV(AES256), KDF: PBKDF2(SHA256/16777216)
+    s3>
+
 
 License
 ~~~~~~~

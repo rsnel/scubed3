@@ -1,3 +1,44 @@
+Scubed3
+~~~~~~~
+
+Scubed3 stands for Simple Steganographic Store 3. It is the successor of
+[scubed](https://penta.snel.it/~rsnel/scubed/) and the humiliating failure that
+is [scubed2](https://snel.it/svn/scubed2/trunk/).
+
+The original scubed is vulnerable to surface anaylsis; carefully watching the
+surface of a harddisk (or examining the internal log of an SSD), you can
+determine which parts of the disk are used. When an adversary sees the disk is
+used in a spot, you lose plausible deniability of the existence of a key to
+decrypt that part of the disk. TrueCrypt/VeraCrypt hidden volumes are also
+vulnerable to this attack.
+
+Scubed3 aims to protect against surface analysis. To do this we divide the disk
+in macroblocks with a size of, for example, `4MiB`. If the disk is in use, and
+data must be written, randomly selected macroblocks will be written one by one
+until all data is written. If a macroblock is written, all bits of that macroblock
+change with probability 0.5.
+
+VAPORWARE WARNING: completely random block selection is not implemented yet,
+it will only work on a per-device basis.
+
+
+Quick example
+~~~~~~~~~~~~~
+
+Create a partition, file or logical volume of, say, `4GiB`. And a mountpoint `/mnt/scubed3`. Then
+run
+
+	# scubed3 -f -b /dev/PARTITION /mnt/scubed3
+
+The `-f` option keeps `scubed3` in the forground, so you can see the verbose output. It responds with
+
+	scubed3:version UNKNOWN Copyright (C) 2019, Rik Snel <rik@snel.it>
+	scubed3:mesoblock size 16384 bytes, macroblock size 4194304 bytes
+	scubed3:256 mesoblocks per macroblock, including index
+	scubed3:required minimumsize of indexblock excluding macroblock index is 1280 bytes
+	scubed3:maximum amount of macroblocks supported 120832
+	scubed3:listening for connection with scubed3ctl on /tmp/scubed3
+
 License
 ~~~~~~~
 

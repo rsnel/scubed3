@@ -33,7 +33,7 @@ Then run
 
     # scubed3 -f -b /dev/PARTITION /mnt/scubed3
 
-The `-f` option keeps `scubed3` in the forground, so you can see the verbose output. It responds with
+The `-f` option keeps `scubed3` in the foreground, so you can see the verbose output. It responds with
 
     scubed3:version UNKNOWN Copyright (C) 2019, Rik Snel <rik@snel.it>
     scubed3:mesoblock size 16384 bytes, macroblock size 4194304 bytes
@@ -42,7 +42,7 @@ The `-f` option keeps `scubed3` in the forground, so you can see the verbose out
     scubed3:maximum amount of macroblocks supported 120832
     scubed3:listening for connection with scubed3ctl on /tmp/scubed3
 
-Internally `scubed3` uses `fuse`, the userspace filesystem, to make hidden devices available
+Internally `scubed3` uses `FUSE`, https://github.com/libfuse/libfuse, to make hidden devices available
 to the OS. It also uses a unix domain socket to communicate with the outside world. The program
 `scubed3ctl` is a client to connect to a running `scubed3` process. If you run it as follows
 

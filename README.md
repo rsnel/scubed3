@@ -330,5 +330,56 @@ In general the indexblock requires:
 
 How to randomly select blocks and assign roles to them?
 
-To be continued.
+Let's assume we have a device that consists of six macroblocks; 0 to 5
+(inclusive). The block that is selected first has `sequence_number = 1`, then
+second `sequence_number = 2` and so forth. We select blocks randomly by using
+random number generator. In this example, the random number generator generated:
 
+    341435513205214342043533
+
+Since we generate a bunch of random numbers at once; we know when a block will
+be reselected in the future. This knowledge is encoded in `nseq` (`next_sequence_number`).
+
+The algorithm is as follows, in the nth step a block is selected:
+
+- if the block will be immediately reselected (`nseq = seq + 1`), do a dummy write `!`
+
+- if the block that will be selected next has data, copy that data to this block (mark old block with `^` and copy letter to this block)
+
+- if the block that will be selected next has no data, give this block a new letter (`a`, `b`, `c` etc)
+
+Here is an example. The square brackets denote the number that is chosen by the random number generator.
+
+    seq   nseq   0  1  2  3  4  5
+      1->    5:  -  -  - [a] -  - 
+      2->    4:  -  -  -  a [b] - 
+      3->    8:  - [b] -  a  ^  - 
+      4->   15:  -  b  -  ^ [a] - 
+      5->    9:  -  b  - [c] a  - 
+      6->    7:  -  b  -  c  a [!]
+      7->   12:  -  ^  -  c  a [b]
+      8->   13:  - [c] -  ^  a  b 
+      9->   16:  -  c  - [d] a  b 
+     10->   18:  -  c [e] d  a  b 
+     11->   14: [b] c  e  d  a  ^ 
+     12->   22:  b  ^  e  d  a [c]
+     13->   38:  ^ [b] e  d  a  c 
+     14->   19: [a] b  e  d  ^  c 
+     15->   17:  a  b  e  ^ [d] c 
+     16->   21:  a  b  e [d] ^  c 
+     17->   20:  a  b  ^  d [e] c 
+     18->   27:  ^  b [a] d  e  c 
+     19->   30: [e] b  a  d  ^  c 
+     20->   25:  e  b  a  ^ [d] c 
+     21->   23:  e  b  a [c] d  ^ 
+     22->   48:  e  b  a  ^  d [c]
+     23->   24:  e  b  a [!] d  c 
+     24->   26:  e  b  a [d] ^  c 
+
+This doesn't look very practical, but because we use a log structured block
+device on top of it, with 25% reserved space, this approach is very managable.
+
+## Log structured block device
+
+In our example, we have macroblocks of `4MiB` and mesoblocks of `16kiB`. Each macroblock has
+one indexblock and `255` mesoblocks.

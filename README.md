@@ -236,27 +236,26 @@ Commands:
 
 - status
 
-shows the status
+  shows the status
 
 - open NAME MODE KEY
 
 opens a scubed partition
 
-* NAME is the name, like root or swap, whatever, the name has no real meaning,
-you can open any partition under any name
+  * NAME is the name, like root or swap, whatever, the name has no real meaning,
+    you can open any partition under any name
 
-* MODE is the ciphermode, eg `CBC_LARGE(AES)`
+  * MODE is the ciphermode, eg `CBC_LARGE(AES)`
 
-* KEY is the cipher key bas16 encoded (hex).
+   * KEY is the cipher key bas16 encoded (hex).
 
 - resize NAME MACROBLOCKS
 
-resizes a scubed partition
+  resizes a scubed partition
 
-* NAME ....
+  * NAME ....
 
-* MACROBLOCKS, the amount of macroblocks owned by the partition
-
+  * MACROBLOCKS, the amount of macroblocks owned by the partition
 
 ## Example calculation of indexblock size
 
@@ -322,8 +321,11 @@ Maximum usable size of the device is `2^32*(1<<mesoblock_log) = 64TiB`, which is
 sufficient in the light of the maximum size of the backing device.
 
 In general the indexblock requires:
+
 - fixed size: 260 bytes (including 128 bytes of reserved space)
+
 - 4 bytes for every mesoblock in a macroblock
+
 - 1 bit for every macroblock
 
 ## Random block selection
@@ -382,4 +384,49 @@ device on top of it, with 25% reserved space, this approach is very managable.
 ## Log structured block device
 
 In our example, we have macroblocks of `4MiB` and mesoblocks of `16kiB`. Each macroblock has
-one indexblock and `255` mesoblocks.
+one indexblock and `255` mesoblocks. Suppose a scubed3 partition has 80 macroblocks allocated
+to it. The usable size of this partition will be `0.75*80*255*16 kiB = 244800 kiB` or `0.75*80*255 = 15300` mesoblocks.
+
+A mesoblock can have one of three states:
+
+- never written; the mesoblock does not exist on disk or in the cache, if you
+  read from it you get zeroes, if you write to it, it gets moved to the cache
+and written there
+
+- in the cache; the mesoblock exists in the cache (and maybe on disk),
+  mesoblocks in the cache can easily be modified
+
+- on disk; the mesoblock is encrypted on disk, upon read it is decrypted and
+  upon write it is moved to the cache and written there
+
+Scubed3 keeps track of the location of all mesoblocks using an `uint32_t` array
+called `block_indices`. In the case of our example, this array has a size of
+`15300`. Information about mesoblock `17` (the eighteent mesoblock, since we
+count from zero) is stored in `block_indices[17]`.
+
+- if the value is `0xffffffff`, then the mesoblock is never written
+
+- otherwise the high bits are equal to the macroblock number and the low bits are the index
+  of the mesoblock in the macroblock
+  
+  * if the macroblock pointed to is the current macroblock, the mesoblock is in the cache
+
+  * otherwise, it is on disk
+
+Relevant information is grabbed from `block_indices` by shifting and masking. The shift,
+which represents the amount of mesoblocks in a macroblock (including the indexblock) is 
+calculated as follows.
+
+    mesobits = macroblock_log - mesoblk_log
+
+In our example (`macrobock_log = lg(4194304) = 22` and `mesoblk_log = lg(16384) = 14`), `mesobits = 22 - 14 = 8`, which corresponds to `2^8 = 256` mesoblocks per macroblock (including the indexblock).
+
+The macroblock number can be computed from `block_indices[17]` by shifting it `mesobits` to the right
+
+    macroblock_number =  block_indices[17]>>mesobits
+
+The number of the mesoblock in the macroblock, can be found by masking with `mesomask`
+
+    mesomask = 0xffffffff>>(32 - mesobits)
+
+In our example `mesomask = 0x000000ff`.

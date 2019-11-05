@@ -240,14 +240,14 @@ Commands:
 
 - open NAME MODE KEY
 
-opens a scubed partition
+  opens a scubed partition
 
   * NAME is the name, like root or swap, whatever, the name has no real meaning,
     you can open any partition under any name
 
   * MODE is the ciphermode, eg `CBC_LARGE(AES)`
 
-   * KEY is the cipher key bas16 encoded (hex).
+  * KEY is the cipher key bas16 encoded (hex).
 
 - resize NAME MACROBLOCKS
 

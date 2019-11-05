@@ -312,6 +312,7 @@ void blockio_dev_fake_mesoblk_part(blockio_dev_t *dev, void *addr,
 	memset(addr, 0, size);
 }
 
+/* cow stand for 'copy on write' */
 void do_cow(scubed3_t *l, uint32_t index, uint32_t muoff,
 		uint32_t size, void *addr) {
 	void (*readorfake)(blockio_dev_t*, void*, uint32_t, uint32_t,

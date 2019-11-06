@@ -1,0 +1,32 @@
+{
+   libgcrypt global init leak 1
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   fun:malloc
+   obj:/lib/x86_64-linux-gnu/libgcrypt.so.20.2.4
+   obj:/lib/x86_64-linux-gnu/libgcrypt.so.20.2.4
+   obj:/lib/x86_64-linux-gnu/libgcrypt.so.20.2.4
+   obj:/lib/x86_64-linux-gnu/libgcrypt.so.20.2.4
+   obj:/lib/x86_64-linux-gnu/libgcrypt.so.20.2.4
+   obj:/lib/x86_64-linux-gnu/libgcrypt.so.20.2.4
+   obj:/lib/x86_64-linux-gnu/libgcrypt.so.20.2.4
+   fun:gcry_control
+   fun:gcry_global_init
+   fun:main
+}
+{
+   libgcrypt global init leak 2
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   fun:malloc
+   obj:/lib/x86_64-linux-gnu/libgcrypt.so.20.2.4
+   obj:/lib/x86_64-linux-gnu/libgcrypt.so.20.2.4
+   obj:/lib/x86_64-linux-gnu/libgcrypt.so.20.2.4
+   obj:/lib/x86_64-linux-gnu/libgcrypt.so.20.2.4
+   obj:/lib/x86_64-linux-gnu/libgcrypt.so.20.2.4
+   obj:/lib/x86_64-linux-gnu/libgcrypt.so.20.2.4
+   fun:gcry_control
+   fun:gcry_global_init
+   fun:main
+}
+

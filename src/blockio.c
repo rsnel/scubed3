@@ -88,6 +88,8 @@ static void *stream_open(const char *path) {
 
 void blockio_free(blockio_t *b) {
 	assert(b);
+	free(b->open_priv);
+	dllarr_free(&b->unallocated);
 	free(b->blockio_infos);
 	pthd_mutex_destroy(&b->unallocated_mutex);
 }

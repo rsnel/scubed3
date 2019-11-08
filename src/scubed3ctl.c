@@ -587,6 +587,10 @@ static int ctl_mount(ctl_priv_t *priv, char *argv[]) {
 	}
 	if (do_server_command(priv->s, 0, "info %s", argv[0])) return -1;
 	if (result.status) {
+		exit_status = EXIT_SUCCESS; // previous error is handled
+					    // here so do not exit with
+					    // EXIT_FAILURE yet
+
 		// we try to open the partition
 		do_local_command(priv, hashtbl_find_element_bykey(&priv->c,
 					"open"), "%s", argv[0]);

@@ -53,7 +53,9 @@ static int fuse_io_getattr(const char *path, struct stat *stbuf) {
 			entries, path + 1);
 	if (!entry) return -ENOENT;
 
-	stbuf->st_mode = S_IFREG|0600;
+	if (!entry->readonly) stbuf->st_mode = S_IFREG|0600;
+	else stbuf->st_mode = S_IFREG|0400;
+
 	stbuf->st_nlink = 1;
 	stbuf->st_size = entry->size;
 

@@ -248,12 +248,13 @@ static int control_status(int s, control_thread_priv_t *priv, char *argv[]) {
 		size_t size = ((entry->d.no_macroblocks - entry->d.reserved_macroblocks)*entry->d.b->mmpm);
 		priv->macroblocks_left -= entry->d.no_macroblocks;
                 return control_write_line(priv->s,
-				"%07u blocks in %s (%.1fMiB)%s%s%s%s%s\n",
+				"%07u blocks in %s (%.1fMiB)%s%s%s%s%s%s\n",
 				entry->d.no_macroblocks, entry->head.key,
 				((entry->d.no_macroblocks >= entry->d.reserved_macroblocks)?
 				 	size<<entry->d.b->mesoblk_log:0)/(1024.*1024.),
 				entry->inuse?" [U]":"",
 				entry->close_on_release?" [C]":"",
+				entry->readonly?" [R]":"",
 				entry->mountpoint?" [MNT ":"",
 				entry->mountpoint?entry->mountpoint:"",
 				entry->mountpoint?"]":"");
@@ -443,6 +444,34 @@ static int control_get_aux(int s, control_thread_priv_t *priv, char *argv[]) {
 	return control_write_complete(s, 0, "%s", ans);
 }
 
+static int control_set_readonly(int s,
+		control_thread_priv_t *priv, char *argv[]) {
+	fuse_io_entry_t *entry = hashtbl_find_element_bykey(priv->h, argv[0]);
+	int err = 0;
+
+	if (!entry) return control_write_complete(s, 1,
+			"partition \"%s\" not found", argv[0]);
+
+	if (entry->inuse) {
+		hashtbl_unlock_element_byptr(entry);
+		return control_write_complete(s, 1,
+				"partition \"%s\" is busy", argv[0]);
+	}
+
+	if (!strcmp(argv[1], "0") || !strcasecmp(argv[1], "false")) {
+		entry->readonly = 0;
+	} else if (!strcmp(argv[1], "1") || !strcasecmp(argv[1], "true")) {
+		entry->readonly = 1;
+	} else err = 1;
+
+	hashtbl_unlock_element_byptr(entry);
+
+	if (err) return control_write_complete(s, 1,
+			"illegal argument; expected boolean");
+
+	return control_write_silent_success(s);
+}
+
 static int control_set_close_on_release(int s,
 		control_thread_priv_t *priv, char *argv[]) {
 	fuse_io_entry_t *entry = hashtbl_find_element_bykey(priv->h, argv[0]);
@@ -601,6 +630,10 @@ static control_command_t control_commands[] = {
 		.command = control_status,
 		.argc = 0,
 		.usage = ""
+	}, {
+		.head.key = "set-readonly",
+		.command = control_set_readonly,
+		.argc = 2,
 	}, {
 		.head.key = "set-close-on-release",
 		.command = control_set_close_on_release,

@@ -29,6 +29,7 @@ typedef struct fuse_io_entry_s {
 
         uint64_t size;
         int inuse;
+	int readonly;
 	int to_be_deleted;
 	int close_on_release;
 	char *mountpoint;

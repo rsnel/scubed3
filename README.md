@@ -220,6 +220,24 @@ while active, the daemon writes blocks to random locations at regular intervals
 to hide any real activity, this severely hurts performance. Considerations
 of level 2 apply. It will wear out your flash very efficiently.
 
+### How paranoia levels (should) work internally
+
+Every open scubed3 partition has a cache. When a write is done on a scubed3
+partition an update is done in the cache. Sometimes a mesoblock is written that
+already is in the cache, and sometimes a mesoblock is added. When the cache is
+full when a mesoblock needs to be added, the scubed3 partition signals the
+paranoia manager that a block needs to be written and waits for the paranoia
+manager to signal that the cache is not full anymore.
+
+The paranoia manager ultimately decides when blocks are written. When it
+receives a signal that the cache is full, it waits until it is time to write a
+block and then writes it and signals the scubed3 partition that space is freed
+up in the cache. It can also write blocks without being asked by scubed3
+partitions. It then takes mesoblocks from the cache until the next block is
+full, and writes it.
+
+In this way all the paranoia levels can be implemented without the scubed3
+device caring about it.
 
 ## Control protocol
 

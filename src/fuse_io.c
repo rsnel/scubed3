@@ -269,8 +269,8 @@ int fuse_io_start(int argc, char **argv, blockio_t *b) {
 	ret = fuse_main_custom(argc, argv, &fuse_io_operations,
 			sizeof(fuse_io_operations), &priv, 0);
 
-	hashtbl_free(&priv.ids);
 	hashtbl_free(&priv.entries);
+	hashtbl_free(&priv.ids);
 
 	return ret;
 }

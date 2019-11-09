@@ -720,7 +720,10 @@ void show_help() {
 	printf("-d                show debug output\n");
 	printf("-q                do not show warnings, if \"assume Yes\" is active\n");
 	printf("                  the warnings when shrinking/enlarging scubed3\n");
-	printf("                  partitions is also not shown\n");
+	printf("                  partitions is also not shown\n\n");
+	printf("Using options -s, -i or -a is not recommended, because you can\n");
+	printf("lose access to your scubed3 partitions if you lose the values\n");
+	printf("you used when you created the devices\n");
 	printf("\nMore information:\n\nType \"help\" at the s3> prompt. You only get the prompt\nif the connection to the scubed3 process succeeds\n");
 }
 
@@ -787,14 +790,11 @@ int main(int argc, char **argv) {
 	assert(!strcmp("SHA256", DEFAULT_KDF_HASH));
 	assert(!strcmp("PBKDF2", DEFAULT_KDF_FUNCTION));
 	if (strcmp(DEFAULT_KDF_SALT, kdf_salt))
-		WARNING("using custom value for salt, if you forget your salt, "
-				"you may lose access to your devices");
+		WARNING("using a custom salt is not recommended");
 	if (kdf_iterations != DEFAULT_KDF_ITERATIONS)
-		WARNING("using custom value for iterations, if you forget this "
-				"value, you may lose access to your devices");
+		WARNING("a custom iteration count is not recommended");
 	if (kdf_iterations < 1000000) {
-		WARNING("low number of KDF iterations < 1000000, "
-				"this is bad for security");
+		WARNING("low number of KDF iterations, not recommended");
 	} 
 	assert(DEFAULT_KDF_ITERATIONS == 16*1024*1024);
 	assert(!strcmp("CBC_ESSIV(AES256)", DEFAULT_CIPHER_STRING));

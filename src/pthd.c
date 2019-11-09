@@ -146,6 +146,13 @@ void pthd_cond_signal(pthread_cond_t *cond) {
 				err);
 }
 
+void pthd_cond_broadcast(pthread_cond_t *cond) {
+	int err;
+	if ((err = pthread_cond_broadcast(cond)))
+		FATAL("unknown error %d trying to broadcast condition variable",
+				err);
+}
+
 void pthd_cond_wait(pthread_cond_t *cond, pthread_mutex_t *mutex) {
 	int err;
 	if ((err = pthread_cond_wait(cond, mutex)))

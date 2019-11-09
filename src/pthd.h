@@ -42,6 +42,8 @@ void pthd_cond_init(pthread_cond_t*);
 
 void pthd_cond_signal(pthread_cond_t*);
 
+void pthd_cond_broadcast(pthread_cond_t*);
+
 void pthd_cond_wait(pthread_cond_t*, pthread_mutex_t*);
 
 void pthd_cond_destroy(pthread_cond_t*);

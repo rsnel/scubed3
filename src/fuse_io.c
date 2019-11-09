@@ -27,6 +27,7 @@
 #include "util.h"
 #include "blockio.h"
 #include "pthd.h"
+#include "plmgr.h"
 #include "control.h"
 #include "fuse_io.h"
 
@@ -34,6 +35,8 @@ typedef struct fuse_io_priv_s {
 	hashtbl_t entries, ids;
 	pthread_t control_thread;
 	control_thread_priv_t control_thread_priv;
+	pthread_t plmgr_thread;
+	plmgr_thread_priv_t plmgr_thread_priv;
 } fuse_io_priv_t;
 
 static int fuse_io_getattr(const char *path, struct stat *stbuf) {
@@ -176,6 +179,10 @@ void *fuse_io_init(struct fuse_conn_info *conn) {
 	pthread_create(&priv->control_thread, NULL, control_thread,
 			&priv->control_thread_priv);
 
+	/* start paranoia level manager thread */
+	pthread_create(&priv->plmgr_thread, NULL, plmgr_thread,
+			&priv->plmgr_thread_priv);
+
 	return fuse_get_context()->private_data;
 }
 
@@ -195,6 +202,12 @@ static int fuse_io_flush(const char *path, struct fuse_file_info *fi) {
 void fuse_io_destroy(void *arg) {
 	fuse_io_priv_t *priv = fuse_get_context()->private_data;
 	VERBOSE("destroy called");
+
+	/* stop paranoia level manager thread */
+	pthread_cancel(priv->plmgr_thread);
+	pthread_join(priv->plmgr_thread, NULL);
+
+	/* stop control thread */
 	pthread_cancel(priv->control_thread);
 	pthread_join(priv->control_thread, NULL);
 	hashtbl_free(&priv->control_thread_priv.c);
@@ -214,6 +227,7 @@ static struct fuse_operations fuse_io_operations = {
 };
 
 static void freer(fuse_io_entry_t *entry) {
+	pthd_cond_destroy(&entry->cond);
 	free(entry->head.key);
 	free(entry->mountpoint);
 	scubed3_free(&entry->l);
@@ -227,7 +241,7 @@ static void freer(fuse_io_entry_t *entry) {
 }
 
 /* we want access to the mountpoint, so we copy
- * the definition of fuse_main_comon and pass the mountpoint
+ * the definition of fuse_main_common and pass the mountpoint
  * to the control thread */
 static int fuse_main_custom(int argc, char *argv[],
 		const struct fuse_operations *op,
@@ -265,6 +279,7 @@ int fuse_io_start(int argc, char **argv, blockio_t *b) {
 	hashtbl_init_default(&priv.ids, 32, 4, 1, 1, NULL);
 
 	priv.control_thread_priv.b = b;
+	priv.plmgr_thread_priv.b = b;
 
 	ret = fuse_main_custom(argc, argv, &fuse_io_operations,
 			sizeof(fuse_io_operations), &priv, 0);

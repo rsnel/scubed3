@@ -303,6 +303,7 @@ static int control_open_create_common(int s, control_thread_priv_t *priv, char *
 				"name?", add?"create":"open", argv[0]);
 	}
 
+	pthd_cond_init(&entry->cond);
 	entry->to_be_deleted = 0;
 	assert(!entry->close_on_release);
 	entry->inuse = 0;

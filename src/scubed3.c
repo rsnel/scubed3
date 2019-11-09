@@ -342,6 +342,18 @@ int do_write(scubed3_t *l, uint32_t mesoff, uint32_t muoff, uint32_t size,
 
 	initialize_output(l);
 
+	while (ID != id(l->dev->bi) && l->dev->bi->no_indices) {
+		// if we are here, we want to add a block to the cache
+		// while the cache is full
+		
+		/* complain to plmgr that we need to write a block */
+
+		/* FIXME: not implemented */
+
+		/* wait for space to become available in the cache */
+		//hashtbl_cond_wait_element_byptr(entry, &entry->cond);
+	}
+
 	if (ID != id(l->dev->bi)) {
 		/* could be that the new block is full after
 		 * garbage collecting (depends on the way the

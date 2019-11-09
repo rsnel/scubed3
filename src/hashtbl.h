@@ -71,6 +71,8 @@ void *hashtbl_first_element(hashtbl_t*);
 
 void *hashtbl_next_element_byptr(hashtbl_t*, void*);
 
+void hashtbl_cond_wait_element_byptr(void*, pthread_cond_t*);
+
 void hashtbl_unlock_element_byptr(void*);
 
 void hashtbl_delete_element_byptr(hashtbl_t*, void*);

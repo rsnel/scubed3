@@ -358,6 +358,11 @@ void *hashtbl_first_element(hashtbl_t *h) {
 	return hashtbl_find_element_from_bucket(h, NULL, 0, compare_true);
 }
 
+void hashtbl_cond_wait_element_byptr(void *elt, pthread_cond_t *cond) {
+	assert(elt && cond);
+	pthd_cond_wait(cond, &((hashtbl_elt_t*)elt)->data_mutex);
+}
+
 void hashtbl_unlock_element_byptr(void *elt) {
 	assert(elt);
 	pthd_mutex_unlock(&((hashtbl_elt_t*)elt)->data_mutex);

@@ -137,24 +137,32 @@ static int parse_int(int s, int *r, const char *in) {
 }
 
 static int control_cycle(int s, control_thread_priv_t *priv, char *argv[]) {
+	__label__ end;
 	fuse_io_entry_t *entry = hashtbl_find_element_bykey(priv->h, argv[0]);
-	int times;
+	int times, ret = 0;
 	if (!entry) return control_write_complete(s, 1,
 			"partition \"%s\" not found", argv[0]);
 
-	if (parse_int(s, &times, argv[1])) return -1;
+	pthread_cleanup_push(hashtbl_unlock_element_byptr, entry);
+
+	if (parse_int(s, &times, argv[1])) {
+		ret = -1;
+		goto end;
+	}
 
 	if (times < 0) {
-		hashtbl_unlock_element_byptr(entry);
-		return control_write_complete(s, 1,
+		ret = control_write_complete(s, 1,
 				"integer must be positive");
+		goto end;
 	}
 
 	while (times--) scubed3_cycle(&entry->l);
 
-	hashtbl_unlock_element_byptr(entry);
+	ret = control_write_complete(s, 0, "see debug output");
+end:
+	pthread_cleanup_pop(1);
 
-	return control_write_complete(s, 0, "see debug output");
+	return ret;
 }
 
 static int control_verbose_juggler(int s, control_thread_priv_t *priv, char *argv[]) {

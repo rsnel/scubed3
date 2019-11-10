@@ -157,8 +157,6 @@ blockio_dev_macroblock_status_t blockio_dev_get_macroblock_status(
 // can return error -1: not enough blocks available
 int blockio_dev_allocate_macroblocks(blockio_dev_t*, uint32_t);
 
-int blockio_dev_free_macroblocks(blockio_dev_t*, uint32_t);
-
 void blockio_prepare_block(blockio_info_t*);
 
 #endif /* INCLUDE_SCUBED3_BLOCKIO_H */

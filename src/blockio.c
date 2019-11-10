@@ -567,10 +567,6 @@ void blockio_dev_change_macroblock_status(blockio_info_t *bi,
 	else bitmap_clearbit_safe(&bi->dev->status, index);
 }
 
-int blockio_dev_free_macroblocks(blockio_dev_t *dev, uint32_t size) {
-	FATAL("blockio_dev_free_macroblocks is not implemented");
-}
-
 void blockio_prepare_block(blockio_info_t *bi) {
 	assert(bi->dev);
 	bi->next = NULL;

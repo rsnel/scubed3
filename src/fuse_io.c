@@ -62,6 +62,8 @@ static int fuse_io_getattr(const char *path, struct stat *stbuf) {
 	stbuf->st_nlink = 1;
 	stbuf->st_size = entry->size;
 
+	/* no cancellation point between acquisition of entry
+	 * and this unlock function */
 	hashtbl_unlock_element_byptr(entry);
 
 	return 0;
@@ -109,6 +111,8 @@ static int fuse_io_open(const char *path, struct fuse_file_info *fi) {
 	entry->inuse++;
 	//VERBOSE("openend \"%s\"", path + 1);
 
+	/* no cancellation point between acquisition of entry
+	 * and this unlock function */
 	hashtbl_unlock_element_byptr(entry);
 	return 0;
 }
@@ -131,6 +135,9 @@ static int fuse_io_release(const char *path, struct fuse_file_info *fi) {
 		delete = 1;
 		entry->to_be_deleted = 1;
 	}
+
+	/* no cancellation point between acquisition of entry
+	 * and this unlock function */
 	hashtbl_unlock_element_byptr(entry);
 
 	if (delete) hashtbl_delete_element_byptr(
@@ -149,9 +156,11 @@ static int fuse_io_read(const char *path, char *buf, size_t size, off_t offset,
 
 	if (!entry) return -ENOENT;
 
+	pthread_cleanup_push(hashtbl_unlock_element_byptr, entry);
+
 	do_req(&entry->l, SCUBED3_READ, offset, size, (char*)buf);
 
-	hashtbl_unlock_element_byptr(entry);
+	pthread_cleanup_pop(1);
 
 	return size;
 }
@@ -163,9 +172,11 @@ static int fuse_io_write(const char *path, const char *buf, size_t size,
 			entries, path + 1);
 	if (!entry) return -ENOENT;
 
+	pthread_cleanup_push(hashtbl_unlock_element_byptr, entry);
+
 	do_req(&entry->l, SCUBED3_WRITE, offset, size, (char*)buf);
 
-	hashtbl_unlock_element_byptr(entry);
+	pthread_cleanup_pop(1);
 
 	return size;
 }

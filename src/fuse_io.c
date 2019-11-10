@@ -108,6 +108,13 @@ static int fuse_io_open(const char *path, struct fuse_file_info *fi) {
 		hashtbl_unlock_element_byptr(entry);
 		return -EBUSY;
 	}
+
+	/* enforce readonly */
+	if (entry->readonly && ((fi->flags&O_ACCMODE) != O_RDONLY)) {
+		hashtbl_unlock_element_byptr(entry);
+		return -EACCES;
+	}
+
 	entry->inuse++;
 	//VERBOSE("openend \"%s\"", path + 1);
 
@@ -171,6 +178,8 @@ static int fuse_io_write(const char *path, const char *buf, size_t size,
 			&((fuse_io_priv_t*)fuse_get_context()->private_data)->
 			entries, path + 1);
 	if (!entry) return -ENOENT;
+
+	assert(!entry->readonly);
 
 	pthread_cleanup_push(hashtbl_unlock_element_byptr, entry);
 

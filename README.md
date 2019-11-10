@@ -50,7 +50,7 @@ outside world. The program `scubed3ctl` is a client to connect to a running
 
     # scubed3ctl -v -d
 
-it outputs some information and gives you a `s3>` prompt
+it outputs some information and gives you an `s3>` prompt
 
     scubed3ctl:debug:using version 1.8.4 of libgcrypt
     scubed3ctl:scubed3ctl-UNKNOWN, connected to scubed3-UNKNOWN

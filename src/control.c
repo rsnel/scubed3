@@ -691,6 +691,7 @@ static control_command_t control_commands[] = {
 		.head.key = "set-readonly",
 		.command = control_set_readonly,
 		.argc = 2,
+		.usage = " NAME BOOL"
 	}, {
 		.head.key = "set-close-on-release",
 		.command = control_set_close_on_release,

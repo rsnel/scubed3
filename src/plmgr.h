@@ -24,8 +24,19 @@ typedef struct plmgr_thread_priv_s {
 	pthread_mutex_t complain_mutex;
 	pthread_cond_t complain_cond;
 	blockio_t *b;
+	
+	/* write request from scubed3 partitions
+	 * to make space in the cache, pleasewrite_name
+	 * and pleasewrite_ptr are protected by
+	 * pleasewrite mutex */
+	pthread_mutex_t pleasewrite_mutex;
+	pthread_cond_t pleasewrite_cond;
+	char *pleaswrite_name; /* this must be COPY of the name */
+	void *pleasewrite_ptr;
 } plmgr_thread_priv_t;
 
 void *plmgr_thread(void *arg);
+
+void plmgr_thread_cancel_join_cleanup(pthread_t, plmgr_thread_priv_t*);
 
 #endif /* INCLUDE_SCUBED3_PLMGR_H */

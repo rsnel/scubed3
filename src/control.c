@@ -738,6 +738,13 @@ int control_call(int s, control_thread_priv_t *priv, char *command) {
 	return (*cmnd->command)(s, priv, argv + 1);
 }
 
+void control_thread_cancel_join_cleanup(pthread_t thread,
+		control_thread_priv_t *priv) {
+	pthread_cancel(thread);
+	pthread_join(thread, NULL);
+	hashtbl_free(&priv->c);
+}
+
 void *control_thread(void *arg) {
 	control_thread_priv_t *priv = arg;
 	int s, s2, i;

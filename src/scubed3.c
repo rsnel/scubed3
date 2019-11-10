@@ -44,6 +44,7 @@
 #include "cipher.h"
 #include "hashtbl.h"
 #include "fuse_io.h"
+#include "plmgr.h"
 
 #define ID	(index>>l->mesobits)
 #define NO	(index&l->mesomask)
@@ -342,7 +343,7 @@ int do_write(scubed3_t *l, uint32_t mesoff, uint32_t muoff, uint32_t size,
 
 	initialize_output(l);
 
-	while (ID != id(l->dev->bi) && l->dev->bi->no_indices) {
+	//while (ID != id(l->dev->bi) && l->dev->bi->no_indices) {
 		// if we are here, we want to add a block to the cache
 		// while the cache is full
 		
@@ -352,14 +353,20 @@ int do_write(scubed3_t *l, uint32_t mesoff, uint32_t muoff, uint32_t size,
 
 		/* wait for space to become available in the cache */
 		//hashtbl_cond_wait_element_byptr(entry, &entry->cond);
-	}
+	//}
 
 	if (ID != id(l->dev->bi)) {
 		/* could be that the new block is full after
 		 * garbage collecting (depends on the way the
 		 * to-be-freed block is selected) */
-		if (l->dev->bi->no_indices == l->dev->b->mmpm)
+		if (l->dev->bi->no_indices == l->dev->b->mmpm) {
+			pthd_mutex_lock(&l->dev->b->plmgr->pleasewrite_mutex);
+			char *name = ((fuse_io_entry_t*)(((void*)l->dev) - offsetof(fuse_io_entry_t, d)))->head.key;
+			VERBOSE("gotname! %s", name);
+			pthd_cond_signal(&l->dev->b->plmgr->pleasewrite_cond);
+			pthd_mutex_unlock(&l->dev->b->plmgr->pleasewrite_mutex);
 			select_new_macroblock(l);
+		}
 
 		index = l->block_indices[mesoff];
 	}

@@ -203,14 +203,11 @@ void fuse_io_destroy(void *arg) {
 	fuse_io_priv_t *priv = fuse_get_context()->private_data;
 	VERBOSE("destroy called");
 
-	/* stop paranoia level manager thread */
-	pthread_cancel(priv->plmgr_thread);
-	pthread_join(priv->plmgr_thread, NULL);
-
-	/* stop control thread */
-	pthread_cancel(priv->control_thread);
-	pthread_join(priv->control_thread, NULL);
-	hashtbl_free(&priv->control_thread_priv.c);
+	/* stop paranoia level manager caand control thread */
+	plmgr_thread_cancel_join_cleanup(priv->plmgr_thread,
+			&priv->plmgr_thread_priv);
+	control_thread_cancel_join_cleanup(priv->control_thread,
+			&priv->control_thread_priv);
 }
 
 static struct fuse_operations fuse_io_operations = {
@@ -273,13 +270,14 @@ static int fuse_main_custom(int argc, char *argv[],
 
 int fuse_io_start(int argc, char **argv, blockio_t *b) {
 	int ret;
-	fuse_io_priv_t priv;
+	fuse_io_priv_t priv = { }; /* initialize to zeroes */
 	hashtbl_init_default(&priv.entries, -1, 4, 1, 1,
 			(void (*)(void*))freer);
 	hashtbl_init_default(&priv.ids, 32, 4, 1, 1, NULL);
 
 	priv.control_thread_priv.b = b;
 	priv.plmgr_thread_priv.b = b;
+	b->plmgr = &priv.plmgr_thread_priv;
 
 	ret = fuse_main_custom(argc, argv, &fuse_io_operations,
 			sizeof(fuse_io_operations), &priv, 0);

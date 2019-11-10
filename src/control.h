@@ -35,4 +35,6 @@ typedef struct control_thread_priv_s {
 
 void *control_thread(void *arg);
 
+void control_thread_cancel_join_cleanup(pthread_t, control_thread_priv_t*);
+
 #endif /* INCLUDE_SCUBED3_CONTROL_H */

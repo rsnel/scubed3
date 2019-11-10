@@ -21,6 +21,16 @@
 #include <stdio.h>
 #include <stdarg.h>
 
+/* the point if this dual mutex structure,
+ * is that you can traverse a list when
+ * an element is locked
+ *
+ * problem: if an element is in use and
+ * you search for that element, then it blocks
+ * te list
+ *
+ * solution: use read/write mutex for pointer
+ */
 typedef struct hashtbl_elt_s {
 	struct hashtbl_elt_s *next;
 	pthread_mutex_t ptr_mutex;

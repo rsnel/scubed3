@@ -95,6 +95,10 @@ struct blockio_s {
 	pthread_mutex_t unallocated_mutex;
 	dllarr_t unallocated;
 
+	/* provide access to the thread that takes care of writing blocks
+	 * (either on it's own or at the request of (a) scubed3 partition(s) */
+	struct plmgr_thread_priv_s *plmgr;
+
 	uint8_t mesoblk_log;
 	uint16_t mmpm; /* max mesoblocks per macroblock */
 

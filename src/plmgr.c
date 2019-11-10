@@ -30,10 +30,22 @@
 
 #define CLOCK_MONOTONIC_RAW 4
 
+void plmgr_thread_cancel_join_cleanup(pthread_t thread,
+		plmgr_thread_priv_t *priv) {
+	pthread_cancel(thread);
+	pthread_join(thread, NULL);
+
+	pthd_cond_destroy(&priv->pleasewrite_cond);
+	pthd_mutex_destroy(&priv->pleasewrite_mutex);
+}
+
 void *plmgr_thread(void *arg) {
 	plmgr_thread_priv_t *priv = arg;
 	struct timespec ts;
 	blockio_t *b = priv->b;
+
+	pthd_mutex_init(&priv->pleasewrite_mutex);
+	pthd_cond_init(&priv->pleasewrite_cond);
 
 	VERBOSE("plmgr thread started on %u macroblocks of %u bytes",
 			b->total_macroblocks, 1<<b->macroblock_log);
@@ -43,7 +55,16 @@ void *plmgr_thread(void *arg) {
 
 	VERBOSE("%lu seconds and %ld nanoseconds", ts.tv_sec, ts.tv_nsec);
 
-	/* the plmgr thread doesn't do anything yet */
+
+	pthd_mutex_lock(&priv->pleasewrite_mutex);
+	pthread_cleanup_push((void (*)(void*))pthread_mutex_unlock, &priv->pleasewrite_mutex);
+
+	while (1) {
+		pthd_cond_wait(&priv->pleasewrite_cond, &priv->pleasewrite_mutex);
+		VERBOSE("got pleasewrite signal");
+	}
+
+	pthread_cleanup_pop(1);
 
 	pthread_exit(NULL);
 }

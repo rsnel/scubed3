@@ -31,7 +31,7 @@
 #include <sys/mman.h>
 #include <sys/user.h>
 #undef NDEBUG /* we need sanity checking */
-#include <fuse/fuse_opt.h>
+#include <fuse3/fuse_opt.h>
 
 #include <assert.h>
 #include "config.h"

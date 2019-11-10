@@ -618,7 +618,7 @@ static int ctl_chown(ctl_priv_t *priv, char *argv[]) {
 	if (do_server_command(priv->s, 0, "get-aux %s mountpoint",
 				argv[1])) return -1;
 	if (result.status) {
-		printf("no mountpount known for \"%s\"\n", argv[1]);
+		printf("no mountpoint known for \"%s\"\n", argv[1]);
 		return 0;
 	}
 	var_system("chown %s %s", argv[0], result.argv[0]);

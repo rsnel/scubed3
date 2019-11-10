@@ -21,9 +21,9 @@
 #include <limits.h>
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/un.h>
 #include <signal.h>
-#include <fuse.h>
 #include <assert.h>
 #include "verbose.h"
 #include "util.h"
@@ -456,7 +456,9 @@ static int control_get_aux(int s, control_thread_priv_t *priv, char *argv[]) {
 
 	pthread_cleanup_push(hashtbl_unlock_element_byptr, entry);
 
-	if (!strcmp(argv[1], "mountpoint")) {
+	/* if key is not mountpoint or mountpoint is NULL, we say
+	 * 	key not found */
+	if (!strcmp(argv[1], "mountpoint") && entry->mountpoint) {
 		ret = control_write_complete(s, 0, "%s", entry->mountpoint);
 	} else {
 		ret = control_write_complete(s, 1, "key \"%s\" not found", argv[1]);

@@ -373,14 +373,10 @@ static int control_open_create_common(int s, control_thread_priv_t *priv, char *
 		assert(!entry->d.bi);
 		if (entry->size > 0) blockio_dev_select_next_macroblock(&entry->d);
 
-		// really only used for test
-		//ecch_throw(ECCH_DEFAULT, "break off, we're testing");
-
 		ret = control_write_silent_success(s);
 	}
 	ecch_catch_all {
 		entry->to_be_deleted = 1;
-		hashtbl_delete_element_byptr(priv->h, entry);
 		ret = control_write_complete(s, 1, "%s",
 				ecch_context.ecch.msg);
 	}
@@ -388,9 +384,9 @@ static int control_open_create_common(int s, control_thread_priv_t *priv, char *
 
 	pthread_cleanup_pop(1);
 
+	if (entry->to_be_deleted) hashtbl_delete_element_byptr(priv->h, entry);
+
 	return ret;
-	//return control_write_silent_success(s);
-	//control_write_complete(s, 0, "partition \"%s\" %s", argv[0], add?"created":"opened");
 }
 
 static int control_open(int s, control_thread_priv_t *priv, char *argv[]) {

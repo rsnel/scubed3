@@ -721,9 +721,10 @@ void show_help() {
 	printf("-q                do not show warnings, if \"assume Yes\" is active\n");
 	printf("                  the warnings when shrinking/enlarging scubed3\n");
 	printf("                  partitions is also not shown\n\n");
-	printf("Using options -s, -i or -a is not recommended, because you can\n");
-	printf("lose access to your scubed3 partitions if you lose the values\n");
-	printf("you used when you created the devices\n");
+	printf("Using options -s or -i is not recommended, because you can lose access\n");
+	printf("to your scubed3 partitions if you lose the values you used when you\n");
+	printf("created the devices. In addition using a low\n");
+	printf("number of KDF interations is also not recommended.\n");
 	printf("\nMore information:\n\nType \"help\" at the s3> prompt. You only get the prompt\nif the connection to the scubed3 process succeeds\n");
 }
 

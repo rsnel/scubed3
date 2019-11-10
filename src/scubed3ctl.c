@@ -572,7 +572,7 @@ static int ctl_mke2fs(ctl_priv_t *priv, char *argv[]) {
 	if (do_server_command(priv->s, 0, "get-aux %s mountpoint",
 					argv[0])) return -1;
 	if (!result.status) {
-		printf("partition \"%s\" is mounted on %s",
+		printf("partition \"%s\" is mounted on %s\n",
 				argv[0], result.argv[0]);
 		return 0;
 	}

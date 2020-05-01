@@ -62,7 +62,7 @@ void juggler_add_macroblock(juggler_t *j, blockio_info_t *b) {
 		*iterate = b;
 		j->no_scheduled++;
 		juggler_notify_seqno(j, b->seqno);
-	} else assert(0); // nonsensical block 
+	} else assert(0); // nonsensical block
 }
 
 blockio_info_t *juggler_get_obsoleted(juggler_t *j) {
@@ -72,7 +72,7 @@ blockio_info_t *juggler_get_obsoleted(juggler_t *j) {
 	if (ret && ret->next_seqno == j->seqno + 1) return ret;
 	else return NULL;
 }
-	
+
 int juggler_discard_possible(juggler_t *j, blockio_info_t *next) {
 	/* if a block is scheduled to be written, either another block
 	 * must be scheduled to be written after that or an unscheduled

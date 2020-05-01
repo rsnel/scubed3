@@ -360,8 +360,8 @@ int do_write(scubed3_t *l, uint32_t mesoff, uint32_t muoff, uint32_t size,
 		 * garbage collecting (depends on the way the
 		 * to-be-freed block is selected) */
 		if (l->dev->bi->no_indices == l->dev->b->mmpm) {
-			pthd_mutex_lock(&l->dev->b->plmgr->pleasewrite_mutex);
-			char *name = ((fuse_io_entry_t*)(((void*)l->dev) - offsetof(fuse_io_entry_t, d)))->head.key;
+			//pthd_mutex_lock(&l->dev->b->plmgr->pleasewrite_mutex);
+			//char *name = ((fuse_io_entry_t*)(((void*)l->dev) - offsetof(fuse_io_entry_t, d)))->head.key;
 			VERBOSE("gotname! %s", name);
 			pthd_cond_signal(&l->dev->b->plmgr->pleasewrite_cond);
 			pthd_mutex_unlock(&l->dev->b->plmgr->pleasewrite_mutex);

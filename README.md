@@ -186,9 +186,15 @@ scubed3 partitions. The goal is to be able to plausibly deny the existance of
 partitions to which the adversary has no keys.  Only paranoia level 3 protects
 completely against this. We assume the adversary cannot detect read access.
 
-
 ## Paranoia levels
 
+The ultimate goal of `scubed3` is to make the disk look like that at each
+timestep each macroblock has a chance to be selected and, if selected, each bit
+changes with probability 0.5.
+
+The part of the software that controls most of the logic to achieve this is called
+the `plmgr` (paranoia level manager).
+This is implemented as follo
 When a new macroblock needs to be selected:
 
 Level 0: not paranoid (NOT IMPLEMENTED YET)
@@ -238,6 +244,41 @@ full, and writes it.
 
 In this way all the paranoia levels can be implemented without the scubed3
 device caring about it.
+
+----- DRAFT -----
+
+### Locking
+
+A lot of threads want to do a lot of different things to the disk. We need some
+locking to make everything work together.
+
+For the fuse filesystem, we use a hashtable that includes its own locking.
+Each element in the hashtable has a pointer lock, this lock is on the pointer
+to the next element in the bucket and it also protects the key of the next
+element. Then each element also has a data lock. 
+
+Pro: different elements can be searched while an element is in use, because
+the data mutex is not needed to search an element
+
+Con: When an element that is in use is searched, then elements beyond the 
+searched element will be unreachable, because the ptrb
+
+### Deadlocks?
+
+Suppose the plmgr protects its cond with mutex A, and a scubed3 partition 1 is
+protected with mutex B1. Ap means "mutex A is acquired by plmgr" and B1s means
+"mutex B1 is acquired by scubed3 partition 1".
+
+During normal usage of the partition, we have B1s and (if
+the cache is full, but something needs to be written) As to signal cond.
+
+When cond is signalled we have B1p, if there was a signal from A, we will also have
+Ap. This means that the scubed3 partition should not try to signal again, because
+it won't be able to acquire Ap since plmgr already has it and is trying to acquire Bp.
+
+The problem is, that in some paranoia levels
+
+--- END DRAFT ---
 
 ## Control protocol
 

@@ -138,7 +138,7 @@ static int parse_int(int s, int *r, const char *in) {
 
 static int control_cycle(int s, control_thread_priv_t *priv, char *argv[]) {
 	fuse_io_entry_t *entry = hashtbl_find_element_bykey(priv->h, argv[0]);
-	int times;
+	int times = 0; /* initialize it to make the compiler shut up */
 	if (!entry) return control_write_complete(s, 1,
 			"partition \"%s\" not found", argv[0]);
 

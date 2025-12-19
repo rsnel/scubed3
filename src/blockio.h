@@ -87,7 +87,7 @@ struct blockio_s {
 	uint32_t total_macroblocks; /* amount of raw macroblocks */
 	uint32_t max_macroblocks;
 	uint32_t bitmap_offset;
-	
+
 	/* the mutex protects the unallocated list
 	 * and the associated *bi->dev pointer in each
 	 * blockio_info_t, which is * NULL if and only if
@@ -138,8 +138,8 @@ void blockio_dev_write_current_and_select_next_macroblock(
 		blockio_dev_t*);
 
 typedef enum blockio_dev_macroblock_status_e {
-		FREE, USED }
-	blockio_dev_macroblock_status_t;
+		FREE, USED
+} blockio_dev_macroblock_status_t;
 
 void blockio_dev_change_macroblock_status(blockio_info_t*,
 		blockio_dev_macroblock_status_t);

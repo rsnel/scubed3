@@ -281,6 +281,13 @@ returns 0 bytes, a read or write that crosses the end is shortened, a write
 that starts at or past the end fails with ENOSPC. Errors (EIO, see above) fail
 the whole request.
 
+A partition can be opened any number of times at once (resize2fs, for
+example, opens it twice); the requests are handled one by one. It cannot be
+closed or resized while it is open. The kernel tells scubed3 asynchronously
+that a file is no longer open, so close and resize wait up to 3 seconds for
+that before they report that the partition is busy. scubed3ctl refuses to
+mount a partition that it has mounted already.
+
 Shrinking
 ~~~~~~~~~
 

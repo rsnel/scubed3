@@ -595,6 +595,16 @@ static int ctl_mount(ctl_priv_t *priv, char *argv[]) {
 		if (do_server_command(priv->s, 0, "set-close-on-release %s 1",
 				argv[0])) return -1;
 		if (result.status) return 0;
+	} else {
+		/* the partition can be opened more than once, but it
+		 * should not be mounted twice */
+		if (do_server_command(priv->s, 0, "get-aux %s mountpoint",
+					argv[0])) return -1;
+		if (!result.status) {
+			printf("partition \"%s\" is already mounted on %s\n",
+					argv[0], result.argv[0]);
+			return 0;
+		}
 	}
 
 	if (!var_system("mount -o loop %s/%s %s", priv->mountpoint,

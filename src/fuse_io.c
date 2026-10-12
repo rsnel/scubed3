@@ -97,7 +97,9 @@ static int fuse_io_open(const char *path, struct fuse_file_info *fi) {
 
 	//VERBOSE("attempt to open \"%s\"", path + 1);
 
-	if (entry->inuse || entry->to_be_deleted) {
+	/* any number of openers is allowed (resize2fs opens the partition
+	 * twice), requests are serialized by the lock on the entry */
+	if (entry->to_be_deleted) {
 		hashtbl_unlock_element_byptr(entry);
 		return -EBUSY;
 	}
@@ -119,10 +121,14 @@ static int fuse_io_release(const char *path, struct fuse_file_info *fi) {
 	/* we should do some kind of cleanup here */
 	//VERBOSE("release called on %s", path);
 	entry->inuse--;
-	free(entry->mountpoint);
-	entry->mountpoint = NULL;
 
-	if (entry->close_on_release) {
+	/* the last opener is gone: it is not mounted anymore */
+	if (!entry->inuse) {
+		free(entry->mountpoint);
+		entry->mountpoint = NULL;
+	}
+
+	if (!entry->inuse && entry->close_on_release) {
 		delete = 1;
 		entry->to_be_deleted = 1;
 	}

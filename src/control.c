@@ -543,8 +543,26 @@ static int control_info(int s, control_thread_priv_t *priv, char *argv[]) {
 	return control_write_terminate(s);
 }
 
+/* find a partition and lock it, if it is in use, wait a while: the kernel
+ * sends the release of a file asynchronously, after umount or close()
+ * it may take a moment before the partition is not in use anymore */
+static fuse_io_entry_t *control_find_unused(control_thread_priv_t *priv,
+		const char *name) {
+	fuse_io_entry_t *entry;
+	int i;
+
+	for (i = 0; i < 60; i++) { /* at most 3 seconds */
+		entry = hashtbl_find_element_bykey(priv->h, name);
+		if (!entry || !entry->inuse) return entry;
+		hashtbl_unlock_element_byptr(entry);
+		usleep(50000);
+	}
+
+	return hashtbl_find_element_bykey(priv->h, name);
+}
+
 static int control_close(int s, control_thread_priv_t *priv, char *argv[]) {
-	fuse_io_entry_t *entry = hashtbl_find_element_bykey(priv->h, argv[0]);
+	fuse_io_entry_t *entry = control_find_unused(priv, argv[0]);
 	if (!entry) return control_write_complete(s, 1,
 			"partition \"%s\" not found", argv[0]);
 
@@ -566,7 +584,7 @@ static int control_close(int s, control_thread_priv_t *priv, char *argv[]) {
 static int control_resize(int s, control_thread_priv_t *priv, char *argv[]) {
 	int size = 0, reserved = 0; // shut compiler up
 	uint32_t target, old_usable, new_usable;
-	fuse_io_entry_t *entry = hashtbl_find_element_bykey(priv->h, argv[0]);
+	fuse_io_entry_t *entry = control_find_unused(priv, argv[0]);
 	blockio_dev_t *dev;
 	int ret;
 

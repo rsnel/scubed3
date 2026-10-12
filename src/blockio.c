@@ -51,8 +51,56 @@ static void stream_io(void *fp, void *buf, uint64_t offset, uint32_t size,
 				strerror(errno));
 }
 
-static void stream_read(void *fp, void *buf, uint64_t offset, uint32_t size) {
-	stream_io(fp, buf, offset, size, fread, "reading");
+#ifdef SCUBED3_CRASH_TEST
+/* testing only: reads that include one of the bytes in SCUBED3_BAD_READ
+ * (comma separated offsets) fail, until the byte is written (as a disk
+ * remaps a bad sector when it is written) */
+static int bad_sector(uint64_t offset, uint32_t size, int write) {
+	static uint64_t bad[64];
+	static int no_bad = -1;
+	char *list, *end;
+	int i, ret = 0;
+
+	if (no_bad < 0) {
+		no_bad = 0;
+		list = getenv("SCUBED3_BAD_READ");
+		while (list && *list && no_bad < 64) {
+			bad[no_bad] = strtoull(list, &end, 10);
+			if (end == list) break;
+			no_bad++;
+			list = (*end == ',')?end + 1:end;
+		}
+	}
+
+	for (i = 0; i < no_bad; i++) {
+		if (bad[i] < offset || bad[i] >= offset + size) continue;
+		if (!write) ret = 1;
+		else bad[i--] = bad[--no_bad];
+	}
+
+	return ret;
+}
+#endif
+
+/* a read error is not fatal: the mesoblocks that cannot be read are
+ * treated as corrupt */
+static int stream_read(void *fp, void *buf, uint64_t offset, uint32_t size) {
+	assert(fp && buf && size);
+#ifdef SCUBED3_CRASH_TEST
+	if (bad_sector(offset, size, 0)) {
+		errno = EIO;
+		return -1;
+	}
+#endif
+	if (fseeko(fp, offset, SEEK_SET)) return -1;
+
+	if (fread(buf, size, 1, fp) != 1) {
+		if (!ferror(fp)) errno = EIO; /* unexpected end of file */
+		clearerr(fp);
+		return -1;
+	}
+
+	return 0;
 }
 
 static void stream_write(void *fp, const void *buf, uint64_t offset,
@@ -80,6 +128,7 @@ static void stream_write(void *fp, const void *buf, uint64_t offset,
 				"written)", writes, written);
 		_exit(9);
 	}
+	bad_sector(offset, size, 1);
 #endif
 	stream_io(fp, (void*)buf, offset, size, fwrite, "writing");
 }
@@ -621,6 +670,13 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 				FATAL("block %u USED by us but claimed "
 						"by another device", i);
 
+			/* we don't know what it contains, if it has
+			 * data, adding it as a fresh block would lose
+			 * that data silently */
+			if (bi->unreadable)
+				FATAL("block %u of \"%s\" cannot be read",
+						i, dev->name);
+
 			dllarr_remove(&dev->b->unallocated, bi);
 			bi->dev = dev;
 			blockio_prepare_block(bi);
@@ -679,8 +735,10 @@ static void blockio_dev_read_index(blockio_dev_t *dev, blockio_info_t *bi) {
 	uint32_t no = bi - dev->b->blockio_infos;
 	char sha256[32];
 
-	dev->b->read(dev->io, BASE, ((off_t)no)<<dev->b->macroblock_log,
-			1<<dev->b->mesoblk_log);
+	if (dev->b->read(dev->io, BASE, ((off_t)no)<<dev->b->macroblock_log,
+			1<<dev->b->mesoblk_log))
+		FATAL("error reading index of block %u: %s", no,
+				strerror(errno));
 	cipher_dec(dev->c, BASE, BASE, 0, 0, no);
 
 	gcry_md_hash_buffer(GCRY_MD_SHA256, sha256, BASE + sizeof(sha256),
@@ -719,9 +777,16 @@ void blockio_dev_scan_header(dllarr_t *replay, blockio_dev_t *dev,
 		return;
 	}
 
-	/* read header */
-	dev->b->read(dev->io, BASE, ((off_t)no)<<dev->b->macroblock_log,
-			1<<dev->b->mesoblk_log);
+	/* read header, if that fails, the block may be ours, that is only
+	 * known when the bitmap is known (see blockio_dev_init) */
+	bi->unreadable = 0;
+	if (dev->b->read(dev->io, BASE, ((off_t)no)<<dev->b->macroblock_log,
+			1<<dev->b->mesoblk_log)) {
+		WARNING("error reading index of block %u: %s", no,
+				strerror(errno));
+		bi->unreadable = 1;
+		return;
+	}
 
 	// decrypt indexblock with IV=0: ciphertext is unique due to
 	// first block being a hash of the whole index and the index
@@ -816,9 +881,13 @@ int blockio_dev_read_mesoblk(blockio_dev_t *dev,
 	blockio_info_t *bi = &dev->b->blockio_infos[id];
 	int corrupt = bi->hashes[no]&BLOCKIO_CORRUPT_MASK;
 
-	dev->b->read(dev->io, buf, (((off_t)id)<<dev->b->macroblock_log) +
+	if (dev->b->read(dev->io, buf, (((off_t)id)<<dev->b->macroblock_log) +
 			((no + 1)<<dev->b->mesoblk_log) +
-			0, 1<<dev->b->mesoblk_log);
+			0, 1<<dev->b->mesoblk_log)) {
+		WARNING("error reading mesoblock %u of block %u of \"%s\": "
+				"%s", no, id, dev->name, strerror(errno));
+		return BLOCKIO_CORRUPT_MASK;
+	}
 	if ((bi->hashes[no]&~(uint64_t)BLOCKIO_CORRUPT_MASK) !=
 			mesoblk_hash(buf, 1<<dev->b->mesoblk_log)) {
 		WARNING("mesoblock %u of block %u (seqno=%lu) of \"%s\" is "
@@ -834,14 +903,27 @@ uint32_t blockio_check_data_hashes(blockio_info_t *bi, char *live) {
 	uint32_t id = blockio_get_macroblock_index(bi), k, mismatches = 0;
 	blockio_t *b = bi->dev->b;
 	char *data = ecalloc(b->mmpm, 1<<b->mesoblk_log);
+	int err, err_k[b->mmpm];
 
-	b->read(bi->dev->io, data, (((off_t)id)<<b->macroblock_log) +
-			(1<<b->mesoblk_log), b->mmpm<<b->mesoblk_log);
+	/* if the block cannot be read at once, read it mesoblock by
+	 * mesoblock, the ones that cannot be read are corrupt */
+	if ((err = b->read(bi->dev->io, data, (((off_t)id)<<b->macroblock_log) +
+			(1<<b->mesoblk_log), b->mmpm<<b->mesoblk_log))) {
+		WARNING("error reading block %u of \"%s\": %s", id,
+				bi->dev->name, strerror(errno));
+		for (k = 0; k < b->mmpm; k++)
+			err_k[k] = b->read(bi->dev->io,
+					data + (k<<b->mesoblk_log),
+					(((off_t)id)<<b->macroblock_log) +
+					((k + 1)<<b->mesoblk_log),
+					1<<b->mesoblk_log);
+	}
 
 	for (k = 0; k < b->mmpm; k++) {
 		if (live && !live[k]) continue;
-		if ((bi->hashes[k]&~(uint64_t)BLOCKIO_CORRUPT_MASK) !=
-				mesoblk_hash(data + (k<<b->mesoblk_log),
+		if ((err && err_k[k]) ||
+				(bi->hashes[k]&~(uint64_t)BLOCKIO_CORRUPT_MASK)
+				!= mesoblk_hash(data + (k<<b->mesoblk_log),
 					1<<b->mesoblk_log)) {
 			mismatches++;
 			if (live) live[k] = 2 + BLOCKIO_CORRUPT_MASK;

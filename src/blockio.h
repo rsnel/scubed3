@@ -48,6 +48,7 @@ struct blockio_info_s {
 	dllarr_elt_t ur;
 	uint64_t seqno;
 	uint32_t next_block; /* from the index: the block written after it */
+	int unreadable; /* the index could not be read when scanning */
 
 	uint32_t no_indices;
 	uint32_t no_nonobsolete;
@@ -148,7 +149,7 @@ struct blockio_s {
 
 	void *(*open)(const void*);
 	void *open_priv; /* filename, required for open */
-	void (*read)(void*, void*, uint64_t, uint32_t);
+	int (*read)(void*, void*, uint64_t, uint32_t); /* -1 on error */
 	void (*write)(void*, const void*, uint64_t, uint32_t);
 	void (*close)(void*);
 	void (*sync)(void*);

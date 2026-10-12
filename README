@@ -266,6 +266,21 @@ The most recent block is checked completely on startup (see Durability), the
 other blocks when they are read, and all live mesoblocks of a partition with
 check-data-integrity.
 
+A read error of the base device is handled the same way: the mesoblocks that
+cannot be read are corrupt (the daemon keeps running). If the index of a block
+of the partition cannot be read when the partition is opened, opening fails
+(its contents are unknown, treating it as an empty block would lose data
+silently). A write error of the base device is fatal: the daemon stops, what
+was synced before is on disk (see Durability).
+
+Reads and writes
+~~~~~~~~~~~~~~~~
+
+A partition behaves as a file of fixed size: reading at or past the end
+returns 0 bytes, a read or write that crosses the end is shortened, a write
+that starts at or past the end fails with ENOSPC. Errors (EIO, see above) fail
+the whole request.
+
 Shrinking
 ~~~~~~~~~
 

@@ -560,12 +560,16 @@ int do_read(scubed3_t *l, uint32_t mesoff, uint32_t muoff, uint32_t size,
 	return 0;
 }
 
+/* returns the number of bytes read or written, or -errno; a request that
+ * extends past the end of the partition is shortened (so reading at the end
+ * returns 0, end of file), a write that starts at the end fails with ENOSPC
+ * (the partition cannot grow by writing to it); if an error occurs, the
+ * whole request fails (a short count would be taken for end of file) */
 int do_req(scubed3_t *l, scubed3_io_t cmd, uint64_t r_offset, size_t size,
 		char *buf) {
 	assert(cmd == SCUBED3_READ || cmd == SCUBED3_WRITE);
-	uint32_t meso = r_offset>>l->dev->b->mesoblk_log;
-	uint32_t inmeso = r_offset%(1<<l->dev->b->mesoblk_log);
-	uint32_t ooff = 0, reqsz;
+	uint64_t end = ((uint64_t)l->no_block_indices)<<l->dev->b->mesoblk_log;
+	uint32_t meso, inmeso, ooff = 0, reqsz;
 	int ret;
 	int (*action)(scubed3_t*, uint32_t, uint32_t, uint32_t, char*) =
 		(cmd == SCUBED3_WRITE)?do_write:do_read;
@@ -574,13 +578,22 @@ int do_req(scubed3_t *l, scubed3_io_t cmd, uint64_t r_offset, size_t size,
 	//		(cmd == SCUBED3_WRITE)?"write":"read",
 	//		r_offset, size, l->dev->name);
 
-	if ((r_offset + size - 1)>>l->dev->b->mesoblk_log >=
-			l->no_block_indices) {
-		WARNING("%s access past end of device \"%s\"", 
-				(cmd == SCUBED3_WRITE)?"write":"read",
-				l->dev->name);
+	if (r_offset >= end) {
+		if (cmd == SCUBED3_WRITE && size) {
+			DEBUG("write past end of device \"%s\"", l->dev->name);
+			return -ENOSPC;
+		}
 		return 0;
 	}
+
+	if (size > end - r_offset) size = end - r_offset;
+
+	/* a request is at most a few hundred kilobytes, the return value
+	 * must fit in an int */
+	assert(size <= INT32_MAX);
+
+	meso = r_offset>>l->dev->b->mesoblk_log;
+	inmeso = r_offset%(1<<l->dev->b->mesoblk_log);
 
 	if (inmeso) {
 		if (inmeso + size <= 1<<l->dev->b->mesoblk_log) reqsz = size;
@@ -604,7 +617,7 @@ int do_req(scubed3_t *l, scubed3_io_t cmd, uint64_t r_offset, size_t size,
 	if (size > 0 && (ret = action(l, meso, 0, size, buf + ooff)))
 		return ret;
 
-	return 0;
+	return ooff + size;
 }
 
 #define SCUBED3_OPT_KEY(a,b,c) { a, offsetof(struct options, b), c }

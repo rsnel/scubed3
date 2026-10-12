@@ -149,7 +149,7 @@ static int fuse_io_read(const char *path, char *buf, size_t size, off_t offset,
 
 	hashtbl_unlock_element_byptr(entry);
 
-	return ret?ret:size;
+	return ret;
 }
 
 static int fuse_io_write(const char *path, const char *buf, size_t size,
@@ -164,7 +164,7 @@ static int fuse_io_write(const char *path, const char *buf, size_t size,
 
 	hashtbl_unlock_element_byptr(entry);
 
-	return ret?ret:size;
+	return ret;
 }
 
 void *fuse_io_init(struct fuse_conn_info *conn) {

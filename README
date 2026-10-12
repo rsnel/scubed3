@@ -91,6 +91,34 @@ and provide read, write and close methods to it if it is not a file or a block
 device)
 
 
+Key derivation
+~~~~~~~~~~~~~~
+
+scubed3ctl derives the key of a partition from its passphrase with
+PBKDF2-SHA256. The salt and the number of iterations are the same for all
+partitions of a set of macroblocks (scubed3 cannot know which salt belongs
+to which partition). They are read from the configuration file
+/etc/scubed3.conf (another file can be given with -C):
+
+	# scubed3 KDF parameters
+	kdf=PBKDF2-SHA256
+	salt=some random text
+	iterations=16777216
+
+Empty lines and lines starting with # are ignored, whitespace around keys and
+values is ignored, all keys are optional. If the file does not exist, the
+defaults are used: salt "scubed3_prod" and 16777216 iterations. The options
+-s and -i override the values in the file.
+
+The salt is not secret, but without it the partitions cannot be opened: keep
+a backup of the configuration file (on paper is fine). A random salt can be
+made with
+
+	printf 'salt=%s\n' $(head -c 24 /dev/urandom | base64)
+
+The configuration file reveals nothing more than the presence of scubed3: it
+does not say how many partitions there are.
+
 Control protocol
 ~~~~~~~~~~~~~~~~
 

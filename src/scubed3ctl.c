@@ -27,6 +27,8 @@
 #include <sys/un.h>
 #include <signal.h>
 #include <limits.h>
+#include <ctype.h>
+#include <strings.h>
 #undef NDEBUG /* we need sanity checking */
 #include <readline/readline.h>
 #include <readline/history.h>
@@ -47,6 +49,7 @@
 #define DEFAULT_KDF_ITERATIONS		16777216
 #define DEFAULT_KDF_FUNCTION		"PBKDF2"
 #define DEFAULT_CIPHER_STRING		"CBC_ESSIV(AES256)"
+#define DEFAULT_CONFIG_FILE		"/etc/scubed3.conf"
 #define KEY_LENGTH	32
 
 #define MAX_RESULT_LINES 128
@@ -56,6 +59,7 @@ const char *command_option = NULL;
 const char *kdf_salt = DEFAULT_KDF_SALT;
 const char *control_socket = CONTROL_SOCKET;
 unsigned long kdf_iterations = DEFAULT_KDF_ITERATIONS;
+const char *config_file = NULL; /* NULL: DEFAULT_CONFIG_FILE, if it exists */
 int assume_yes = 0;
 
 /* in non-interactive mode, the exit status of
@@ -708,15 +712,103 @@ int ctl_call(ctl_priv_t *priv, char *command) {
 	else return do_server_command(priv->s, 1, "%s", command);
 }
 
+/* strip whitespace at both ends of a string, in place */
+static char *strip(char *str) {
+	char *end;
+
+	while (isspace((unsigned char)*str)) str++;
+	end = str + strlen(str);
+	while (end > str && isspace((unsigned char)end[-1])) *--end = '\0';
+
+	return str;
+}
+
+/* read the KDF parameters from the configuration file, it has lines
+ * KEY=VALUE, empty lines and lines starting with # are ignored
+ *
+ * kdf=PBKDF2-SHA256   the key derivation function (the only one supported)
+ * salt=TEXT           the salt (whitespace at both ends is ignored)
+ * iterations=NUMBER   the number of iterations
+ *
+ * values that are given on the command line take precedence; returns 0
+ * if the file does not exist and must_exist is 0, 1 if it was read */
+static int read_config(const char *path, int must_exist, int salt_set,
+		int iterations_set) {
+	FILE *fp;
+	char line[1024], *key, *value, *endptr;
+	int lineno = 0, have_kdf = 0, have_salt = 0, have_iterations = 0;
+	unsigned long iterations;
+
+	if (!(fp = fopen(path, "r"))) {
+		if (errno == ENOENT && !must_exist) return 0;
+		FATAL("unable to open configuration file %s: %s", path,
+				strerror(errno));
+	}
+
+	while (fgets(line, sizeof(line), fp)) {
+		lineno++;
+		if (!strchr(line, '\n') && !feof(fp))
+			FATAL("%s:%d: line too long", path, lineno);
+
+		key = strip(line);
+		if (!*key || *key == '#') continue;
+
+		if (!(value = strchr(key, '=')))
+			FATAL("%s:%d: expected KEY=VALUE", path, lineno);
+		*value++ = '\0';
+		key = strip(key);
+		value = strip(value);
+
+		if (!*value) FATAL("%s:%d: empty value for %s", path, lineno,
+				key);
+
+		if (!strcmp(key, "kdf")) {
+			if (have_kdf++) FATAL("%s:%d: kdf specified twice",
+					path, lineno);
+			if (strcasecmp(value, DEFAULT_KDF_FUNCTION "-"
+						DEFAULT_KDF_HASH))
+				FATAL("%s:%d: unsupported kdf \"%s\", only "
+						DEFAULT_KDF_FUNCTION "-"
+						DEFAULT_KDF_HASH " is "
+						"supported", path, lineno,
+						value);
+		} else if (!strcmp(key, "salt")) {
+			if (have_salt++) FATAL("%s:%d: salt specified twice",
+					path, lineno);
+			if (!salt_set) kdf_salt = estrdup(value);
+		} else if (!strcmp(key, "iterations")) {
+			if (have_iterations++) FATAL("%s:%d: iterations "
+					"specified twice", path, lineno);
+			errno = 0;
+			iterations = strtoul(value, &endptr, 10);
+			if (*endptr || errno || !iterations ||
+					iterations > UINT32_MAX)
+				FATAL("%s:%d: invalid number of iterations "
+						"\"%s\"", path, lineno, value);
+			if (!iterations_set) kdf_iterations = iterations;
+		} else FATAL("%s:%d: unknown key \"%s\"", path, lineno, key);
+	}
+
+	if (ferror(fp)) FATAL("error reading configuration file %s: %s",
+			path, strerror(errno));
+
+	fclose(fp);
+
+	return 1;
+}
+
 void show_help() {
 	printf("%s is a program to connect with the scubed3 process to\n", exec_name);
 	printf("manage scubed3 partitions (also known as hidden volumes)\n");
 	printf("\n");
-	printf("Usage:\n\n$ %s [-s KDF_SALT] [-i KDF_ITERATIONS] [-a SOCKET_ADDRESS] \\\n", exec_name); //argv[0]);
-	printf("                [-YYY] [-c COMMAND] [-v] [-q] [-d]\n");
+	printf("Usage:\n\n$ %s [-C CONFIG_FILE] [-s KDF_SALT] [-i KDF_ITERATIONS] \\\n", exec_name); //argv[0]);
+	printf("                [-a SOCKET_ADDRESS] [-YYY] [-c COMMAND] [-v] [-q] [-d]\n");
 	printf("\nOptions (defaults shown in parentheses):\n\n");
-	printf("-s KDF_SALT       salt used for KDF (%s)\n", DEFAULT_KDF_SALT);
-	printf("-i KDF_ITERATIONS iterations done by KDF (%u)\n", DEFAULT_KDF_ITERATIONS);
+	printf("-C CONFIG_FILE    file with the KDF parameters (%s, if it\n", DEFAULT_CONFIG_FILE);
+	printf("                  exists), lines kdf=%s-%s, salt=TEXT and\n", DEFAULT_KDF_FUNCTION, DEFAULT_KDF_HASH);
+	printf("                  iterations=NUMBER, keep a backup of it!\n");
+	printf("-s KDF_SALT       salt used for KDF, overrides the config file (%s)\n", DEFAULT_KDF_SALT);
+	printf("-i KDF_ITERATIONS iterations done by KDF, overrides the config file (%u)\n", DEFAULT_KDF_ITERATIONS);
 	printf("-a SOCKET_ADDRESS addres of scubed3 socket (%s)\n", CONTROL_SOCKET);
 	printf("-Y                assume Yes to questions, this option is DANGEROUS\n");
 	printf("                  and must be specified 3 times to take effect\n");
@@ -736,7 +828,7 @@ int main(int argc, char **argv) {
 	char *endptr;
 	ctl_priv_t priv;
 	socklen_t len;
-	int ret, opt, i, connections = 0;
+	int ret, opt, i, connections = 0, salt_set = 0, iterations_set = 0;
 	char *line = NULL;
 	struct sockaddr_un remote;
 
@@ -747,7 +839,7 @@ int main(int argc, char **argv) {
 	verbose_init(argv[0]);
 
 	opterr = 0;
-	while ((opt = getopt(argc, argv, "+s:i:a:hYc:vdq")) != -1) {
+	while ((opt = getopt(argc, argv, "+C:s:i:a:hYc:vdq")) != -1) {
 		switch (opt) {
 			case 'q':
 				quiet = 1;
@@ -770,13 +862,19 @@ int main(int argc, char **argv) {
 				if (strlen(optarg) == 0) FATAL("socket address may not be empty");
 				control_socket = optarg;
 				break;
+			case 'C':
+				if (strlen(optarg) == 0) FATAL("config file name must not be empty");
+				config_file = optarg;
+				break;
 			case 's':
 				if (strlen(optarg) == 0) FATAL("salt must not be empty");
 				kdf_salt = optarg;
+				salt_set = 1;
 				break;
 			case 'i':
 				kdf_iterations = strtoul(optarg, &endptr, 10);
 				if (*endptr != '\0') FATAL("error in converting %s to unsigned long", optarg);
+				iterations_set = 1;
 				break;
 			case 'Y':
 				VERBOSE("assuming yes");
@@ -792,10 +890,20 @@ int main(int argc, char **argv) {
 
 	assert(!strcmp("SHA256", DEFAULT_KDF_HASH));
 	assert(!strcmp("PBKDF2", DEFAULT_KDF_FUNCTION));
-	if (strcmp(DEFAULT_KDF_SALT, kdf_salt))
+
+	/* the KDF parameters: command line, configuration file, defaults */
+	if (read_config(config_file?config_file:DEFAULT_CONFIG_FILE,
+				config_file != NULL, salt_set, iterations_set))
+		VERBOSE("KDF parameters read from %s, keep a backup of it, "
+				"without it your partitions cannot be opened",
+				config_file?config_file:DEFAULT_CONFIG_FILE);
+	else VERBOSE("no configuration file %s, using the default KDF "
+			"parameters", DEFAULT_CONFIG_FILE);
+
+	if (salt_set && strcmp(DEFAULT_KDF_SALT, kdf_salt))
 		WARNING("using custom value for salt, if you forget your salt, "
 				"you may lose access to your devices");
-	if (kdf_iterations != DEFAULT_KDF_ITERATIONS)
+	if (iterations_set && kdf_iterations != DEFAULT_KDF_ITERATIONS)
 		WARNING("using custom value for iterations, if you forget this "
 				"value, you may lose access to your devices");
 	if (kdf_iterations < 1000000) {

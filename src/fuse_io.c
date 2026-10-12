@@ -19,6 +19,7 @@
 
 #include <fuse.h>
 #include <string.h>
+#include <unistd.h>
 #include <errno.h>
 #include <assert.h>
 #include "verbose.h"
@@ -236,6 +237,7 @@ void fuse_io_destroy(void *arg) {
 	pthread_cancel(priv->control_thread);
 	pthread_join(priv->control_thread, NULL);
 	hashtbl_free(&priv->control_thread_priv.c);
+	close(priv->control_thread_priv.listen_fd);
 }
 
 static struct fuse_operations fuse_io_operations = {
@@ -297,7 +299,8 @@ static int fuse_main_custom(int argc, char *argv[],
 	return 0;
 }
 
-int fuse_io_start(int argc, char **argv, blockio_t *b) {
+int fuse_io_start(int argc, char **argv, blockio_t *b,
+		const char *control_socket) {
 	int ret;
 	fuse_io_priv_t priv;
 	hashtbl_init_default(&priv.entries, -1, 4, 1, 1,
@@ -306,8 +309,14 @@ int fuse_io_start(int argc, char **argv, blockio_t *b) {
 
 	priv.control_thread_priv.b = b;
 
+	/* create the control socket before mounting, so that errors
+	 * are reported before scubed3 goes to the background */
+	priv.control_thread_priv.listen_fd = control_listen(control_socket);
+
 	ret = fuse_main_custom(argc, argv, &fuse_io_operations,
 			sizeof(fuse_io_operations), &priv, 0);
+
+	unlink(control_socket);
 
 	hashtbl_free(&priv.entries);
 

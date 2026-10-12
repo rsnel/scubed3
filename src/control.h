@@ -23,7 +23,9 @@
 #include "blockio.h"
 #include "hashtbl.h"
 
-#define CONTROL_SOCKET "/tmp/scubed3"
+/* the socket is in a directory that only the owner of the scubed3 process
+ * can access, so nobody else can connect to it (not even for a moment) */
+#define CONTROL_SOCKET "/run/scubed3/control"
 
 typedef struct control_thread_priv_s {
 	hashtbl_t *h;
@@ -31,7 +33,10 @@ typedef struct control_thread_priv_s {
 	blockio_t *b;
 	hashtbl_t *ids;
 	char *mountpoint;
+	int listen_fd; /* from control_listen() */
 } control_thread_priv_t;
+
+int control_listen(const char*);
 
 void *control_thread(void *arg);
 

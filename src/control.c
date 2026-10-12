@@ -22,6 +22,7 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <sys/stat.h>
 #include <signal.h>
 #include <fuse.h>
 #include <assert.h>
@@ -800,13 +801,89 @@ int control_call(int s, control_thread_priv_t *priv, char *command) {
 	return (*cmnd->command)(s, priv, argv + 1);
 }
 
+/* create the control socket; its directory must belong to us and only we
+ * may have access to it (it is created if it does not exist), so no other
+ * user can connect to the socket, and nobody can replace it; if another
+ * scubed3 process listens on the socket, we refuse to take it over */
+int control_listen(const char *path) {
+	int s;
+	char *dir, *slash;
+	struct stat st;
+	struct sockaddr_un local;
+	mode_t old_umask;
+
+	if (*path != '/') FATAL("control socket %s must be an absolute path",
+			path);
+	if (strlen(path) >= sizeof(local.sun_path))
+		FATAL("control socket path %s is too long", path);
+
+	dir = estrdup(path);
+	slash = strrchr(dir, '/');
+	if (slash == dir) FATAL("control socket %s must be in a directory "
+			"of its own, not in /", path);
+	*slash = '\0';
+
+	if (mkdir(dir, S_IRWXU) == -1 && errno != EEXIST)
+		FATAL("creating directory %s: %s", dir, strerror(errno));
+	if (lstat(dir, &st) == -1)
+		FATAL("stat of %s: %s", dir, strerror(errno));
+	if (!S_ISDIR(st.st_mode))
+		FATAL("%s is not a directory", dir);
+	if (st.st_uid != geteuid())
+		FATAL("directory %s of the control socket does not belong to "
+				"us", dir);
+	if (st.st_mode&(S_IRWXG|S_IRWXO))
+		FATAL("directory %s of the control socket is accessible by "
+				"others (mode %03o), it must be 0700", dir,
+				st.st_mode&0777);
+
+	local.sun_family = AF_UNIX;
+	strcpy(local.sun_path, path);
+
+	if (lstat(path, &st) == 0) {
+		if (!S_ISSOCK(st.st_mode))
+			FATAL("%s exists and is not a socket", path);
+
+		/* is there a scubed3 process? */
+		if ((s = socket(AF_UNIX, SOCK_STREAM, 0)) == -1)
+			FATAL("socket: %s", strerror(errno));
+		if (connect(s, (struct sockaddr*)&local, sizeof(local)) == 0)
+			FATAL("another scubed3 process is listening on %s",
+					path);
+		close(s);
+
+		/* no, it is a leftover */
+		if (unlink(path) == -1)
+			FATAL("removing %s: %s", path, strerror(errno));
+	}
+
+	if ((s = socket(AF_UNIX, SOCK_STREAM, 0)) == -1)
+		FATAL("socket: %s", strerror(errno));
+
+	/* the socket is created with mode 0600 */
+	old_umask = umask(S_IRWXG|S_IRWXO|S_IXUSR);
+	if (bind(s, (struct sockaddr*)&local, sizeof(local)) == -1)
+		FATAL("bind()ing to %s: %s", path, strerror(errno));
+	umask(old_umask);
+
+	if (listen(s, 1) == -1)
+		FATAL("listen: %s", strerror(errno));
+
+	VERBOSE("listening for connection with scubed3ctl on %s", path);
+
+	free(dir);
+
+	return s;
+}
+
 void *control_thread(void *arg) {
 	control_thread_priv_t *priv = arg;
-	int s, s2, i;
-	socklen_t t, len;
+	int s = priv->listen_fd, s2, i;
+	socklen_t t;
 	char buf[BUF_SIZE];
 	int buf_len = 0;
-	struct sockaddr_un local, remote;
+	struct sockaddr_un remote;
+	struct ucred cred;
 
 	/* load all command descriptors in hash table */
 	hashtbl_init_default(&priv->c, -1, 4, 0, 1, NULL);
@@ -816,29 +893,22 @@ void *control_thread(void *arg) {
 			FATAL("duplicate command");
 	}
 
-	if ((s = socket(AF_UNIX, SOCK_STREAM, 0)) == -1)
-		FATAL("socket: %s", strerror(errno));
-
-	local.sun_family = AF_UNIX;
-	strcpy(local.sun_path, CONTROL_SOCKET);
-	unlink(local.sun_path);
-	len = strlen(local.sun_path) + sizeof(local.sun_family);
-	if (bind(s, (struct sockaddr*)&local, len) == -1)
-		FATAL("bind()ing to %s: %s", local.sun_path, strerror(errno));
-
-	if (chmod(CONTROL_SOCKET, S_IRUSR|S_IWUSR) == -1)
-		FATAL("chmod: %s", strerror(errno));
-
-	if (listen(s, 1) == -1)
-		FATAL("listen: %s", strerror(errno));
-
-	VERBOSE("listening for connection with scubed3ctl on " CONTROL_SOCKET);
-
 	while (1) {
 		int n, i, start, done = 0, ret;
 		t = sizeof(remote);
 		if ((s2 = accept(s, (struct sockaddr*)&remote, &t)) == -1)
 			FATAL("accept: %s", strerror(errno));
+
+		/* the directory of the socket already keeps others out,
+		 * check the peer anyway: only root and our own user */
+		t = sizeof(cred);
+		if (getsockopt(s2, SOL_SOCKET, SO_PEERCRED, &cred, &t) == -1 ||
+				(cred.uid != 0 && cred.uid != geteuid())) {
+			WARNING("refused connection on the control socket "
+					"from uid %d", (int)cred.uid);
+			close(s2);
+			continue;
+		}
 
 		buf_len = 0;
 		do {

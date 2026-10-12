@@ -122,9 +122,18 @@ does not say how many partitions there are.
 Control protocol
 ~~~~~~~~~~~~~~~~
 
-/MOUNTPOINT/.control is a file to which commands can be written, and
-scubed3's response can be read. A command is a line of text terminated
-with a linefeed '\n'.
+scubed3 listens on a unix socket, /run/scubed3/control (another path can be
+given with -a, to scubed3 and to scubed3ctl). The directory of the socket is
+created with mode 0700 if it does not exist; it must belong to the user that
+runs scubed3 and nobody else may have access to it, otherwise scubed3 refuses
+to start. So no other user can connect to the socket, not even for a moment,
+and nobody can replace it. In addition, scubed3 only accepts connections from
+root and from its own user. scubed3 refuses to take over the socket of
+another running scubed3 process; a socket left behind by a crashed process
+is replaced.
+
+Commands can be written to the socket, and scubed3's response can be read. A
+command is a line of text terminated with a linefeed '\n'.
 
 A response starts with "OK\n", or "ERR\n". One or more lines follow.
 The last line must be ".\n". This terminates the message.

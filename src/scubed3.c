@@ -44,6 +44,7 @@
 #include "cipher.h"
 #include "hashtbl.h"
 #include "fuse_io.h"
+#include "control.h"
 
 #define ID	(index>>l->mesobits)
 #define NO	(index&l->mesomask)
@@ -625,15 +626,18 @@ int do_req(scubed3_t *l, scubed3_io_t cmd, uint64_t r_offset, size_t size,
 int main(int argc, char **argv) {
 	struct options {
 		char *base;
+		char *control;
 		uint8_t mesoblock_log;
 		uint8_t macroblock_log;
 	} options = {
 		.base = NULL,
+		.control = NULL,
 		.mesoblock_log = 14,
 		.macroblock_log = 22
 	};
 	struct fuse_opt scubed3_opts[] = {
 		SCUBED3_OPT_KEY("-b %s", base, 0),
+		SCUBED3_OPT_KEY("-a %s", control, 0),
 		SCUBED3_OPT_KEY("-m %d", mesoblock_log, 0),
 		SCUBED3_OPT_KEY("-M %d", macroblock_log, 0),
 		FUSE_OPT_END
@@ -662,11 +666,13 @@ int main(int argc, char **argv) {
 	blockio_init_file(&b, options.base,
 			options.macroblock_log, options.mesoblock_log);
 
-	ret = fuse_io_start(args.argc, args.argv, &b);
+	ret = fuse_io_start(args.argc, args.argv, &b,
+			options.control?options.control:CONTROL_SOCKET);
 
 	blockio_free(&b);
 
 	free(options.base);
+	free(options.control);
 	fuse_opt_free_args(&args);
 
 	exit(ret);

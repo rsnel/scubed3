@@ -58,8 +58,8 @@ empty block gets selected.
 
 Level 1: moderately paranoid
 
-it is randomly selected from all allocated blocks. This hurts write
-performance.
+it is randomly selected from all allocated blocks (see "Write order" below).
+This hurts write performance.
 
 Level 2: just paranoid (NOT IMPLEMENTED YET)
 
@@ -152,10 +152,13 @@ Layout of macroblock:
 
 0x000000 SHA256_HASH_INDEXBLOCK hash of 0x000020 - 0x003FFF
 0x000020 SHA256_HASH_DATA (hash of ciphertext)
-0x000040 SHA256_HASH_SEQNOS  /* seqnos of used macroblocks */
+0x000040 uint64_t trim_floor (blocks with seqno < trim_floor are stale)
+0x000048 24 bytes, MUST be 0
 0x000060 uint64_t seqno
-0x000068 uint64_t next_seqno
-0x000070 8byte literal "SSS3v0.1"
+0x000068 uint32_t next_block (the block that will be written after this one,
+         0xFFFFFFFF if none)
+0x00006C 4 bytes, MUST be 0
+0x000070 8byte literal "SSS3v0.2"
 0x000078 uint32_t no_macroblocks
 0x00007C uint32_t reserved_blocks
 0x000080 uint32_t pending_removals (shrinking: blocks still to be removed)
@@ -202,30 +205,52 @@ In general the indexblock requires:
 - 4 bytes for every mesoblock in a macroblock
 - 1 bit for every macroblock
 
+Write order (the juggler)
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The juggler keeps the pool of all blocks that currently belong to the
+partition. After a block is written, the block that will be written next
+is drawn uniformly from the whole pool (the block just written included)
+and its number is stored in the index (next_block). So the sequence of
+written blocks is independent and uniformly distributed over the pool, and
+it does not depend on the data written.
+
+The block that will be written next is called the tail. Before the current
+block is written, it absorbs all live mesoblocks of the tail, so nothing is
+lost when the tail is overwritten. If the tail is the current block itself,
+the current block is written out without new data and the next block is
+drawn again (this happens with probability 1/N for a pool of N blocks).
+
+Paranoia level 2 can be built on top of this: to write a block of the whole
+disk, pick a partition with a probability proportional to its pool size,
+that partition writes the block it has chosen as next_block. All writes on
+the disk are then in uniform random order.
+
 Shrinking
 ~~~~~~~~~
 
 Shrinking sets pending_removals = no_macroblocks - target, the usable size
 is computed from the target. Mesoblocks past the new end are obsoleted at
 once, and a trim (seqno of the next write, new size) is recorded, so that
-these references are never replayed, not even after a later enlarge.
+these references are never replayed, not even after a later enlarge. At
+most 8 trims are kept; a trim is dropped when no block in the pool is older
+than it, trim_floor is then raised to its seqno. A shrink that would need
+a 9th trim is refused.
 
-Blocks are removed one at a time, in the order in which the juggler offers
-them:
-- an unscheduled block holds no data and can be removed at once (the last
-  one only if a block is scheduled for the next seqno)
-- a scheduled block Y can be removed when it is due, contains no live
-  mesoblocks, and the block Z due after it contains no live mesoblocks
-  either; Y is then written in its own slot as a discarded block
-  (seqno == next_seqno, FREE in its own bitmap), so the write pattern is
-  the same as in normal operation
-- while removals are pending, the current block absorbs (after its tail)
-  live mesoblocks of the block after the tail, leaving one mesoblock free
+While removals are pending, every write also drains a victim: the block in
+the pool (not the current block, not the tail) with the least live data.
+Its live mesoblocks are absorbed by the current block (up to the brim);
+when the victim holds no live data anymore, it is removed from the pool.
+A removed block is FREE in the bitmap of the next written block; it is
+given back to the unallocated blocks only after that block is on disk.
+The last block of a partition is removed by a final write: it is written
+with itself FREE in its own bitmap.
+
+A removed block is never written to: removing blocks causes no extra
+writes and the write order stays uniform over the (smaller) pool.
 
 On startup, a block with our signature is stale (not replayed) if it is
-FREE in the bitmap of the most recent block, or if next_seqno <= the
-highest seqno found: a block leaves the partition only through a discard
-write in its own slot.
+FREE in the bitmap of the most recent block, or if its seqno < trim_floor.
 
 Durability
 ~~~~~~~~~~
@@ -235,8 +260,9 @@ macroblocks reach the disk in the order in which they are written: the
 block that absorbed the live data of its tail is on disk before the tail
 is overwritten. Therefore only the most recently written block can be
 incomplete after a power failure; on startup its data hash is checked, if
-it doesn't match, the block is ignored (its slot is reused for the same
-block, so that the incomplete contents are overwritten).
+it doesn't match, the block is ignored. The index of the block before it
+names the same block as next_block, so it will be written again and the
+incomplete contents are overwritten.
 
 fsync() on a partition writes out the current block (if it contains new
 data), so after fsync() returns, everything written before is on disk.

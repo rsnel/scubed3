@@ -112,24 +112,26 @@ static void absorb_block(scubed3_t *l, blockio_info_t *bi, uint32_t limit) {
 }
 
 void copy_old_block_to_current(scubed3_t *l) {
-	blockio_info_t *next, *tail = l->dev->tail_macroblock;
+	blockio_info_t *victim, *tail = l->dev->tail_macroblock;
 
 	/* the tail is always absorbed completely, it is overwritten next */
 	absorb_block(l, tail, l->dev->b->mmpm);
 	if (tail && tail != l->dev->bi && tail->no_nonobsolete)
 		FATAL("tail of current block does not fit in it");
 
-	/* if we are shrinking, use the remaining room to absorb live data
-	 * of the block after the tail; when that block is completely
-	 * absorbed, the tail can be discarded at its turn; blocks are
-	 * filled completely, otherwise a partition that is completely
-	 * written cannot reach its target size (if the current block is
-	 * filled, a pending write gets its room from do_write, which
-	 * obsoletes the old version of the mesoblock first) */
+	/* if we are shrinking, use the remaining room to drain the block
+	 * with the least live data (the victim); when it is empty, it is
+	 * removed from the partition; blocks are filled completely,
+	 * otherwise a partition that is completely written cannot reach
+	 * its target size (if the current block is filled, a pending write
+	 * waits in select_new_macroblock until there is room) */
 	if (!l->dev->pending_removals) return;
 
-	next = juggler_get_due(&l->dev->j, l->dev->bi->seqno + 2);
-	if (next) absorb_block(l, next, l->dev->b->mmpm);
+	if (!(victim = blockio_dev_find_victim(l->dev))) return;
+
+	absorb_block(l, victim, l->dev->b->mmpm);
+
+	if (!victim->no_nonobsolete) blockio_dev_remove_block(l->dev, victim);
 }
 
 /*
@@ -218,6 +220,9 @@ void initialize_output(scubed3_t *l) {
 }
 
 void scubed3_cycle(scubed3_t *l) {
+	/* there is no current block if all blocks were removed */
+	if (!l->dev->bi) return;
+
 	/* output ONE block, run GC if possible and useful */
 	if (l->output_initialized) { /* output is initialized */
 		//pre_emptive_gc(l);
@@ -364,18 +369,10 @@ void scubed3_init(scubed3_t *l, blockio_dev_t *dev) {
 
 	dllarr_iterate(&dev->replay, (dllarr_iterator_t)replay, l);
 
+	/* the replayed blocks are in the pool of the juggler already */
 	blockio_info_t *bi;
-
-	while ((bi = dllarr_last(&dev->replay))) {
+	while ((bi = dllarr_last(&dev->replay)))
 		dllarr_remove(&dev->replay, bi);
-		juggler_add_macroblock(&dev->j, bi);
-	}
-	
-	char hash[32];
-	juggler_hash_scheduled_seqnos(&dev->j, hash);
-	if (memcmp(hash, dev->seqnos_hash, 32)) 
-		WARNING("hash seqno's is wrong, "
-				"at least one block seems to be missing");
 }
 
 void blockio_dev_fake_mesoblk_part(blockio_dev_t *dev, void *addr,

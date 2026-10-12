@@ -36,10 +36,12 @@ typedef struct blockio_info_s blockio_info_t;
 typedef struct blockio_s blockio_t;
 
 struct blockio_info_s {
-	struct blockio_info_s *next; // for use with random juggler
+	uint32_t pool_index; // position in the pool of the juggler
 
-	dllarr_elt_t ur; // for unallocated and replay (possibly juggler?)
-	uint64_t seqno, next_seqno;
+	/* for unallocated, replay and release */
+	dllarr_elt_t ur;
+	uint64_t seqno;
+	uint32_t next_block; /* from the index: the block written after it */
 	char data_hash[32];
 	//char seqnos_hash[32];
 
@@ -55,8 +57,11 @@ typedef struct blockio_dev_s {
 	char *name;
 	blockio_t *b;
 	cipher_t *c;
-	char seqnos_hash[32];
 	dllarr_t replay;
+
+	/* removed blocks, they are given to the pool of unallocated blocks
+	 * after the removal is on disk (in the index of the next write) */
+	dllarr_t release;
 	int updated; /* do we need to write this block? */
 	bitmap_t status; // record status of all macroblocks with
 			 // respect to this device
@@ -80,6 +85,10 @@ typedef struct blockio_dev_s {
 		uint32_t size;
 	} trims[BLOCKIO_MAX_TRIMS];
 
+	/* a block with a seqno below trim_floor is never replayed (a trim
+	 * that was pruned could apply to it) */
+	uint64_t trim_floor;
+
 	blockio_info_t *bi; /* current block */
 	blockio_info_t *tail_macroblock; /* tbe block that must be cleaned out */
 
@@ -95,8 +104,6 @@ typedef struct blockio_dev_s {
 	char *out_macroblock;
 	blockio_info_t *ram_block;
 
-	/* the most recent block was incomplete, its slot is reused for it */
-	blockio_info_t *torn_block;
 
 	// use one random_t per dev, to avoid locking issues
 	random_t r;
@@ -186,6 +193,10 @@ int blockio_dev_free_macroblocks(blockio_dev_t*, uint32_t);
 void blockio_prepare_block(blockio_info_t*);
 
 uint32_t blockio_dev_usable_macroblocks(blockio_dev_t*);
+
+blockio_info_t *blockio_dev_find_victim(blockio_dev_t*);
+
+void blockio_dev_remove_block(blockio_dev_t*, blockio_info_t*);
 
 int blockio_dev_add_trim(blockio_dev_t*, uint64_t, uint32_t);
 

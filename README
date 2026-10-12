@@ -202,7 +202,7 @@ Layout of macroblock:
 0x000068 uint32_t next_block (the block that will be written after this one,
          0xFFFFFFFF if none)
 0x00006C 4 bytes, MUST be 0
-0x000070 8byte literal "SSS3v0.3"
+0x000070 8byte literal "SSS3v0.4"
 0x000078 uint32_t no_macroblocks
 0x00007C uint32_t reserved_blocks
 0x000080 uint32_t pending_removals (shrinking: blocks still to be removed)
@@ -212,7 +212,9 @@ Layout of macroblock:
          mesoblock >= trims[i].size is dead (discarded by shrinking)
 ......   rest of the 128 byte reserved space, MUST be 0
 0x000100 uint32_t no_indices
-0x000104 uint32_t idx0x01
+0x000104 uint32_t idx0x01 (the logical mesoblock in data mesoblock 1, or
+                           0xFFFFFFFE: mesoblock 1 holds tombstones, see
+                           Discard)
 0x000108 uint32_t idx0x02
 ......
 0x0004FC uint32_t idx0xff
@@ -329,6 +331,44 @@ The size of a partition is changed with resize. Truncating it (open with
 O_TRUNC, truncate(), ftruncate()) succeeds but changes nothing, as on a block
 device: dd works without conv=notrunc, and an accidental "> partition" in a
 shell destroys nothing.
+
+Discard
+~~~~~~~
+
+When files are deleted, the filesystem knows which blocks are free, scubed3
+does not: it would keep their data, and the GC would keep copying it. A
+filesystem can tell, with discard (TRIM): run fstrim(8) on the mounted
+filesystem now and then (or mount it with -o discard). The loop device turns
+discard requests into fallocate(PUNCH_HOLE) on the partition, and write
+zeroes requests into fallocate(ZERO_RANGE); both are supported, the range
+reads as zeroes afterwards. Whole mesoblocks in the range are discarded, the
+parts of mesoblocks at the edges are written with zeroes. This works for
+ext3, ext4, XFS, btrfs, F2FS, vfat and every other filesystem that supports
+discard; ext2 can be mounted with the ext4 driver (mount -t ext4) to get
+discard, or the free blocks can be discarded offline with e2fsck -E discard.
+
+A discarded mesoblock must stay discarded when the partition is opened
+again, also if older versions of it are still on disk (in blocks that were
+not written since). So a discard writes a tombstone: a list of discarded
+logical mesoblocks in a data mesoblock of the current block (index value
+0xFFFFFFFE; a big endian uint32_t count, followed by that many uint32_t's,
+at most 4095 per mesoblock). When a block is replayed, its tombstones are
+applied first: they discard the versions of those mesoblocks in older blocks
+(the data in the block itself is newer).
+
+A tombstone is needed as long as a version of its mesoblock is in the index
+of a block on disk; scubed3 counts these versions for every logical mesoblock.
+The GC carries tombstones that are still needed (from the tail, and from the
+victims when shrinking) to the current block, as live data; the others die
+out by themselves when the blocks with old versions are written again. A
+mesoblock that is discarded while it is in the current block (not yet on disk)
+is removed from it. A block that is added to a
+partition (grow) may still have an old index of ours, that would be replayed
+if the partition is opened again before the block is written: its versions
+are counted, and they get tombstones if they were discarded.
+
+The info command shows tombstone_slots (on disk), tombstones_pending (in the
+current block) and mapped_mesoblocks (mesoblocks that hold data).
 
 Shrinking
 ~~~~~~~~~

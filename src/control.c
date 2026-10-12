@@ -539,6 +539,27 @@ static int control_info(int s, control_thread_priv_t *priv, char *argv[]) {
 
 	if (control_write_line(s, "updated=%d\n", entry->d.updated)) return -1;
 
+	/* tombstones on disk (slots of them), and waiting in RAM */
+	{
+		uint32_t i, k, slots = 0;
+		blockio_info_t *bi;
+		for (i = 0; i < juggler_count(&entry->d.j); i++) {
+			bi = juggler_nth(&entry->d.j, i);
+			for (k = 0; k < bi->no_indices; k++)
+				if (bi->indices[k] == BLOCKIO_TOMBSTONES)
+					slots++;
+		}
+		if (control_write_line(s, "tombstone_slots=%u\n", slots))
+			return -1;
+		if (control_write_line(s, "tombstones_pending=%u\n",
+					entry->d.no_tombs)) return -1;
+		/* mesoblocks that contain data (not discarded) */
+		for (i = k = 0; i < entry->l.no_block_indices; i++)
+			if (entry->l.block_indices[i] != 0xFFFFFFFF) k++;
+		if (control_write_line(s, "mapped_mesoblocks=%u\n", k))
+			return -1;
+	}
+
 	hashtbl_unlock_element_byptr(entry);
 
 	return control_write_terminate(s);
@@ -674,6 +695,9 @@ static int control_resize(int s, control_thread_priv_t *priv, char *argv[]) {
 		blockio_dev_select_next_macroblock(dev);
 		entry->l.output_initialized = 0;
 	}
+
+	/* blocks that were added may still have an index of ours */
+	scubed3_readded(&entry->l);
 
 	dev->updated = 1;
 

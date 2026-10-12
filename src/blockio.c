@@ -305,7 +305,7 @@ void blockio_init_file(blockio_t *b, const char *path, uint8_t macroblock_log,
 	pthd_mutex_init(&b->unallocated_mutex);
 }
 
-static const char magic[8] = "SSS3v0.3";
+static const char magic[8] = "SSS3v0.4";
 
 static void blockio_dev_take_index(blockio_dev_t*);
 
@@ -351,6 +351,9 @@ void blockio_dev_free(blockio_dev_t *dev) {
 
 	dllarr_free(&dev->replay);
 	dllarr_free(&dev->release);
+	free(dev->old_ondisk);
+	free(dev->refcount);
+	free(dev->tombs);
 	free(dev->tmp_macroblock);
 	free(dev->out_macroblock);
 	free(dev->name);
@@ -363,6 +366,118 @@ uint32_t blockio_dev_usable_macroblocks(blockio_dev_t *dev) {
 	if (target <= dev->reserved_macroblocks) return 0;
 
 	return target - dev->reserved_macroblocks;
+}
+
+/* the number of slots of the current block that can still be used for
+ * data, the tombstones take slots after the data */
+uint32_t blockio_dev_free_slots(blockio_dev_t *dev) {
+	uint32_t used;
+	assert(dev->bi);
+
+	used = dev->bi->no_indices + (dev->no_tombs + dev->tombs_per_mesoblk -
+			1)/dev->tombs_per_mesoblk;
+	assert(used <= dev->b->mmpm);
+
+	return dev->b->mmpm - used;
+}
+
+/* do no more tombstones fit in the current block? */
+int blockio_dev_tomb_fits(blockio_dev_t *dev, uint32_t no) {
+	assert(dev->bi);
+
+	return dev->bi->no_indices + (dev->no_tombs + no +
+			dev->tombs_per_mesoblk - 1)/dev->tombs_per_mesoblk <=
+		dev->b->mmpm;
+}
+
+/* add a tombstone for logical mesoblock L to the current block, the
+ * caller must check that it fits */
+void blockio_dev_add_tomb(blockio_dev_t *dev, uint32_t L) {
+	assert(blockio_dev_tomb_fits(dev, 1));
+
+	if (dev->no_tombs == dev->size_tombs) {
+		dev->size_tombs = dev->size_tombs?2*dev->size_tombs:
+			dev->tombs_per_mesoblk;
+		dev->tombs = erealloc(dev->tombs, dev->size_tombs,
+				sizeof(uint32_t));
+	}
+	dev->tombs[dev->no_tombs++] = L;
+}
+
+static void count_range(blockio_dev_t *dev, uint32_t *indices, uint32_t n,
+		uint32_t from) {
+	uint32_t k;
+
+	for (k = 0; k < n; k++)
+		if (indices[k] >= from && indices[k] < dev->no_refcount)
+			dev->refcount[indices[k]]++;
+}
+
+/* the partition has size mesoblocks now; when it grows, the indices on
+ * disk that refer to the new part are counted (they may be in the blocks
+ * of the partition from before an earlier shrink) */
+void blockio_dev_resize_refcount(blockio_dev_t *dev, uint32_t size) {
+	uint32_t old = dev->no_refcount, i;
+	blockio_info_t *bi;
+
+	dev->refcount = erealloc(dev->refcount, size?size:1, sizeof(uint32_t));
+	dev->no_refcount = size;
+	if (size <= old) return;
+
+	memset(dev->refcount + old, 0, (size - old)*sizeof(uint32_t));
+
+	for (i = 0; i < juggler_count(&dev->j); i++) {
+		bi = juggler_nth(&dev->j, i);
+		if (bi == dev->bi) count_range(dev, dev->old_ondisk,
+				dev->no_old_ondisk, old);
+		else count_range(dev, bi->indices, bi->no_ondisk, old);
+	}
+
+	for (bi = dllarr_first(&dev->release); bi;
+			bi = dllarr_next(&dev->release, bi))
+		count_range(dev, bi->indices, bi->no_ondisk, old);
+}
+
+/* count (sign = 1) or uncount (sign = -1) the on disk indices of a block */
+void blockio_dev_count_ondisk(blockio_dev_t *dev, blockio_info_t *bi,
+		int sign) {
+	uint32_t k;
+
+	for (k = 0; k < bi->no_ondisk; k++) {
+		if (bi->indices[k] >= dev->no_refcount) continue;
+		assert(sign > 0 || dev->refcount[bi->indices[k]]);
+		dev->refcount[bi->indices[k]] += sign;
+	}
+}
+
+/* read the tombstones in slot no of block bi into tombs (room for
+ * tombs_per_mesoblk), returns how many there are; if the slot is corrupt,
+ * the tombstones are lost (discarded data may come back) */
+uint32_t blockio_dev_read_tombs(blockio_dev_t *dev, blockio_info_t *bi,
+		uint32_t no, uint32_t *tombs) {
+	unsigned char buf[1<<dev->b->mesoblk_log];
+	uint32_t n, i, id = blockio_get_macroblock_index(bi);
+
+	assert(bi->indices[no] == BLOCKIO_TOMBSTONES);
+
+	if (blockio_dev_read_mesoblk(dev, buf, id, no)) {
+		ERROR("tombstones in slot %u of block %u of \"%s\" are "
+				"corrupt, discarded data may come back", no, id,
+				dev->name);
+		return 0;
+	}
+
+	n = binio_read_uint32_be(buf);
+	if (n > dev->tombs_per_mesoblk) {
+		ERROR("invalid number of tombstones %u in slot %u of block %u "
+				"of \"%s\"", n, no, id, dev->name);
+		return 0;
+	}
+
+	for (i = 0; i < n; i++)
+		tombs[i] = binio_read_uint32_be(buf + 4 + 4*i);
+
+	return n;
 }
 
 /* references from blocks older than trims[i].seqno to mesoblocks
@@ -459,12 +574,25 @@ static void blockio_dev_release_removed(blockio_dev_t *dev) {
 	pthd_mutex_lock(&dev->b->unallocated_mutex);
 	while ((bi = dllarr_last(&dev->release))) {
 		dllarr_remove(&dev->release, bi);
+		/* its index will not be replayed anymore */
+		blockio_dev_count_ondisk(dev, bi, -1);
 		blockio_info_free_tables(bi);
 		bi->dev = NULL;
 		bi->seqno = 0;
 		dllarr_append(&dev->b->unallocated, bi);
 	}
 	pthd_mutex_unlock(&dev->b->unallocated_mutex);
+}
+
+/* the next block of the juggler becomes the current block, remember its
+ * indices on disk: they stay on disk (and count) until it is written */
+static void blockio_dev_take_current(blockio_dev_t *dev) {
+	dev->bi = juggler_get_devblock(&dev->j);
+
+	memcpy(dev->old_ondisk, dev->bi->indices,
+			dev->bi->no_ondisk*sizeof(uint32_t));
+	dev->no_old_ondisk = dev->bi->no_ondisk;
+	assert(!dev->no_tombs);
 }
 
 void blockio_dev_select_next_macroblock(blockio_dev_t *dev) {
@@ -479,7 +607,7 @@ void blockio_dev_select_next_macroblock(blockio_dev_t *dev) {
 	 * that the removal is on disk; afterwards there is no current block */
 	if (dev->pending_removals && juggler_count(&dev->j) == 1 &&
 			!juggler_nth(&dev->j, 0)->no_nonobsolete) {
-		dev->bi = juggler_get_devblock(&dev->j);
+		blockio_dev_take_current(dev);
 		juggler_set_next(&dev->j, NULL);
 		VERBOSE("removing the last block %u",
 				blockio_get_macroblock_index(dev->bi));
@@ -506,7 +634,7 @@ void blockio_dev_select_next_macroblock(blockio_dev_t *dev) {
 		dev->ram_block = due;
 	}
 
-	dev->bi = juggler_get_devblock(&dev->j);
+	blockio_dev_take_current(dev);
 	dev->ram_block = dev->bi; /* tmp_macroblock now belongs to bi */
 	dev->tail_macroblock = dev->j.next;
 
@@ -522,7 +650,7 @@ void blockio_dev_select_next_macroblock(blockio_dev_t *dev) {
 				"(pool=%u)", blockio_get_macroblock_index(dev->bi),
 				juggler_count(&dev->j));
 		blockio_dev_write_current_macroblock(dev);
-		dev->bi = juggler_get_devblock(&dev->j);
+		blockio_dev_take_current(dev);
 		dev->ram_block = dev->bi;
 		dev->tail_macroblock = dev->j.next;
 	}
@@ -572,6 +700,9 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 	dev->tmp_macroblock = ecalloc(1, 1<<b->macroblock_log);
 	dev->out_macroblock = ecalloc(1, 1<<b->macroblock_log);
 	dev->ram_block = NULL;
+	dev->old_ondisk = ecalloc(b->mmpm, sizeof(uint32_t));
+	/* a slot of tombstones: number of tombstones, tombstones */
+	dev->tombs_per_mesoblk = (1<<(b->mesoblk_log - 2)) - 1;
 
 	/* read macroblock headers, protected by mutex,
 	 * because we will maybe touch blocks that are owned
@@ -826,8 +957,10 @@ void blockio_dev_scan_header(dllarr_t *replay, blockio_dev_t *dev,
 	if (bi->seqno == 0) 
 		FATAL("block found with seqno 0, not possibile");
 
-	bi->no_nonobsolete = bi->no_indices =
+	bi->no_nonobsolete = bi->no_indices = bi->no_ondisk =
 		binio_read_uint32_be(NO_INDICES_UINT32);
+	if (bi->no_indices > dev->b->mmpm)
+		FATAL("too many indices in block %u", no);
 	blockio_info_alloc_tables(bi, dev->b->mmpm);
 
 	for (i = 0; i < dev->b->mmpm; i++)
@@ -944,6 +1077,26 @@ void blockio_dev_write_current_macroblock(blockio_dev_t *dev) {
 	DEBUG("write block %u (seqno=%lu)", id, dev->bi->seqno);
 	dev->writes++;
 
+	/* the tombstones go in slots after the data */
+	for (i = 0; i < dev->no_tombs; i += dev->tombs_per_mesoblk) {
+		uint32_t k, n = dev->no_tombs - i;
+		char *slot = BASE + ((dev->bi->no_indices + 1)<<
+				dev->b->mesoblk_log);
+		if (n > dev->tombs_per_mesoblk) n = dev->tombs_per_mesoblk;
+		assert(dev->bi->no_indices < dev->b->mmpm);
+		memset(slot, 0, 1<<dev->b->mesoblk_log);
+		binio_write_uint32_be(slot, n);
+		for (k = 0; k < n; k++)
+			binio_write_uint32_be(slot + 4 + 4*k,
+					dev->tombs[i + k]);
+		dev->bi->indices[dev->bi->no_indices] = BLOCKIO_TOMBSTONES;
+		dev->bi->hashes[dev->bi->no_indices] = 0;
+		dev->bi->no_indices++;
+	}
+	if (dev->no_tombs) DEBUG("block %u has %u tombstones", id,
+			dev->no_tombs);
+	dev->no_tombs = 0;
+
 	/* zero out the unused datablock,
 	 * so that we do not encrypt 'random' data */
 	for (i = dev->bi->no_indices + 1; i <= dev->b->mmpm; i++) {
@@ -992,7 +1145,11 @@ void blockio_dev_write_current_macroblock(blockio_dev_t *dev) {
 		binio_write_uint32_be(TRIM_SIZE_UINT32(i), dev->trims[i].size);
 	}
 
-	dev->bi->no_nonobsolete = dev->bi->no_indices;
+	/* the dead slots (discarded while in RAM) are obsolete */
+	dev->bi->no_nonobsolete = 0;
+	for (i = 0; i < dev->bi->no_indices; i++)
+		if (dev->bi->indices[i] != BLOCKIO_DEAD)
+			dev->bi->no_nonobsolete++;
 	binio_write_uint32_be(NO_INDICES_UINT32, dev->bi->no_indices);
 	for (i = 1; i <= dev->bi->no_indices; i++)
 		binio_write_uint32_be(((uint32_t*)NO_INDICES_UINT32) + i,
@@ -1021,6 +1178,17 @@ void blockio_dev_write_current_macroblock(blockio_dev_t *dev) {
 	 * this block now; this also means that only the most recently
 	 * written block can be incomplete after a power failure */
 	dev->b->sync(dev->io);
+
+	/* the old index of this block is replaced by the new one */
+	for (i = 0; i < dev->no_old_ondisk; i++)
+		if (dev->old_ondisk[i] < dev->no_refcount) {
+			assert(dev->refcount[dev->old_ondisk[i]]);
+			dev->refcount[dev->old_ondisk[i]]--;
+		}
+	dev->no_old_ondisk = 0;
+	dev->bi->no_ondisk = dev->bi->no_indices;
+	blockio_dev_count_ondisk(dev, dev->bi, 1);
+	dev->bi->readded = 0;
 
 	/* removed blocks are not part of the partition on disk anymore */
 	blockio_dev_release_removed(dev);
@@ -1062,8 +1230,46 @@ int blockio_dev_free_macroblocks(blockio_dev_t *dev, uint32_t size) {
 void blockio_prepare_block(blockio_info_t *bi) {
 	assert(bi->dev);
 	bi->seqno = 0;
-	bi->no_indices = bi->no_nonobsolete = 0;
+	bi->no_indices = bi->no_nonobsolete = bi->no_ondisk = 0;
+	bi->readded = 0;
 	blockio_info_alloc_tables(bi, bi->dev->b->mmpm);
+}
+
+/* a block that is added to the partition may still have an index of ours
+ * on disk (it was removed by shrinking, or it was stale when the partition
+ * was opened), it would be replayed if the partition is opened again before
+ * the block is written: its indices count, and discarded mesoblocks in it
+ * need tombstones (see scubed3_readded) */
+static void blockio_dev_check_readded(blockio_dev_t *dev, blockio_info_t *bi) {
+	uint32_t no = blockio_get_macroblock_index(bi), n, k;
+	unsigned char *buf = ecalloc(1, 1<<dev->b->mesoblk_log);
+	char sha256[32];
+	uint64_t seqno;
+
+	if (dev->b->read(dev->io, buf, ((off_t)no)<<dev->b->macroblock_log,
+				1<<dev->b->mesoblk_log)) goto out;
+	cipher_dec(dev->c, (char*)buf, (char*)buf, 0, 0, no);
+	if (memcmp(magic, buf + 0x070, sizeof(magic))) goto out;
+	gcry_md_hash_buffer(GCRY_MD_SHA256, sha256, buf + sizeof(sha256),
+			(1<<dev->b->mesoblk_log) - sizeof(sha256));
+	if (memcmp(buf, sha256, sizeof(sha256))) goto out;
+
+	/* below the trim floor it is never replayed */
+	seqno = binio_read_uint64_be(buf + 0x060);
+	if (seqno < dev->trim_floor) goto out;
+
+	n = binio_read_uint32_be(buf + 0x100);
+	if (n > dev->b->mmpm) goto out;
+	for (k = 0; k < n; k++)
+		bi->indices[k] = binio_read_uint32_be(buf + 0x104 + 4*k);
+	bi->no_ondisk = n;
+	bi->readded = 1;
+	blockio_dev_count_ondisk(dev, bi, 1);
+	VERBOSE("block %u (seqno=%lu) added to \"%s\" still has %u "
+			"indices of ours", no, seqno, dev->name, n);
+out:
+	wipememory(buf, 1<<dev->b->mesoblk_log);
+	free(buf);
 }
 
 int blockio_dev_allocate_macroblocks(blockio_dev_t *dev, uint32_t size) {
@@ -1087,6 +1293,7 @@ int blockio_dev_allocate_macroblocks(blockio_dev_t *dev, uint32_t size) {
 		bi->dev = dev;
 
 		blockio_prepare_block(bi);
+		blockio_dev_check_readded(dev, bi);
 
 		dev->no_macroblocks++;
 

@@ -218,6 +218,31 @@ static int fuse_io_truncate(const char *path, off_t size) {
 	return 0;
 }
 
+/* discard: the loop driver turns discard requests (fstrim, mount -o
+ * discard) and write zeroes requests into fallocate(PUNCH_HOLE) and
+ * fallocate(ZERO_RANGE) on the partition; both make the range read as
+ * zeroes, whole mesoblocks are discarded (see scubed3_discard); allocating
+ * is possible within the partition (nothing to do), not past its end */
+static int fuse_io_fallocate(const char *path, int mode, off_t offset,
+		off_t len, struct fuse_file_info *fi) {
+	int ret = 0;
+	fuse_io_entry_t *entry = hashtbl_find_element_bykey(
+			&((fuse_io_priv_t*)fuse_get_context()->private_data)->
+			entries, path + 1);
+	if (!entry) return -ENOENT;
+
+	if (offset < 0 || len <= 0) ret = -EINVAL;
+	else if (mode&~(FALLOC_FL_KEEP_SIZE|FALLOC_FL_PUNCH_HOLE|
+				FALLOC_FL_ZERO_RANGE)) ret = -EOPNOTSUPP;
+	else if (mode&(FALLOC_FL_PUNCH_HOLE|FALLOC_FL_ZERO_RANGE))
+		ret = scubed3_discard(&entry->l, offset, len);
+	else if (offset + len > entry->size) ret = -ENOSPC;
+
+	hashtbl_unlock_element_byptr(entry);
+
+	return ret;
+}
+
 static int fuse_io_ftruncate(const char *path, off_t size,
 		struct fuse_file_info *fi) {
 	return fuse_io_truncate(path, size);
@@ -252,6 +277,7 @@ static struct fuse_operations fuse_io_operations = {
 	.fsync = fuse_io_fsync,
 	.truncate = fuse_io_truncate,
 	.ftruncate = fuse_io_ftruncate,
+	.fallocate = fuse_io_fallocate,
 //	.flush = fuse_io_flush
 };
 

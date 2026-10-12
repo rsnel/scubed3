@@ -33,6 +33,12 @@ typedef struct blockio_info_s blockio_info_t;
 /* each mesoblock is divided in 4 parts (4KiB for 16KiB mesoblocks), the
  * low 4 bits of the hash of a mesoblock say which parts are corrupt (bit
  * i is part i), the other 60 bits are the truncated SHA256 hash */
+/* special values in the index of a block: a slot that contains a list of
+ * tombstones (discarded logical mesoblocks, see README), and a slot whose
+ * contents are dead (its mesoblock was discarded while it was in RAM) */
+#define BLOCKIO_TOMBSTONES 0xFFFFFFFE
+#define BLOCKIO_DEAD 0xFFFFFFFF
+
 #define BLOCKIO_PARTS 4
 #define BLOCKIO_CORRUPT_MASK ((1<<BLOCKIO_PARTS) - 1)
 
@@ -53,6 +59,16 @@ struct blockio_info_s {
 	uint32_t no_indices;
 	uint32_t no_nonobsolete;
 	uint32_t *indices;
+
+	/* the number of indices in the index of this block on disk (indices
+	 * still contains them, also if no_indices was reset to 0, until the
+	 * block becomes the current block and is filled again) */
+	uint32_t no_ondisk;
+
+	/* this block was added to the partition (grow) while it still had
+	 * an index of ours on disk, that will be replayed if the block is
+	 * not written before the partition is opened again */
+	int readded;
 
 	/* truncated SHA256 of the ciphertext of each mesoblock (all mmpm of
 	 * them, also the unused ones), the low bits mark the parts of the
@@ -102,6 +118,25 @@ typedef struct blockio_dev_s {
 	uint64_t trim_floor;
 
 	blockio_info_t *bi; /* current block */
+
+	/* the on disk indices of the current block, before it became the
+	 * current block (they are replaced on disk when it is written) */
+	uint32_t *old_ondisk;
+	uint32_t no_old_ondisk;
+
+	/* refcount[L] is the number of blocks on disk (that would be
+	 * replayed) with logical mesoblock L in their index, for
+	 * L < no_refcount (the size of the partition in mesoblocks); a
+	 * discarded mesoblock needs a tombstone while its refcount > 0 */
+	uint32_t *refcount;
+	uint32_t no_refcount;
+
+	/* tombstones that will be written in the current block, they take
+	 * slots after the data slots (tombs_per_mesoblk per slot) */
+	uint32_t *tombs;
+	uint32_t no_tombs, size_tombs;
+	uint32_t tombs_per_mesoblk;
+
 	blockio_info_t *tail_macroblock; /* tbe block that must be cleaned out */
 
 	juggler_t j;
@@ -212,6 +247,19 @@ int blockio_dev_free_macroblocks(blockio_dev_t*, uint32_t);
 void blockio_prepare_block(blockio_info_t*);
 
 uint32_t blockio_dev_usable_macroblocks(blockio_dev_t*);
+
+uint32_t blockio_dev_free_slots(blockio_dev_t*);
+
+int blockio_dev_tomb_fits(blockio_dev_t*, uint32_t);
+
+void blockio_dev_add_tomb(blockio_dev_t*, uint32_t);
+
+void blockio_dev_resize_refcount(blockio_dev_t*, uint32_t);
+
+void blockio_dev_count_ondisk(blockio_dev_t*, blockio_info_t*, int);
+
+uint32_t blockio_dev_read_tombs(blockio_dev_t*, blockio_info_t*, uint32_t,
+		uint32_t*);
 
 blockio_info_t *blockio_dev_find_victim(blockio_dev_t*);
 

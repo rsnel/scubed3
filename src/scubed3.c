@@ -87,9 +87,38 @@ static inline char *mesoblk(scubed3_t *l, uint16_t no) {
 	return l->dev->tmp_macroblock + ((no+1)<<l->dev->b->mesoblk_log);
 }
 
-/* copy the live mesoblocks of bi to the current block, until the
- * current block contains limit mesoblocks */
-static void absorb_block(scubed3_t *l, blockio_info_t *bi, uint32_t limit) {
+/* is a tombstone for logical mesoblock L needed? it is if L is discarded
+ * and a version of L is in the index of a block on disk */
+static int tomb_needed(scubed3_t *l, uint32_t L) {
+	return L < l->no_block_indices &&
+		l->block_indices[L] == 0xFFFFFFFF &&
+		l->dev->refcount[L];
+}
+
+/* carry the tombstones in slot k of bi to the current block (if they
+ * are still needed), returns -1 if they don't fit */
+static int absorb_tombs(scubed3_t *l, blockio_info_t *bi, uint32_t k) {
+	uint32_t tombs[l->dev->tombs_per_mesoblk], n, i, needed = 0;
+
+	n = blockio_dev_read_tombs(l->dev, bi, k, tombs);
+	for (i = 0; i < n; i++)
+		if (tomb_needed(l, tombs[i])) tombs[needed++] = tombs[i];
+
+	if (!blockio_dev_tomb_fits(l->dev, needed)) return -1;
+
+	for (i = 0; i < needed; i++) blockio_dev_add_tomb(l->dev, tombs[i]);
+
+	/* the slot is done, it does not count as live anymore (the value
+	 * in the index is not used for the refcounts) */
+	bi->indices[k] = BLOCKIO_DEAD;
+	obsolete_mesoblk(l, bi, k);
+
+	return 0;
+}
+
+/* copy the live mesoblocks and the needed tombstones of bi to the current
+ * block, until the current block is full */
+static void absorb_block(scubed3_t *l, blockio_info_t *bi) {
 	int k;
 	uint32_t index;
 	/* the current block can be its own tail (it is rescheduled for
@@ -97,9 +126,15 @@ static void absorb_block(scubed3_t *l, blockio_info_t *bi, uint32_t limit) {
 	if (bi && bi != l->dev->bi &&
 			blockio_dev_get_macroblock_status(bi) == USED) {
 
-		for (k = 0; k < bi->no_indices &&
-				l->dev->bi->no_indices < limit; k++) {
+		for (k = 0; k < bi->no_indices; k++) {
+			if (bi->indices[k] == BLOCKIO_TOMBSTONES) {
+				if (absorb_tombs(l, bi, k)) break;
+				continue;
+			}
+
 			if (bi->indices[k] >= l->no_block_indices) continue;
+
+			if (!blockio_dev_free_slots(l->dev)) break;
 
 			index = l->block_indices[bi->indices[k]];
 			if (index != 0xFFFFFFFF &&
@@ -120,8 +155,10 @@ static void absorb_block(scubed3_t *l, blockio_info_t *bi, uint32_t limit) {
 void copy_old_block_to_current(scubed3_t *l) {
 	blockio_info_t *victim, *tail = l->dev->tail_macroblock;
 
-	/* the tail is always absorbed completely, it is overwritten next */
-	absorb_block(l, tail, l->dev->b->mmpm);
+	/* the tail is always absorbed completely, it is overwritten next
+	 * (the current block is empty, and the tombstones that are carried
+	 * do not need more slots than they had in the tail) */
+	absorb_block(l, tail);
 	if (tail && tail != l->dev->bi && tail->no_nonobsolete)
 		FATAL("tail of current block does not fit in it");
 
@@ -135,7 +172,7 @@ void copy_old_block_to_current(scubed3_t *l) {
 
 	if (!(victim = blockio_dev_find_victim(l->dev))) return;
 
-	absorb_block(l, victim, l->dev->b->mmpm);
+	absorb_block(l, victim);
 
 	if (!victim->no_nonobsolete) blockio_dev_remove_block(l->dev, victim);
 }
@@ -207,7 +244,7 @@ void select_new_macroblock(scubed3_t *l, uint32_t mesoff) {
 				blockio_get_macroblock_index(
 					l->dev->tail_macroblock));
 		index = l->block_indices[mesoff];
-	} while (l->dev->bi->no_indices == l->dev->b->mmpm &&
+	} while (!blockio_dev_free_slots(l->dev) &&
 			(index == 0xFFFFFFFF || ID != id(l->dev->bi)));
 }
 
@@ -246,10 +283,27 @@ void scubed3_cycle(scubed3_t *l) {
 }
 
 void *replay(blockio_info_t *bi, scubed3_t *l) {
-	uint32_t k, index;
+	uint32_t k, index, n, i, tombs[l->dev->tombs_per_mesoblk];
 
 	VERBOSE("replay at seqno=%ld (%d indices)", bi->seqno, bi->no_indices);
+
+	/* first the tombstones: they discard the versions in older blocks
+	 * (data in this block is newer than the tombstones in it), the
+	 * slots of tombstones stay live until the GC carries them */
 	for (k = 0; k < bi->no_indices; k++) {
+		if (bi->indices[k] != BLOCKIO_TOMBSTONES) continue;
+		n = blockio_dev_read_tombs(l->dev, bi, k, tombs);
+		for (i = 0; i < n; i++) {
+			if (tombs[i] >= l->no_block_indices ||
+					blockio_dev_is_trimmed(l->dev,
+						bi->seqno, tombs[i])) continue;
+			obsolete_mesoblk_byidx(l, l->block_indices[tombs[i]]);
+			l->block_indices[tombs[i]] = 0xFFFFFFFF;
+		}
+	}
+
+	for (k = 0; k < bi->no_indices; k++) {
+		if (bi->indices[k] == BLOCKIO_TOMBSTONES) continue;
 		//VERBOSE("k=%u, bi->indices[k]=%u", k, bi->indices[k]);
 		/* references past the end of the partition, or to mesoblocks
 		 * that were discarded by shrinking after this block was
@@ -349,10 +403,13 @@ void scubed3_reinit(scubed3_t *l) {
 	/* mark all mesoblocks beyond old end of device free */
 	while (old_no_block_indices < l->no_block_indices)
 		l->block_indices[old_no_block_indices++] = 0xFFFFFFFF;
+
+	blockio_dev_resize_refcount(l->dev, l->no_block_indices);
 }
 
 void scubed3_init(scubed3_t *l, blockio_dev_t *dev) {
 	int i;
+	blockio_info_t *bi;
 	assert(l && dev);
 
 	l->dev = dev;
@@ -369,14 +426,31 @@ void scubed3_init(scubed3_t *l, blockio_dev_t *dev) {
 	for (i = 0; i < l->no_block_indices; i++)
 		l->block_indices[i] = 0xFFFFFFFF;
 
+	/* count the indices on disk (all blocks in the pool) */
+	blockio_dev_resize_refcount(dev, l->no_block_indices);
+
 	if (!dev->no_macroblocks) return;
 
 	VERBOSE("%d block(s) to replay", dllarr_count(&dev->replay));
 
+	/* the most recent block absorbed the block that is written next (its
+	 * tail), also the tombstones that were still needed: the slots of
+	 * tombstones in the tail are done (if they would count as live, the
+	 * tail would look like a block with live data; and if the write of
+	 * the tail was interrupted, its old index may still be there while
+	 * the slots are partly overwritten); replay obsoletes them */
+	bi = dllarr_last(&dev->replay);
+	if (dev->j.next && dev->j.next != bi) {
+		uint32_t k;
+		bi = dev->j.next;
+		for (k = 0; k < bi->no_indices; k++)
+			if (bi->indices[k] == BLOCKIO_TOMBSTONES)
+				bi->indices[k] = BLOCKIO_DEAD;
+	}
+
 	dllarr_iterate(&dev->replay, (dllarr_iterator_t)replay, l);
 
 	/* the replayed blocks are in the pool of the juggler already */
-	blockio_info_t *bi;
 	while ((bi = dllarr_last(&dev->replay)))
 		dllarr_remove(&dev->replay, bi);
 }
@@ -496,7 +570,7 @@ int do_write(scubed3_t *l, uint32_t mesoff, uint32_t muoff, uint32_t size,
 		 * to-be-freed block is selected); the old version of
 		 * the mesoblock stays live until the new version is
 		 * in the current block, so one of them is always on disk */
-		if (l->dev->bi->no_indices == l->dev->b->mmpm)
+		if (!blockio_dev_free_slots(l->dev))
 			select_new_macroblock(l, mesoff);
 
 		index = l->block_indices[mesoff];
@@ -538,6 +612,150 @@ int do_write(scubed3_t *l, uint32_t mesoff, uint32_t muoff, uint32_t size,
 	l->dev->updated = 1;
 
 	return 0;
+}
+
+/* make room for one tombstone in the current block, this may write the
+ * current block (like a write when the current block is full) */
+static void tomb_room(scubed3_t *l) {
+	while (!blockio_dev_tomb_fits(l->dev, 1)) {
+		blockio_dev_write_current_and_select_next_macroblock(l->dev);
+		copy_old_block_to_current(l);
+	}
+}
+
+/* remove slot no from the current block (its mesoblock was discarded
+ * before the block was written), the last slot takes its place */
+static void remove_slot(scubed3_t *l, uint32_t no) {
+	blockio_info_t *bi = l->dev->bi;
+	uint32_t last = bi->no_indices - 1;
+
+	assert(no <= last);
+	if (no != last) {
+		memcpy(mesoblk(l, no), mesoblk(l, last),
+				1<<l->dev->b->mesoblk_log);
+		bi->indices[no] = bi->indices[last];
+		bi->hashes[no] = bi->hashes[last];
+		if (bi->indices[no] < l->no_block_indices)
+			update_block_indices(l, bi->indices[no], id(bi), no);
+	}
+	bi->no_indices--;
+}
+
+/* the versions of L on disk that are not in the current block (the current
+ * block replaces its own old version when it is written) */
+static uint32_t refs_elsewhere(scubed3_t *l, uint32_t L) {
+	uint32_t refs = l->dev->refcount[L], k;
+
+	if (refs == 1) for (k = 0; k < l->dev->no_old_ondisk; k++)
+		if (l->dev->old_ondisk[k] == L) return 0;
+
+	return refs;
+}
+
+/* discard logical mesoblock L: it reads as zeroes from now on; versions of
+ * L on disk get a tombstone in the current block, so that they are not
+ * replayed when the partition is opened again (if the tombstone would not
+ * fit, the current block is written first: the discard and its tombstone
+ * must be written together, otherwise an older version of L could become
+ * the most recent one on disk) */
+static void discard_mesoblk(scubed3_t *l, uint32_t L) {
+	uint32_t index;
+
+	if (l->block_indices[L] == 0xFFFFFFFF) return;
+
+	/* make room for the tombstone; if L is (or gets, by the GC) in the
+	 * current block, its slot makes room (a full partition makes
+	 * progress this way) */
+	for (;;) {
+		index = l->block_indices[L];
+		if (ID == id(l->dev->bi) ||
+				blockio_dev_tomb_fits(l->dev, 1)) break;
+		blockio_dev_write_current_and_select_next_macroblock(l->dev);
+		copy_old_block_to_current(l);
+	}
+
+	if (ID == id(l->dev->bi)) remove_slot(l, NO);
+	else obsolete_mesoblk(l, &l->dev->b->blockio_infos[ID], NO);
+	l->block_indices[L] = 0xFFFFFFFF;
+
+	if (refs_elsewhere(l, L)) blockio_dev_add_tomb(l->dev, L);
+
+	l->dev->updated = 1;
+}
+
+/* write zeroes to [off, end) */
+static int zero_range(scubed3_t *l, uint64_t off, uint64_t end) {
+	char zero[1<<l->dev->b->mesoblk_log];
+	uint64_t n;
+	int ret;
+
+	memset(zero, 0, sizeof(zero));
+
+	for (; off < end; off += n) {
+		n = sizeof(zero) - (off&(sizeof(zero) - 1));
+		if (n > end - off) n = end - off;
+		if ((ret = do_req(l, SCUBED3_WRITE, off, n, zero)) < 0)
+			return ret;
+	}
+
+	return 0;
+}
+
+/* discard (punch a hole in) a range of the partition: whole mesoblocks are
+ * discarded, the parts of the mesoblocks at the edges are zeroed */
+int scubed3_discard(scubed3_t *l, uint64_t offset, uint64_t len) {
+	uint8_t log = l->dev->b->mesoblk_log;
+	uint64_t end = ((uint64_t)l->no_block_indices)<<log;
+	uint64_t first, last;
+	int ret;
+
+	if (offset >= end || !len) return 0;
+	if (len > end - offset) len = end - offset;
+
+	initialize_output(l);
+
+	/* the whole mesoblocks in the range are [first, last) */
+	first = (offset + (1<<log) - 1)>>log;
+	last = (offset + len)>>log;
+
+	if (first >= last) return zero_range(l, offset, offset + len);
+
+	if ((ret = zero_range(l, offset, first<<log)) ||
+			(ret = zero_range(l, last<<log, offset + len)))
+		return ret;
+
+	for (; first < last; first++) discard_mesoblk(l, first);
+
+	return 0;
+}
+
+/* blocks that were added to the partition with an index of ours on disk
+ * (see blockio_dev_check_readded) need tombstones for the discarded
+ * mesoblocks in them */
+void scubed3_readded(scubed3_t *l) {
+	blockio_info_t *bi;
+	uint32_t i, k, L;
+
+	if (!l->dev->bi) return;
+
+	initialize_output(l);
+
+	for (i = 0; i < juggler_count(&l->dev->j); i++) {
+		bi = juggler_nth(&l->dev->j, i);
+		for (k = 0; bi->readded && k < bi->no_ondisk; k++) {
+			/* the indices on disk of the current block are in
+			 * old_ondisk */
+			L = (bi == l->dev->bi)?l->dev->old_ondisk[k]:
+				bi->indices[k];
+			if (!tomb_needed(l, L)) continue;
+			tomb_room(l);
+			/* if bi was written meanwhile, its index is new */
+			if (!bi->readded) break;
+			blockio_dev_add_tomb(l->dev, L);
+			l->dev->updated = 1;
+		}
+		bi->readded = 0;
+	}
 }
 
 int do_read(scubed3_t *l, uint32_t mesoff, uint32_t muoff, uint32_t size,

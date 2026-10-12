@@ -87,17 +87,13 @@ struct blockio_s {
 	uint32_t total_macroblocks; /* amount of raw macroblocks */
 	uint32_t max_macroblocks;
 	uint32_t bitmap_offset;
-	
+
 	/* the mutex protects the unallocated list
 	 * and the associated *bi->dev pointer in each
 	 * blockio_info_t, which is * NULL if and only if
 	 * the block is in unallocated */
 	pthread_mutex_t unallocated_mutex;
 	dllarr_t unallocated;
-
-	/* provide access to the thread that takes care of writing blocks
-	 * (either on it's own or at the request of (a) scubed3 partition(s) */
-	struct plmgr_thread_priv_s *plmgr;
 
 	uint8_t mesoblk_log;
 	uint16_t mmpm; /* max mesoblocks per macroblock */
@@ -142,8 +138,8 @@ void blockio_dev_write_current_and_select_next_macroblock(
 		blockio_dev_t*);
 
 typedef enum blockio_dev_macroblock_status_e {
-		FREE, USED }
-	blockio_dev_macroblock_status_t;
+		FREE, USED
+} blockio_dev_macroblock_status_t;
 
 void blockio_dev_change_macroblock_status(blockio_info_t*,
 		blockio_dev_macroblock_status_t);
@@ -156,6 +152,8 @@ blockio_dev_macroblock_status_t blockio_dev_get_macroblock_status(
 
 // can return error -1: not enough blocks available
 int blockio_dev_allocate_macroblocks(blockio_dev_t*, uint32_t);
+
+int blockio_dev_free_macroblocks(blockio_dev_t*, uint32_t);
 
 void blockio_prepare_block(blockio_info_t*);
 

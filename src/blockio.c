@@ -88,8 +88,6 @@ static void *stream_open(const char *path) {
 
 void blockio_free(blockio_t *b) {
 	assert(b);
-	free(b->open_priv);
-	dllarr_free(&b->unallocated);
 	free(b->blockio_infos);
 	pthd_mutex_destroy(&b->unallocated_mutex);
 }
@@ -565,6 +563,10 @@ void blockio_dev_change_macroblock_status(blockio_info_t *bi,
 
 	if (new&1) bitmap_setbit_safe(&bi->dev->status, index);
 	else bitmap_clearbit_safe(&bi->dev->status, index);
+}
+
+int blockio_dev_free_macroblocks(blockio_dev_t *dev, uint32_t size) {
+	FATAL("blockio_dev_free_macroblocks is not implemented");
 }
 
 void blockio_prepare_block(blockio_info_t *bi) {

@@ -2,9 +2,9 @@
 # Process this file with autoconf to produce a configure script.
 
 AC_PRERE(2.61)
-AC_INIT(scubed3, m4_esyscmd([./version.sh | tr -d '\n']))
+AC_INIT([scubed3],[m4_esyscmd(./version.sh | tr -d '\n')])
 AC_CONFIG_SRCDIR([src/scubed3.c])
-AC_CONFIG_HEADER([config.h])
+AC_CONFIG_HEADERS([config.h])
 AM_INIT_AUTOMAKE
 
 # Checks for programs.
@@ -13,7 +13,15 @@ AC_PROG_CC
 # Checks for libraries.
 
 # Checks for header files.
-AC_HEADER_STDC
+m4_warn([obsolete],
+[The preprocessor macro `STDC_HEADERS' is obsolete.
+  Except in unusual embedded environments, you can safely include all
+  ISO C90 headers unconditionally.])dnl
+# Autoupdate added the next two lines to ensure that your configure
+# script's behavior did not change.  They are probably safe to remove.
+AC_CHECK_INCLUDES_DEFAULT
+AC_PROG_EGREP
+
 AC_CHECK_HEADERS([fcntl.h inttypes.h stdint.h stdlib.h string.h sys/ioctl.h sys/mount.h unistd.h])
 
 # Checks for typedefs, structures, and compiler characteristics.

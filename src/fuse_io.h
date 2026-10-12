@@ -29,10 +29,8 @@ typedef struct fuse_io_entry_s {
 
         uint64_t size;
         int inuse;
-	int readonly;
 	int to_be_deleted;
 	int close_on_release;
-	pthread_cond_t cond;
 	char *mountpoint;
 	cipher_t c;
 	blockio_dev_t d;

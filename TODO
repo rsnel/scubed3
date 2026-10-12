@@ -1,7 +1,4 @@
-rewrite replay code / make juggler also use dlarr
 shrinking
-caching infrastructure
-paranoia levels
+rwlock paranoia levels infrastructure
 ext2 block minder
-decoupling key / passphrase
 safe backup iv's

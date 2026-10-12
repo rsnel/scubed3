@@ -21,9 +21,9 @@
 #include <limits.h>
 #include <sys/types.h>
 #include <sys/socket.h>
-#include <sys/stat.h>
 #include <sys/un.h>
 #include <signal.h>
+#include <fuse.h>
 #include <assert.h>
 #include "verbose.h"
 #include "util.h"
@@ -137,32 +137,24 @@ static int parse_int(int s, int *r, const char *in) {
 }
 
 static int control_cycle(int s, control_thread_priv_t *priv, char *argv[]) {
-	__label__ end;
 	fuse_io_entry_t *entry = hashtbl_find_element_bykey(priv->h, argv[0]);
-	int times, ret = 0;
+	int times = 0; /* initialize it to make the compiler shut up */
 	if (!entry) return control_write_complete(s, 1,
 			"partition \"%s\" not found", argv[0]);
 
-	pthread_cleanup_push(hashtbl_unlock_element_byptr, entry);
-
-	if (parse_int(s, &times, argv[1])) {
-		ret = -1;
-		goto end;
-	}
+	if (parse_int(s, &times, argv[1])) return -1;
 
 	if (times < 0) {
-		ret = control_write_complete(s, 1,
+		hashtbl_unlock_element_byptr(entry);
+		return control_write_complete(s, 1,
 				"integer must be positive");
-		goto end;
 	}
 
 	while (times--) scubed3_cycle(&entry->l);
 
-	ret = control_write_complete(s, 0, "see debug output");
-end:
-	pthread_cleanup_pop(1);
+	hashtbl_unlock_element_byptr(entry);
 
-	return ret;
+	return control_write_complete(s, 0, "see debug output");
 }
 
 static int control_verbose_juggler(int s, control_thread_priv_t *priv, char *argv[]) {
@@ -170,15 +162,13 @@ static int control_verbose_juggler(int s, control_thread_priv_t *priv, char *arg
 	if (!entry) return control_write_complete(s, 1,
 			"partition \"%s\" not found", argv[0]);
 
-	pthread_cleanup_push(hashtbl_unlock_element_byptr, entry);
-
 	uint32_t getnum(blockio_info_t *bi, void *priv) {
 		return bi - (blockio_info_t*)priv;
 	}
 
 	juggler_verbose(&entry->d.j, getnum, entry->d.b->blockio_infos);
 
-	pthread_cleanup_pop(1);
+	hashtbl_unlock_element_byptr(entry);
 
 	return control_write_complete(s, 0, "see debug output");
 }
@@ -200,12 +190,10 @@ static int control_check_data_integrity(int s, control_thread_priv_t *priv,
 	if (!entry) return control_write_complete(s, 1,
 			"partition \"%s\" not found", argv[0]);
 
-	pthread_cleanup_push(hashtbl_unlock_element_byptr, entry);
-
 	dllarr_iterate(&entry->d.used_blocks, (dllarr_iterator_t)check_block,
 			&entry->d);
 
-	pthread_cleanup_pop(1);
+	hashtbl_unlock_element_byptr(entry);
 #endif
 	return control_write_complete(s, 1, "not implemented");
 }
@@ -260,13 +248,12 @@ static int control_status(int s, control_thread_priv_t *priv, char *argv[]) {
 		size_t size = ((entry->d.no_macroblocks - entry->d.reserved_macroblocks)*entry->d.b->mmpm);
 		priv->macroblocks_left -= entry->d.no_macroblocks;
                 return control_write_line(priv->s,
-				"%07u blocks in %s (%.1fMiB)%s%s%s%s%s%s\n",
+				"%07u blocks in %s (%.1fMiB)%s%s%s%s%s\n",
 				entry->d.no_macroblocks, entry->head.key,
 				((entry->d.no_macroblocks >= entry->d.reserved_macroblocks)?
 				 	size<<entry->d.b->mesoblk_log:0)/(1024.*1024.),
 				entry->inuse?" [U]":"",
 				entry->close_on_release?" [C]":"",
-				entry->readonly?" [R]":"",
 				entry->mountpoint?" [MNT ":"",
 				entry->mountpoint?entry->mountpoint:"",
 				entry->mountpoint?"]":"");
@@ -297,7 +284,6 @@ static int check_name(const char *ptr) {
 
 static int control_open_create_common(int s, control_thread_priv_t *priv, char *argv[], int add) {
 	fuse_io_entry_t *entry;
-	int ret;
 	char *allocname;
 
 	if (check_name(argv[0])) return control_write_complete(s, 1,
@@ -316,9 +302,6 @@ static int control_open_create_common(int s, control_thread_priv_t *priv, char *
 				"name?", add?"create":"open", argv[0]);
 	}
 
-	pthread_cleanup_push(hashtbl_unlock_element_byptr, entry);
-
-	pthd_cond_init(&entry->cond);
 	entry->to_be_deleted = 0;
 	assert(!entry->close_on_release);
 	entry->inuse = 0;
@@ -373,20 +356,22 @@ static int control_open_create_common(int s, control_thread_priv_t *priv, char *
 		assert(!entry->d.bi);
 		if (entry->size > 0) blockio_dev_select_next_macroblock(&entry->d);
 
-		ret = control_write_silent_success(s);
+		// really only used for test
+		//ecch_throw(ECCH_DEFAULT, "break off, we're testing");
 	}
 	ecch_catch_all {
 		entry->to_be_deleted = 1;
-		ret = control_write_complete(s, 1, "%s",
+		hashtbl_unlock_element_byptr(entry);
+		hashtbl_delete_element_byptr(priv->h, entry);
+		return control_write_complete(s, 1, "%s",
 				ecch_context.ecch.msg);
 	}
 	ecch_endtry;
 
-	pthread_cleanup_pop(1);
+	hashtbl_unlock_element_byptr(entry);
 
-	if (entry->to_be_deleted) hashtbl_delete_element_byptr(priv->h, entry);
-
-	return ret;
+	return control_write_silent_success(s);
+	//control_write_complete(s, 0, "partition \"%s\" %s", argv[0], add?"created":"opened");
 }
 
 static int control_open(int s, control_thread_priv_t *priv, char *argv[]) {
@@ -410,10 +395,6 @@ static int control_check_available(int s,
 
 	if (!entry) return control_write_silent_success(s);
 
-	/* safe to use, because there are no cancellation points
-	 * between the acquisition of entry and this statement;
-	 * using a cleanup handler here would be equivalent to setting
-	 * the handler and immediately executing it */
 	hashtbl_unlock_element_byptr(entry);
 
 	return control_write_complete(s, 1,
@@ -422,75 +403,44 @@ static int control_check_available(int s,
 
 static int control_set_aux(int s, control_thread_priv_t *priv, char *argv[]) {
 	fuse_io_entry_t *entry = hashtbl_find_element_bykey(priv->h, argv[0]);
-	int ret;
+	int err = 0;
 
 	if (!entry) return control_write_complete(s, 1,
 			"partition \"%s\" not found", argv[0]);
-
-	pthread_cleanup_push(hashtbl_unlock_element_byptr, entry);
-
 	if (!strcmp(argv[1], "mountpoint")) {
 		if (entry->mountpoint) free(entry->mountpoint);
 		entry->mountpoint = strdup(argv[2]);
-		if (!entry->mountpoint) ret = control_write_complete(s, 1,
-				"out of memory");
-		else ret = control_write_silent_success(s);
-	} else ret = control_write_complete(s, 1,
-        		"key \"%s\" is impossible", argv[1]);
+		if (!entry->mountpoint) {
+			hashtbl_unlock_element_byptr(entry);
+			return control_write_complete(s, 1, "out of memory");
+		}
+	} else err = 1;
 
-	pthread_cleanup_pop(1);
+	hashtbl_unlock_element_byptr(entry);
 
-	return ret;
+	if (err) return control_write_complete(s, 1,
+			"key \"%s\" is impossible", argv[1]);
+
+	return control_write_silent_success(s);
 }
 
 static int control_get_aux(int s, control_thread_priv_t *priv, char *argv[]) {
 	fuse_io_entry_t *entry = hashtbl_find_element_bykey(priv->h, argv[0]);
-	int ret;
+	char *ans = NULL;
 
 	if (!entry) return control_write_complete(s, 1,
 			"partition \"%s\" not found", argv[0]);
 
-	pthread_cleanup_push(hashtbl_unlock_element_byptr, entry);
-
-	/* if key is not mountpoint or mountpoint is NULL, we say
-	 * 	key not found */
-	if (!strcmp(argv[1], "mountpoint") && entry->mountpoint) {
-		ret = control_write_complete(s, 0, "%s", entry->mountpoint);
-	} else {
-		ret = control_write_complete(s, 1, "key \"%s\" not found", argv[1]);
+	if (!strcmp(argv[1], "mountpoint")) {
+		ans = entry->mountpoint;
 	}
 
-	pthread_cleanup_pop(1);
+	hashtbl_unlock_element_byptr(entry);
 
-	return ret;
-}
+	if (!ans) return control_write_complete(s, 1,
+			"key \"%s\" not found", argv[1]);
 
-static int control_set_readonly(int s,
-		control_thread_priv_t *priv, char *argv[]) {
-	fuse_io_entry_t *entry = hashtbl_find_element_bykey(priv->h, argv[0]);
-	int ret;
-
-	if (!entry) return control_write_complete(s, 1,
-			"partition \"%s\" not found", argv[0]);
-
-	pthread_cleanup_push(hashtbl_unlock_element_byptr, entry);
-
-	if (entry->inuse) {
-		ret = control_write_complete(s, 1,
-				"partition \"%s\" is busy", argv[0]);
-	} else {
-		if (!strcmp(argv[1], "0") || !strcasecmp(argv[1], "false")) {
-			entry->readonly = 0;
-			ret = control_write_silent_success(s);
-		} else if (!strcmp(argv[1], "1") || !strcasecmp(argv[1], "true")) {
-			entry->readonly = 1;
-			ret = control_write_silent_success(s);
-		} else ret = control_write_complete(s, 1, "illegal_argument; expected boolean");
-	}
-
-	pthread_cleanup_pop(1);
-
-	return ret;
+	return control_write_complete(s, 0, "%s", ans);
 }
 
 static int control_set_close_on_release(int s,
@@ -501,15 +451,13 @@ static int control_set_close_on_release(int s,
 	if (!entry) return control_write_complete(s, 1,
 			"partition \"%s\" not found", argv[0]);
 
-	pthread_cleanup_push(hashtbl_unlock_element_byptr, entry);
-
 	if (!strcmp(argv[1], "0") || !strcasecmp(argv[1], "false")) {
 		entry->close_on_release = 0;
 	} else if (!strcmp(argv[1], "1") || !strcasecmp(argv[1], "true")) {
 		entry->close_on_release = 1;
 	} else err = 1;
 
-	pthread_cleanup_pop(1);
+	hashtbl_unlock_element_byptr(entry);
 
 	if (err) return control_write_complete(s, 1,
 			"illegal argument; expected boolean");
@@ -518,56 +466,31 @@ static int control_set_close_on_release(int s,
 }
 
 static int control_info(int s, control_thread_priv_t *priv, char *argv[]) {
-	__label__ end;
-	int ret;
 	fuse_io_entry_t *entry = hashtbl_find_element_bykey(priv->h, argv[0]);
-
 	if (!entry) return control_write_complete(s, 1,
 			"partition \"%s\" not found", argv[0]);
 
-	pthread_cleanup_push(hashtbl_unlock_element_byptr, entry);
-
-	if (control_write_status(s, 0)) {
-		ret = -1;
-		goto end;
-	}
+	if (control_write_status(s, 0)) return -1;
 
 	if (control_write_line(s, "no_macroblocks=%d\n",
-				entry->d.no_macroblocks)) {
-		ret = -1;
-       		goto end;
-	}
+				entry->d.no_macroblocks)) return -1;
 
 	if (control_write_line(s, "reserved_macroblocks=%d\n",
-				entry->d.reserved_macroblocks)) {
-		ret = -1;
-		goto end;
-	}
+				entry->d.reserved_macroblocks)) return -1;
 
-	if (control_write_line(s, "writes=%d\n",entry->d.writes)) {
-		ret = -1;
-		goto end;
-	}
+	if (control_write_line(s, "writes=%d\n",entry->d.writes))
+		return -1;
 
 	if (entry->d.bi) {
 		if (control_write_line(s, "no_indices=%d\n",
-					entry->d.bi->no_indices)) {
-			ret = -1;
-			goto end;
-		}
+					entry->d.bi->no_indices)) return -1;
 	}
 
-	if (control_write_line(s, "updated=%d\n", entry->d.updated)) {
-		ret = -1;
-		goto end;
-	}
+	if (control_write_line(s, "updated=%d\n", entry->d.updated)) return -1;
 
-	ret = control_write_terminate(s);
+	hashtbl_unlock_element_byptr(entry);
 
-end:
-	pthread_cleanup_pop(1);
-
-	return ret;
+	return control_write_terminate(s);
 }
 
 static int control_close(int s, control_thread_priv_t *priv, char *argv[]) {
@@ -582,21 +505,17 @@ static int control_close(int s, control_thread_priv_t *priv, char *argv[]) {
 	}
 
 	entry->to_be_deleted = 1;
-
-	/* no cancellationpoint between acquisition of entry
-	 * and this unlock point */
 	hashtbl_unlock_element_byptr(entry);
 
-	/* we assume that entry still exists, is that a
-	 * good assumption !?!?! */
 	hashtbl_delete_element_byptr(priv->h, entry);
 
+	//return control_write_complete(s, 0, "partition \"%s\" closed", argv[0]);
 	return control_write_silent_success(s);
 }
 
 static int control_resize(int s, control_thread_priv_t *priv, char *argv[]) {
 	int size = 0, reserved = 0; // shut compiler up
-	int err, ret;
+	int err;
 	fuse_io_entry_t *entry = hashtbl_find_element_bykey(priv->h, argv[0]);
 	blockio_dev_t *dev;
 
@@ -621,6 +540,7 @@ static int control_resize(int s, control_thread_priv_t *priv, char *argv[]) {
 	}
 
 	if (size < dev->no_macroblocks) {
+		blockio_dev_free_macroblocks(dev, dev->no_macroblocks - size);
 		hashtbl_unlock_element_byptr(entry);
 		return control_write_complete(s, 1, "shrinking device is not yet supported");
 	}
@@ -639,34 +559,30 @@ static int control_resize(int s, control_thread_priv_t *priv, char *argv[]) {
 		return control_write_complete(s, 1, "nothing to do");
 	}
 
-	/* until here no cancellation point from aqcuisition of entry */
-	pthread_cleanup_push(hashtbl_unlock_element_byptr, entry);
-
 	VERBOSE("need to allocate %d additional blocks", size);
+
 	if ((err = blockio_dev_allocate_macroblocks(dev, size))) {
+		hashtbl_unlock_element_byptr(entry);
 		assert(err == -1);
-		ret = control_write_complete(s, 1, "not enough unclaimed "
+		return control_write_complete(s, 1, "not enough unclaimed "
 				"blocks available for resize");
-	} else {
-		dev->reserved_macroblocks = reserved;
-
-		if (entry->d.no_macroblocks > entry->d.reserved_macroblocks)
-			entry->size = ((entry->d.no_macroblocks -
-						entry->d.reserved_macroblocks)<<
-					entry->d.b->mesoblk_log)*entry->d.b->mmpm;
-
-		scubed3_reinit(&entry->l);
-
-		if (!dev->bi) blockio_dev_select_next_macroblock(dev);
-
-		dev->updated = 1;
-
-		ret = control_write_silent_success(s);
 	}
 
-	pthread_cleanup_pop(1);
+	dev->reserved_macroblocks = reserved;
 
-	return ret;
+	if (entry->d.no_macroblocks > entry->d.reserved_macroblocks)
+		entry->size = ((entry->d.no_macroblocks -
+					entry->d.reserved_macroblocks)<<
+				entry->d.b->mesoblk_log)*entry->d.b->mmpm;
+	scubed3_reinit(&entry->l);
+
+	hashtbl_unlock_element_byptr(entry);
+
+	if (!dev->bi) blockio_dev_select_next_macroblock(dev);
+
+	dev->updated = 1;
+
+	return control_write_silent_success(s);
 }
 
 static control_command_t control_commands[] = {
@@ -685,11 +601,6 @@ static control_command_t control_commands[] = {
 		.command = control_status,
 		.argc = 0,
 		.usage = ""
-	}, {
-		.head.key = "set-readonly",
-		.command = control_set_readonly,
-		.argc = 2,
-		.usage = " NAME BOOL"
 	}, {
 		.head.key = "set-close-on-release",
 		.command = control_set_close_on_release,
@@ -791,13 +702,6 @@ int control_call(int s, control_thread_priv_t *priv, char *command) {
 		return control_write_complete(s, 1, "usage: %s%s", argv[0], cmnd->usage);
 
 	return (*cmnd->command)(s, priv, argv + 1);
-}
-
-void control_thread_cancel_join_cleanup(pthread_t thread,
-		control_thread_priv_t *priv) {
-	pthread_cancel(thread);
-	pthread_join(thread, NULL);
-	hashtbl_free(&priv->c);
 }
 
 void *control_thread(void *arg) {

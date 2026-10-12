@@ -5,10 +5,10 @@ scubed3_SOURCES = scubed3.c scubed3.h binio.c binio.h bitmap.c bitmap.h \
 		  fuse_io.c fuse_io.h gcry.c gcry.h hashtbl.c hashtbl.h \
 		  pthd.c pthd.h util.c util.h verbose.c verbose.h \
 		  cipher_null.c cipher_cbc.c control.c control.h ecch.c ecch.h \
-		  random.c random.h  juggler.c juggler.h plmgr.c plmgr.h
+		  random.c random.h  juggler.c juggler.h
 scubed3ctl_SOURCES = scubed3ctl.c verbose.c verbose.h gcry.c gcry.h \
 		     ecch.h ecch.c hashtbl.c hashtbl.h pthd.c pthd.h \
 		     util.c util.h
 AM_CFLAGS = -D_GNU_SOURCE -O3 -g -Wall -Werror -D_FILE_OFFSET_BITS=64
-scubed3_LDADD = -lpthread -lfuse3 -lgcrypt -lm -lrt -lgpg-error
+scubed3_LDADD = -lpthread -lfuse -lgcrypt -lm -lrt -lgpg-error
 scubed3ctl_LDADD = -lreadline -lgcrypt -lpthread -lgpg-error

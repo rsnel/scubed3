@@ -572,7 +572,7 @@ static int ctl_mke2fs(ctl_priv_t *priv, char *argv[]) {
 	if (do_server_command(priv->s, 0, "get-aux %s mountpoint",
 					argv[0])) return -1;
 	if (!result.status) {
-		printf("partition \"%s\" is mounted on %s\n",
+		printf("partition \"%s\" is mounted on %s",
 				argv[0], result.argv[0]);
 		return 0;
 	}
@@ -587,10 +587,6 @@ static int ctl_mount(ctl_priv_t *priv, char *argv[]) {
 	}
 	if (do_server_command(priv->s, 0, "info %s", argv[0])) return -1;
 	if (result.status) {
-		exit_status = EXIT_SUCCESS; // previous error is handled
-					    // here so do not exit with
-					    // EXIT_FAILURE yet
-
 		// we try to open the partition
 		do_local_command(priv, hashtbl_find_element_bykey(&priv->c,
 					"open"), "%s", argv[0]);
@@ -618,7 +614,7 @@ static int ctl_chown(ctl_priv_t *priv, char *argv[]) {
 	if (do_server_command(priv->s, 0, "get-aux %s mountpoint",
 				argv[1])) return -1;
 	if (result.status) {
-		printf("no mountpoint known for \"%s\"\n", argv[1]);
+		printf("no mountpount known for \"%s\"\n", argv[1]);
 		return 0;
 	}
 	var_system("chown %s %s", argv[0], result.argv[0]);
@@ -720,11 +716,7 @@ void show_help() {
 	printf("-d                show debug output\n");
 	printf("-q                do not show warnings, if \"assume Yes\" is active\n");
 	printf("                  the warnings when shrinking/enlarging scubed3\n");
-	printf("                  partitions is also not shown\n\n");
-	printf("Using options -s or -i is not recommended, because you can lose access\n");
-	printf("to your scubed3 partitions if you lose the values you used when you\n");
-	printf("created the devices. In addition using a low\n");
-	printf("number of KDF interations is also not recommended.\n");
+	printf("                  partitions is also not shown\n");
 	printf("\nMore information:\n\nType \"help\" at the s3> prompt. You only get the prompt\nif the connection to the scubed3 process succeeds\n");
 }
 
@@ -791,11 +783,14 @@ int main(int argc, char **argv) {
 	assert(!strcmp("SHA256", DEFAULT_KDF_HASH));
 	assert(!strcmp("PBKDF2", DEFAULT_KDF_FUNCTION));
 	if (strcmp(DEFAULT_KDF_SALT, kdf_salt))
-		WARNING("using a custom salt is not recommended");
+		WARNING("using custom value for salt, if you forget your salt, "
+				"you may lose access to your devices");
 	if (kdf_iterations != DEFAULT_KDF_ITERATIONS)
-		WARNING("a custom iteration count is not recommended");
+		WARNING("using custom value for iterations, if you forget this "
+				"value, you may lose access to your devices");
 	if (kdf_iterations < 1000000) {
-		WARNING("low number of KDF iterations, not recommended");
+		WARNING("low number of KDF iterations < 1000000, "
+				"this is bad for security");
 	} 
 	assert(DEFAULT_KDF_ITERATIONS == 16*1024*1024);
 	assert(!strcmp("CBC_ESSIV(AES256)", DEFAULT_CIPHER_STRING));

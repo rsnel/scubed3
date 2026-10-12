@@ -21,7 +21,6 @@
 #include <stdint.h>
 #include "blockio.h"
 #include "random.h"
-#include "gcry.h"
 #include "dllarr.h"
 
 /* the juggler keeps only information

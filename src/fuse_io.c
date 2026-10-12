@@ -15,9 +15,9 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
+#define FUSE_USE_VERSION 26
 
-#define FUSE_USE_VERSION 34
-#include <fuse3/fuse.h>
+#include <fuse.h>
 #include <string.h>
 #include <errno.h>
 #include <assert.h>
@@ -27,7 +27,6 @@
 #include "util.h"
 #include "blockio.h"
 #include "pthd.h"
-#include "plmgr.h"
 #include "control.h"
 #include "fuse_io.h"
 
@@ -35,11 +34,9 @@ typedef struct fuse_io_priv_s {
 	hashtbl_t entries, ids;
 	pthread_t control_thread;
 	control_thread_priv_t control_thread_priv;
-	pthread_t plmgr_thread;
-	plmgr_thread_priv_t plmgr_thread_priv;
 } fuse_io_priv_t;
 
-static int fuse_io_getattr(const char *path, struct stat *stbuf, struct fuse_file_info *fi) {
+static int fuse_io_getattr(const char *path, struct stat *stbuf) {
 	fuse_io_entry_t *entry;
 	assert(path && *path == '/');
 
@@ -56,14 +53,10 @@ static int fuse_io_getattr(const char *path, struct stat *stbuf, struct fuse_fil
 			entries, path + 1);
 	if (!entry) return -ENOENT;
 
-	if (!entry->readonly) stbuf->st_mode = S_IFREG|0600;
-	else stbuf->st_mode = S_IFREG|0400;
-
+	stbuf->st_mode = S_IFREG|0600;
 	stbuf->st_nlink = 1;
 	stbuf->st_size = entry->size;
 
-	/* no cancellation point between acquisition of entry
-	 * and this unlock function */
 	hashtbl_unlock_element_byptr(entry);
 
 	return 0;
@@ -75,19 +68,19 @@ typedef struct fuse_io_readdir_priv_s {
 } fuse_io_readdir_priv_t;
 
 static int fuse_io_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
-		off_t offset, struct fuse_file_info *fi, enum fuse_readdir_flags flags) {
+		off_t offset, struct fuse_file_info *fi) {
 	fuse_io_readdir_priv_t priv = {
 		.filler = filler,
 		.buf = buf
 	};
 	int rep(fuse_io_readdir_priv_t *priv, fuse_io_entry_t *entry) {
-		priv->filler(priv->buf, entry->head.key, NULL, 0, 0);
+		priv->filler(priv->buf, entry->head.key, NULL, 0);
 		return 0;
 	}
 	if (strcmp(path, "/") != 0) return -ENOENT;
 
-	filler(buf, ".", NULL, 0, 0);
-	filler(buf, "..", NULL, 0, 0);
+	filler(buf, ".", NULL, 0);
+	filler(buf, "..", NULL, 0);
 
 	hashtbl_ts_traverse(
 			&((fuse_io_priv_t*)fuse_get_context()->private_data)->
@@ -108,18 +101,9 @@ static int fuse_io_open(const char *path, struct fuse_file_info *fi) {
 		hashtbl_unlock_element_byptr(entry);
 		return -EBUSY;
 	}
-
-	/* enforce readonly */
-	if (entry->readonly && ((fi->flags&O_ACCMODE) != O_RDONLY)) {
-		hashtbl_unlock_element_byptr(entry);
-		return -EACCES;
-	}
-
 	entry->inuse++;
 	//VERBOSE("openend \"%s\"", path + 1);
 
-	/* no cancellation point between acquisition of entry
-	 * and this unlock function */
 	hashtbl_unlock_element_byptr(entry);
 	return 0;
 }
@@ -142,9 +126,6 @@ static int fuse_io_release(const char *path, struct fuse_file_info *fi) {
 		delete = 1;
 		entry->to_be_deleted = 1;
 	}
-
-	/* no cancellation point between acquisition of entry
-	 * and this unlock function */
 	hashtbl_unlock_element_byptr(entry);
 
 	if (delete) hashtbl_delete_element_byptr(
@@ -163,11 +144,9 @@ static int fuse_io_read(const char *path, char *buf, size_t size, off_t offset,
 
 	if (!entry) return -ENOENT;
 
-	pthread_cleanup_push(hashtbl_unlock_element_byptr, entry);
-
 	do_req(&entry->l, SCUBED3_READ, offset, size, (char*)buf);
 
-	pthread_cleanup_pop(1);
+	hashtbl_unlock_element_byptr(entry);
 
 	return size;
 }
@@ -179,25 +158,15 @@ static int fuse_io_write(const char *path, const char *buf, size_t size,
 			entries, path + 1);
 	if (!entry) return -ENOENT;
 
-	assert(!entry->readonly);
-
-	pthread_cleanup_push(hashtbl_unlock_element_byptr, entry);
-
 	do_req(&entry->l, SCUBED3_WRITE, offset, size, (char*)buf);
 
-	pthread_cleanup_pop(1);
+	hashtbl_unlock_element_byptr(entry);
 
 	return size;
 }
 
-void *fuse_io_init(struct fuse_conn_info *conn, struct fuse_config *config) {
+void *fuse_io_init(struct fuse_conn_info *conn) {
 	fuse_io_priv_t *priv = fuse_get_context()->private_data;
-
-	/* we assume the mountpoint is the first entry in struct fuse_session
-	 * THIS IS VERY VERY BAD, since "struct fuse_session" is an opaque
-	 * struct, let's say it is fuse's fault to not make it available */
-	priv->control_thread_priv.mountpoint =
-			*((char**)fuse_get_session(fuse_get_context()->fuse));
 
 	/* start control thread */
 	priv->control_thread_priv.h = &priv->entries;
@@ -205,22 +174,7 @@ void *fuse_io_init(struct fuse_conn_info *conn, struct fuse_config *config) {
 	pthread_create(&priv->control_thread, NULL, control_thread,
 			&priv->control_thread_priv);
 
-	/* start paranoia level manager thread */
-	pthread_create(&priv->plmgr_thread, NULL, plmgr_thread,
-			&priv->plmgr_thread_priv);
-
 	return fuse_get_context()->private_data;
-}
-
-void fuse_io_destroy(void *arg) {
-	fuse_io_priv_t *priv = fuse_get_context()->private_data;
-	VERBOSE("destroy called");
-
-	/* stop paranoia level manager caand control thread */
-	plmgr_thread_cancel_join_cleanup(priv->plmgr_thread,
-			&priv->plmgr_thread_priv);
-	control_thread_cancel_join_cleanup(priv->control_thread,
-			&priv->control_thread_priv);
 }
 
 #if 0
@@ -236,6 +190,14 @@ static int fuse_io_flush(const char *path, struct fuse_file_info *fi) {
 }
 #endif
 
+void fuse_io_destroy(void *arg) {
+	fuse_io_priv_t *priv = fuse_get_context()->private_data;
+	VERBOSE("destroy called");
+	pthread_cancel(priv->control_thread);
+	pthread_join(priv->control_thread, NULL);
+	hashtbl_free(&priv->control_thread_priv.c);
+}
+
 static struct fuse_operations fuse_io_operations = {
 	.getattr = fuse_io_getattr,
 	.readdir = fuse_io_readdir,
@@ -250,7 +212,6 @@ static struct fuse_operations fuse_io_operations = {
 };
 
 static void freer(fuse_io_entry_t *entry) {
-	pthd_cond_destroy(&entry->cond);
 	free(entry->head.key);
 	free(entry->mountpoint);
 	scubed3_free(&entry->l);
@@ -263,21 +224,50 @@ static void freer(fuse_io_entry_t *entry) {
 	free(entry);
 }
 
-int fuse_io_start(int argc, char *argv[], blockio_t *b) {
+/* we want access to the mountpoint, so we copy
+ * the definition of fuse_main_comon and pass the mountpoint
+ * to the control thread */
+static int fuse_main_custom(int argc, char *argv[],
+		const struct fuse_operations *op,
+		size_t op_size, void *user_data, int compat) {
+	fuse_io_priv_t *priv = user_data;
+	struct fuse *fuse;
+	int multithreaded;
+	int res;
+
+	fuse = fuse_setup(argc, argv, op, op_size,
+			&priv->control_thread_priv.mountpoint,
+			&multithreaded, priv);
+
+	if (!fuse) return 1;
+
+	if (*priv->control_thread_priv.mountpoint == '/') 
+		res = multithreaded?fuse_loop_mt(fuse):fuse_loop(fuse);
+	else {
+		ERROR("the mountpoint must start with a /");
+		res = -1;
+	}
+
+	fuse_teardown(fuse, priv->control_thread_priv.mountpoint);
+
+	if (res == -1) return 1;
+
+	return 0;
+}
+
+int fuse_io_start(int argc, char **argv, blockio_t *b) {
 	int ret;
-	fuse_io_priv_t priv = { }; /* initialize to zeroes */
+	fuse_io_priv_t priv;
 	hashtbl_init_default(&priv.entries, -1, 4, 1, 1,
 			(void (*)(void*))freer);
 	hashtbl_init_default(&priv.ids, 32, 4, 1, 1, NULL);
 
 	priv.control_thread_priv.b = b;
-	priv.plmgr_thread_priv.b = b;
-	b->plmgr = &priv.plmgr_thread_priv;
 
-	ret = fuse_main(argc, argv, &fuse_io_operations, &priv);
+	ret = fuse_main_custom(argc, argv, &fuse_io_operations,
+			sizeof(fuse_io_operations), &priv, 0);
 
 	hashtbl_free(&priv.entries);
-	hashtbl_free(&priv.ids);
 
 	return ret;
 }

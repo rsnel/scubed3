@@ -73,6 +73,34 @@ blockio_info_t *juggler_get_obsoleted(juggler_t *j) {
 	else return NULL;
 }
 	
+/* returns the scheduled block that will be written at seqno, if any */
+blockio_info_t *juggler_get_due(juggler_t *j, uint64_t seqno) {
+	blockio_info_t *b = j->scheduled;
+	assert(j);
+
+	while (b && b->next_seqno < seqno) b = b->next;
+
+	if (b && b->next_seqno == seqno) return b;
+	else return NULL;
+}
+
+/* remove a random unscheduled block from the juggler, unscheduled
+ * blocks hold no data, so they can be removed at any time */
+blockio_info_t *juggler_remove_unscheduled(juggler_t *j) {
+	blockio_info_t *ret, **iterate = &j->unscheduled;
+	uint32_t index;
+	assert(j && j->unscheduled && j->no_unscheduled);
+
+	index = random_custom(j->r, j->no_unscheduled);
+	while (index--) iterate = &((*iterate)->next);
+	ret = *iterate;
+	*iterate = ret->next;
+	ret->next = NULL;
+	j->no_unscheduled--;
+
+	return ret;
+}
+
 int juggler_discard_possible(juggler_t *j, blockio_info_t *next) {
 	/* if a block is scheduled to be written, either another block
 	 * must be scheduled to be written after that or an unscheduled

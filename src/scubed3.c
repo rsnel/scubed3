@@ -82,17 +82,18 @@ static inline char *mesoblk(scubed3_t *l, uint16_t no) {
 	return l->dev->tmp_macroblock + ((no+1)<<l->dev->b->mesoblk_log);
 }
 
-void copy_old_block_to_current(scubed3_t *l) {
+/* copy the live mesoblocks of bi to the current block, until the
+ * current block contains limit mesoblocks */
+static void absorb_block(scubed3_t *l, blockio_info_t *bi, uint32_t limit) {
 	int k;
 	uint32_t index;
 	/* the current block can be its own tail (it is rescheduled for
 	 * the next seqno), its data is in RAM and travels with it */
-	if (l->dev->tail_macroblock && l->dev->tail_macroblock != l->dev->bi &&
-			blockio_dev_get_macroblock_status(
-				l->dev->tail_macroblock) == USED) {
-		blockio_info_t *bi = l->dev->tail_macroblock;
+	if (bi && bi != l->dev->bi &&
+			blockio_dev_get_macroblock_status(bi) == USED) {
 
-		for (k = 0; k < bi->no_indices; k++) {
+		for (k = 0; k < bi->no_indices &&
+				l->dev->bi->no_indices < limit; k++) {
 			if (bi->indices[k] >= l->no_block_indices) continue;
 
 			index = l->block_indices[bi->indices[k]];
@@ -108,6 +109,25 @@ void copy_old_block_to_current(scubed3_t *l) {
 			}
 		}
 	}
+}
+
+void copy_old_block_to_current(scubed3_t *l) {
+	blockio_info_t *next, *tail = l->dev->tail_macroblock;
+
+	/* the tail is always absorbed completely, it is overwritten next */
+	absorb_block(l, tail, l->dev->b->mmpm);
+	if (tail && tail != l->dev->bi && tail->no_nonobsolete)
+		FATAL("tail of current block does not fit in it");
+
+	/* if we are shrinking, use the remaining room (except for one
+	 * mesoblock, so that a write can always proceed) to absorb live data
+	 * of the block after the tail; when that block is completely
+	 * absorbed, the tail can be discarded at its turn, this works out
+	 * because blocks are (on average) less than full */
+	if (!l->dev->pending_removals) return;
+
+	next = juggler_get_due(&l->dev->j, l->dev->bi->seqno + 2);
+	if (next) absorb_block(l, next, l->dev->b->mmpm - 1);
 }
 
 /*
@@ -211,7 +231,15 @@ void *replay(blockio_info_t *bi, scubed3_t *l) {
 	VERBOSE("replay at seqno=%ld (%d indices)", bi->seqno, bi->no_indices);
 	for (k = 0; k < bi->no_indices; k++) {
 		//VERBOSE("k=%u, bi->indices[k]=%u", k, bi->indices[k]);
-		if (bi->indices[k] >= l->no_block_indices) continue;
+		/* references past the end of the partition, or to mesoblocks
+		 * that were discarded by shrinking after this block was
+		 * written, are dead */
+		if (bi->indices[k] >= l->no_block_indices ||
+				blockio_dev_is_trimmed(l->dev, bi->seqno,
+					bi->indices[k])) {
+			obsolete_mesoblk(l, bi, k);
+			continue;
+		}
 		index = l->block_indices[bi->indices[k]];
 		assert(id(bi) != ID);
 		obsolete_mesoblk_byidx(l, index);
@@ -238,7 +266,24 @@ void debug_stuff(scubed3_t *l) {
 void scubed3_free(scubed3_t *l) {
 	//VERBOSE("freeing scubed3 partition");
 	//if (l->output_initialized) pre_emptive_gc(l);
+
+	/* the current block will be written if it is updated (this
+	 * happens also after a resize), the tail must be absorbed first */
+	if (l->dev && l->dev->bi && l->dev->updated) initialize_output(l);
+
 	free(l->block_indices);
+}
+
+/* write out the current block (if it contains anything), afterwards
+ * there is no current block */
+void scubed3_flush(scubed3_t *l) {
+	if (!l->dev->bi) return;
+
+	if (!l->dev->updated && !l->dev->bi->no_indices) return;
+
+	initialize_output(l);
+	blockio_dev_write_current_macroblock(l->dev);
+	l->output_initialized = 0;
 }
 
 void scubed3_reinit(scubed3_t *l) {
@@ -246,24 +291,28 @@ void scubed3_reinit(scubed3_t *l) {
 
 	old_no_block_indices = l->no_block_indices;
 
-	l->no_block_indices = (l->dev->no_macroblocks -
-			l->dev->reserved_macroblocks)*l->dev->b->mmpm;
+	l->no_block_indices = blockio_dev_usable_macroblocks(l->dev)*
+		l->dev->b->mmpm;
 
 	if (old_no_block_indices == l->no_block_indices) return;
 
-	if (old_no_block_indices > l->no_block_indices)
-		FATAL("scubed3_reinit shrinking not supported");
-
-#if 0
-	/* obsolete all mesoblocks beyond end of device (if shrinking) */
+	/* obsolete all mesoblocks beyond end of device (if shrinking),
+	 * the current block must have been flushed, otherwise the
+	 * obsoleted references from the current block would be counted
+	 * as live when it is written */
+	assert(old_no_block_indices < l->no_block_indices ||
+			!l->dev->bi || !l->dev->bi->no_indices);
 	while (old_no_block_indices > l->no_block_indices)
 		obsolete_mesoblk_byidx(l,
 				l->block_indices[--old_no_block_indices]);
-#endif
-	VERBOSE("scubed3_reinit enlarge");
 
-	l->block_indices = erealloc(l->block_indices, 
-			l->no_block_indices, sizeof(uint32_t));
+	VERBOSE("scubed3_reinit %s", old_no_block_indices < l->no_block_indices?
+			"enlarge":"shrink");
+
+	/* realloc of 0 elements may return NULL */
+	l->block_indices = erealloc(l->block_indices,
+			l->no_block_indices?l->no_block_indices:1,
+			sizeof(uint32_t));
 
 	/* mark all mesoblocks beyond old end of device free */
 	while (old_no_block_indices < l->no_block_indices)
@@ -279,12 +328,11 @@ void scubed3_init(scubed3_t *l, blockio_dev_t *dev) {
 	l->mesobits = (dev->b->macroblock_log - dev->b->mesoblk_log);
 	l->mesomask = 0xFFFFFFFF>>(32 - l->mesobits);
 
-	if (dev->no_macroblocks <= dev->reserved_macroblocks)
-		l->no_block_indices = 0;
-	else l->no_block_indices = (dev->no_macroblocks -
-			dev->reserved_macroblocks)*dev->b->mmpm;
+	l->no_block_indices = blockio_dev_usable_macroblocks(dev)*
+		dev->b->mmpm;
 
-	l->block_indices = ecalloc(l->no_block_indices, sizeof(uint32_t));
+	l->block_indices = ecalloc(l->no_block_indices?l->no_block_indices:1,
+			sizeof(uint32_t));
 
 	for (i = 0; i < l->no_block_indices; i++)
 		l->block_indices[i] = 0xFFFFFFFF;
@@ -331,43 +379,49 @@ void do_cow(scubed3_t *l, uint32_t index, uint32_t muoff,
 
 int do_write(scubed3_t *l, uint32_t mesoff, uint32_t muoff, uint32_t size,
 		char *in) {
-	uint32_t index = l->block_indices[mesoff];
+	uint32_t index;
+	char buf[1<<l->dev->b->mesoblk_log];
 	assert(muoff + size <= 1<<l->dev->b->mesoblk_log);
-	void *addr;
 	/* three possibilities:
 	 * 1. the block is currently in RAM, we update it
 	 * 2. the block was never written, we add it to RAM
-	 * 3. the block is on disk, we obsolete it and add it to RAM */
-
-	l->dev->updated = 1;
+	 * 3. the block is on disk, we obsolete it and add it to RAM
+	 * the current block is marked as updated after the data is in it,
+	 * selecting a new block resets the updated flag */
 
 	initialize_output(l);
 
-	if (ID != id(l->dev->bi)) {
-		/* could be that the new block is full after
-		 * garbage collecting (depends on the way the
-		 * to-be-freed block is selected) */
-		if (l->dev->bi->no_indices == l->dev->b->mmpm)
-			select_new_macroblock(l);
+	/* read the index after initialize_output, it may have moved
+	 * the mesoblock from the tail to the current block */
+	index = l->block_indices[mesoff];
 
-		index = l->block_indices[mesoff];
+	if (ID == id(l->dev->bi)) { /* in RAM */
+		memcpy(mesoblk(l, NO) + muoff, in, size);
+		l->dev->updated = 1;
+		return 0;
 	}
 
-	addr = mesoblk(l, (ID == id(l->dev->bi))?NO:l->dev->bi->no_indices);
-	memcpy(addr + muoff, in, size);
+	/* build the new mesoblock; if we do not write the complete
+	 * mesoblock, read the other parts from disk (if possible) or zero
+	 * them, this must be done before a new block is selected, the old
+	 * version may be in a block that gets a new seqno then */
+	memcpy(buf + muoff, in, size);
+	do_cow(l, index, muoff, size, buf);
 
-	/* if not, the mesoblock is in RAM */
-	if (ID != id(l->dev->bi)) { /* we are on disk */
-		/* if we do not write the complete mesoblock, read the
-		 * other parts from disk (if possible) or zero them */
-		do_cow(l, index, muoff, size, addr);
+	/* mark old mesoblock obsolete (if there is one) before a new block
+	 * is selected: if all blocks are completely filled with live data,
+	 * this creates the room that is needed to make progress */
+	obsolete_mesoblk_byidx(l, index);
+	l->block_indices[mesoff] = 0xFFFFFFFF;
 
-		/* mark old mesoblock obsolete, if there is one */
-		obsolete_mesoblk_byidx(l, index);
+	if (l->dev->bi->no_indices == l->dev->b->mmpm)
+		select_new_macroblock(l);
 
-		/* add new reference */
-		add_blockref(l, mesoff);
-	}
+	/* add new reference */
+	memcpy(mesoblk(l, l->dev->bi->no_indices), buf,
+			1<<l->dev->b->mesoblk_log);
+	add_blockref(l, mesoff);
+	l->dev->updated = 1;
 
 	return 0;
 }

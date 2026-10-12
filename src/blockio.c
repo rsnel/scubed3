@@ -25,6 +25,7 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <assert.h>
+#include <unistd.h>
 #include "blockio.h"
 #include "bitmap.h"
 #include "verbose.h"
@@ -55,6 +56,15 @@ static void stream_read(void *fp, void *buf, uint64_t offset, uint32_t size) {
 
 static void stream_write(void *fp, const void *buf, uint64_t offset,
 		uint32_t size) {
+#ifdef SCUBED3_CRASH_TEST
+	/* testing only: simulate a crash before the Nth write */
+	static int writes = 0;
+	char *crash = getenv("SCUBED3_CRASH_AFTER");
+	if (crash && ++writes > atoi(crash)) {
+		WARNING("simulated crash before write %d", writes);
+		_exit(9);
+	}
+#endif
 	stream_io(fp, (void*)buf, offset, size, fwrite, "writing");
 }
 
@@ -83,6 +93,11 @@ static void *stream_open(const char *path) {
 #define NO_MACROBLOCKS_UINT32	(BASE + 0x078)
 #define RESERVED_BLOCKS_UINT32	(BASE + 0x07C)
 #define RESERVED_SPACE1024	(BASE + 0x080)
+#define PENDING_UINT32		(BASE + 0x080)
+#define NO_TRIMS_UINT32		(BASE + 0x084)
+#define TRIMS			(BASE + 0x088) /* 12 bytes per trim */
+#define TRIM_SEQNO_UINT64(i)	(TRIMS + 12*(i))
+#define TRIM_SIZE_UINT32(i)	(TRIMS + 12*(i) + 8)
 #define NO_INDICES_UINT32	(BASE + 0x100)
 #define BITMAP			(BASE + dev->b->bitmap_offset)
 
@@ -234,12 +249,145 @@ void blockio_dev_free(blockio_dev_t *dev) {
 	if (dev->b && dev->b->close) dev->b->close(dev->io);
 }
 
+uint32_t blockio_dev_usable_macroblocks(blockio_dev_t *dev) {
+	uint32_t target = dev->no_macroblocks - dev->pending_removals;
+
+	if (target <= dev->reserved_macroblocks) return 0;
+
+	return target - dev->reserved_macroblocks;
+}
+
+/* references from blocks older than trims[i].seqno to mesoblocks
+ * >= trims[i].size are dead */
+int blockio_dev_is_trimmed(blockio_dev_t *dev, uint64_t seqno,
+		uint32_t mesoblock) {
+	int i;
+
+	for (i = 0; i < dev->no_trims; i++)
+		if (seqno < dev->trims[i].seqno &&
+				mesoblock >= dev->trims[i].size) return 1;
+
+	return 0;
+}
+
+/* record that the partition is shrunk to size mesoblocks, at seqno;
+ * returns -1 if there is no room to record it */
+int blockio_dev_add_trim(blockio_dev_t *dev, uint64_t seqno, uint32_t size) {
+	int i, j = 0;
+
+	/* the new trim makes older trims with a larger size redundant */
+	for (i = 0; i < dev->no_trims; i++)
+		if (dev->trims[i].size < size) dev->trims[j++] = dev->trims[i];
+	dev->no_trims = j;
+
+	if (dev->no_trims == BLOCKIO_MAX_TRIMS) return -1;
+
+	dev->trims[dev->no_trims].seqno = seqno;
+	dev->trims[dev->no_trims++].size = size;
+
+	return 0;
+}
+
+/* a trim is no longer needed if no block of the partition
+ * on disk is older than the trim */
+static void blockio_dev_prune_trims(blockio_dev_t *dev) {
+	blockio_info_t *bi;
+	uint64_t oldest = dev->bi->seqno;
+	int i, j = 0;
+
+	for (bi = dev->j.scheduled; bi; bi = bi->next)
+		if (bi->seqno < oldest) oldest = bi->seqno;
+
+	for (i = 0; i < dev->no_trims; i++)
+		if (dev->trims[i].seqno > oldest) dev->trims[j++] = dev->trims[i];
+	dev->no_trims = j;
+}
+
+/* give a removed block back to the pool of unallocated blocks */
+static void blockio_dev_release_block(blockio_dev_t *dev,
+		blockio_info_t *bi) {
+	blockio_dev_change_macroblock_status(bi, FREE);
+	dev->no_macroblocks--;
+	dev->pending_removals--;
+
+	pthd_mutex_lock(&dev->b->unallocated_mutex);
+	free(bi->indices);
+	bi->indices = NULL;
+	bi->dev = NULL;
+	bi->seqno = bi->next_seqno = 0;
+	dllarr_append(&dev->b->unallocated, bi);
+	pthd_mutex_unlock(&dev->b->unallocated_mutex);
+}
+
+/* try to remove one block from the partition, returns 1 if a block
+ * was removed, a block can be removed if
+ * - it is unscheduled (it contains no data), or
+ * - it is due, it contains no data, and the block that is due after
+ *   it also contains no data (because the block written now
+ *   should have absorbed it); this block is written as 'discarded'
+ *   (seqno == next_seqno) in its own slot, so the write pattern is
+ *   the same as when it would have been written normally */
+static int blockio_dev_try_remove(blockio_dev_t *dev) {
+	blockio_info_t *due, *after;
+
+	if (!dev->pending_removals) return 0;
+
+	/* the last unscheduled block can only be removed if a block
+	 * is scheduled for the next seqno, otherwise there would be no
+	 * block to write (holes further in the future are always filled
+	 * by the block that is written just before the hole) */
+	if (dev->j.no_unscheduled > 1 || (dev->j.no_unscheduled == 1 &&
+				juggler_get_obsoleted(&dev->j))) {
+		due = juggler_remove_unscheduled(&dev->j);
+		VERBOSE("removing unscheduled block %u",
+				blockio_get_macroblock_index(due));
+		if (dev->ram_block == due) dev->ram_block = NULL;
+		blockio_dev_release_block(dev, due);
+		dev->updated = 1; /* record the removal in the next index */
+		return 1;
+	}
+
+	due = juggler_get_obsoleted(&dev->j);
+	if (!due || due->no_nonobsolete) return 0;
+
+	/* the block that is due after it must have been absorbed already,
+	 * or, if there is none, an unscheduled block must take its slot */
+	after = juggler_get_due(&dev->j, due->next_seqno + 1);
+	if (after?after->no_nonobsolete:!dev->j.no_unscheduled) return 0;
+
+	dev->bi = juggler_get_devblock(&dev->j, 1);
+	assert(dev->bi == due && due->seqno == due->next_seqno);
+
+	VERBOSE("discarding block %u at seqno=%lu",
+			blockio_get_macroblock_index(due), due->seqno);
+
+	due->no_indices = 0;
+	blockio_dev_change_macroblock_status(due, FREE);
+	dev->no_macroblocks--;
+	dev->pending_removals--;
+
+	blockio_dev_write_current_macroblock(dev);
+	dev->ram_block = NULL;
+
+	/* status, no_macroblocks and pending_removals were already
+	 * updated (they had to be in the index of the discarded block) */
+	dev->no_macroblocks++;
+	dev->pending_removals++;
+	blockio_dev_change_macroblock_status(due, USED);
+	blockio_dev_release_block(dev, due);
+
+	return 1;
+}
+
 void blockio_dev_select_next_macroblock(blockio_dev_t *dev) {
 	blockio_info_t *due;
 	uint32_t i;
 	assert(!dev->bi);
 
 	dev->updated = 0;
+
+	/* remove blocks if we are shrinking and it is possible now */
+	while (blockio_dev_try_remove(dev));
 
 	/* if the block that is due still has live mesoblocks, it was
 	 * scheduled to be rewritten right after it was written, its live
@@ -264,9 +412,11 @@ void blockio_dev_select_next_macroblock(blockio_dev_t *dev) {
 	/* if the (empty) selected block is scheduled to be rewritten at
 	 * the next seqno, it is its own tail: data written to it now would
 	 * have nowhere to go when it is rewritten, so we write it out
-	 * empty and select again (this happens with probability 1/N) */
+	 * empty and select again (this happens with probability 1/N);
+	 * if the partition has only one block, it is always its own tail,
+	 * and there is no other block to absorb, so it can keep its data */
 	while (dev->bi->next_seqno == dev->bi->seqno + 1 &&
-			!dev->bi->no_indices) {
+			!dev->bi->no_indices && juggler_count(&dev->j) > 1) {
 		VERBOSE("block %d is its own tail, writing it out empty",
 				blockio_get_macroblock_index(dev->bi));
 		blockio_dev_write_current_macroblock(dev);
@@ -329,6 +479,35 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 		return;
 	}
 
+	/* blocks with our signature that are FREE in the most recent
+	 * bitmap, or whose next_seqno has passed, are stale: they left
+	 * the partition through a discard write, we don't replay them;
+	 * if they are USED, the loop below adds them as fresh blocks */
+	pthd_mutex_lock(&b->unallocated_mutex);
+
+	blockio_info_t *bi = dllarr_first(&dev->replay), *next;
+	while (bi) {
+		next = dllarr_next(&dev->replay, bi);
+		if (blockio_dev_get_macroblock_status(bi) == FREE ||
+				bi->next_seqno <= seqno) {
+			VERBOSE("block %u (seqno=%lu, next_seqno=%lu) is stale",
+					blockio_get_macroblock_index(bi),
+					bi->seqno, bi->next_seqno);
+			dllarr_remove(&dev->replay, bi);
+			free(bi->indices);
+			bi->indices = NULL;
+			bi->dev = NULL;
+			dllarr_append(&b->unallocated, bi);
+		}
+		bi = next;
+	}
+
+	pthd_mutex_unlock(&b->unallocated_mutex);
+
+	/* the most recent block may be a discarded block, which is not
+	 * replayed, the juggler must continue after it */
+	juggler_notify_seqno(&dev->j, seqno);
+
 	VERBOSE("we currently got %d blocks, and we expect %d blocks",
 			dllarr_count(&dev->replay), dev->no_macroblocks);
 
@@ -340,7 +519,7 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 				FATAL("macroblock marked as USED that "
 						"does not exist");
 
-			blockio_info_t *bi = &dev->b->blockio_infos[i];
+			bi = &dev->b->blockio_infos[i];
 			if (bi->dev == dev) continue; // ok
 			else if (bi->dev)
 				FATAL("block %u USED by us but claimed "
@@ -377,7 +556,7 @@ void blockio_dev_scan_header(dllarr_t *replay, blockio_dev_t *dev,
 	assert(dev && dev->b);
 	int i;
 	char zero[128] = { };
-	uint32_t no = bi - dev->b->blockio_infos;
+	uint32_t no = bi - dev->b->blockio_infos, no_trims;
 
 	assert(no < dev->b->total_macroblocks);
 
@@ -423,12 +602,17 @@ void blockio_dev_scan_header(dllarr_t *replay, blockio_dev_t *dev,
 	bi->seqno = binio_read_uint64_be(SEQNO_UINT64);
 	bi->next_seqno = binio_read_uint64_be(NEXT_SEQNO_UINT64);
 
-	if (memcmp(zero, RESERVED_SPACE1024, 128))
+	no_trims = binio_read_uint32_be(NO_TRIMS_UINT32);
+	if (no_trims > BLOCKIO_MAX_TRIMS)
+		FATAL("too many trims in index of block %u", no);
+	if (memcmp(zero, TRIMS + 12*no_trims, 128 - 8 - 12*no_trims))
 		FATAL("reserved space is not zeroed out");
 	if (bi->seqno == 0) 
 		FATAL("block found with seqno 0, not possibile");
-	if (bi->next_seqno <= bi->seqno)
-		FATAL("block found with seqno >= next_seqno, not possible");
+	/* a block that was discarded (removed from the partition by
+	 * shrinking) has seqno == next_seqno */
+	if (bi->next_seqno < bi->seqno)
+		FATAL("block found with seqno > next_seqno, not possible");
 
 	bi->no_nonobsolete = bi->no_indices =
 		binio_read_uint32_be(NO_INDICES_UINT32);
@@ -464,6 +648,16 @@ void blockio_dev_scan_header(dllarr_t *replay, blockio_dev_t *dev,
 				NO_MACROBLOCKS_UINT32);
 		dev->reserved_macroblocks = binio_read_uint32_be(
 				RESERVED_BLOCKS_UINT32);
+		dev->pending_removals = binio_read_uint32_be(PENDING_UINT32);
+		if (dev->pending_removals > dev->no_macroblocks)
+			FATAL("more pending removals than blocks");
+		dev->no_trims = no_trims;
+		for (i = 0; i < no_trims; i++) {
+			dev->trims[i].seqno =
+				binio_read_uint64_be(TRIM_SEQNO_UINT64(i));
+			dev->trims[i].size =
+				binio_read_uint32_be(TRIM_SIZE_UINT32(i));
+		}
 
 		//VERBOSE("block %u is candidate for highest seqno", no);
 	}
@@ -552,6 +746,13 @@ void blockio_dev_write_current_macroblock(blockio_dev_t *dev) {
 			dev->reserved_macroblocks);
 	binio_write_uint32_be(NO_MACROBLOCKS_UINT32, dev->no_macroblocks);
 	memset(RESERVED_SPACE1024, 0, 128);
+	blockio_dev_prune_trims(dev);
+	binio_write_uint32_be(PENDING_UINT32, dev->pending_removals);
+	binio_write_uint32_be(NO_TRIMS_UINT32, dev->no_trims);
+	for (i = 0; i < dev->no_trims; i++) {
+		binio_write_uint64_be(TRIM_SEQNO_UINT64(i), dev->trims[i].seqno);
+		binio_write_uint32_be(TRIM_SIZE_UINT32(i), dev->trims[i].size);
+	}
 
 	dev->bi->no_nonobsolete = dev->bi->no_indices;
 	binio_write_uint32_be(NO_INDICES_UINT32, dev->bi->no_indices);

@@ -58,6 +58,8 @@ void scubed3_cycle(scubed3_t*);
 
 void scubed3_free(scubed3_t*);
 
+void scubed3_flush(scubed3_t*);
+
 #define id(a)   ((a) - l->dev->b->blockio_infos)
 
 #endif /* INCLUDE_SCUBED3_H */

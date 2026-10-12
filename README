@@ -158,7 +158,12 @@ Layout of macroblock:
 0x000070 8byte literal "SSS3v0.1"
 0x000078 uint32_t no_macroblocks
 0x00007C uint32_t reserved_blocks
-0x000080 uint8_t[128] reserved space, MUST be 0
+0x000080 uint32_t pending_removals (shrinking: blocks still to be removed)
+0x000084 uint32_t no_trims (at most 8)
+0x000088 trims[no_trims]: uint64_t seqno, uint32_t size (12 bytes each)
+         a reference in a block with seqno < trims[i].seqno to a
+         mesoblock >= trims[i].size is dead (discarded by shrinking)
+......   rest of the 128 byte reserved space, MUST be 0
 0x000100 uint32_t no_indices
 0x000104 uint32_t idx0x01
 0x000108 uint32_t idx0x02
@@ -196,6 +201,31 @@ In general the indexblock requires:
 - fixed size: 260 bytes (including 128 bytes of reserved space)
 - 4 bytes for every mesoblock in a macroblock
 - 1 bit for every macroblock
+
+Shrinking
+~~~~~~~~~
+
+Shrinking sets pending_removals = no_macroblocks - target, the usable size
+is computed from the target. Mesoblocks past the new end are obsoleted at
+once, and a trim (seqno of the next write, new size) is recorded, so that
+these references are never replayed, not even after a later enlarge.
+
+Blocks are removed one at a time, in the order in which the juggler offers
+them:
+- an unscheduled block holds no data and can be removed at once (the last
+  one only if a block is scheduled for the next seqno)
+- a scheduled block Y can be removed when it is due, contains no live
+  mesoblocks, and the block Z due after it contains no live mesoblocks
+  either; Y is then written in its own slot as a discarded block
+  (seqno == next_seqno, FREE in its own bitmap), so the write pattern is
+  the same as in normal operation
+- while removals are pending, the current block absorbs (after its tail)
+  live mesoblocks of the block after the tail, leaving one mesoblock free
+
+On startup, a block with our signature is stale (not replayed) if it is
+FREE in the bitmap of the most recent block, or if next_seqno <= the
+highest seqno found: a block leaves the partition only through a discard
+write in its own slot.
 
 Random block selection
 ~~~~~~~~~~~~~~~~~~~~~~

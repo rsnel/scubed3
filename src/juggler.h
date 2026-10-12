@@ -45,6 +45,10 @@ void juggler_notify_seqno(juggler_t*, uint64_t seqno);
 
 blockio_info_t *juggler_get_obsoleted(juggler_t*);
 
+blockio_info_t *juggler_get_due(juggler_t*, uint64_t);
+
+blockio_info_t *juggler_remove_unscheduled(juggler_t*);
+
 blockio_info_t *juggler_get_devblock(juggler_t*, int);
 
 void juggler_verbose(juggler_t*, uint32_t (*getnum)(blockio_info_t*, void*), void*);

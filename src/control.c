@@ -245,13 +245,20 @@ static int control_status(int s, control_thread_priv_t *priv, char *argv[]) {
 		.macroblocks_left = priv->b->total_macroblocks
 	};
         int rep(control_status_priv_t *priv, fuse_io_entry_t *entry) {
-		size_t size = ((entry->d.no_macroblocks - entry->d.reserved_macroblocks)*entry->d.b->mmpm);
+		size_t size = blockio_dev_usable_macroblocks(&entry->d)*
+			entry->d.b->mmpm;
 		priv->macroblocks_left -= entry->d.no_macroblocks;
+		if (entry->d.pending_removals) {
+			if (control_write_line(priv->s, "(shrinking %s, "
+					"%u blocks still to be removed)\n",
+					entry->head.key,
+					entry->d.pending_removals)) return -1;
+		}
                 return control_write_line(priv->s,
 				"%07u blocks in %s (%.1fMiB)%s%s%s%s%s\n",
-				entry->d.no_macroblocks, entry->head.key,
-				((entry->d.no_macroblocks >= entry->d.reserved_macroblocks)?
-				 	size<<entry->d.b->mesoblk_log:0)/(1024.*1024.),
+				entry->d.no_macroblocks -
+				entry->d.pending_removals, entry->head.key,
+				(size<<entry->d.b->mesoblk_log)/(1024.*1024.),
 				entry->inuse?" [U]":"",
 				entry->close_on_release?" [C]":"",
 				entry->mountpoint?" [MNT ":"",
@@ -349,12 +356,15 @@ static int control_open_create_common(int s, control_thread_priv_t *priv, char *
 			ecch_throw(ECCH_DEFAULT, "no blocks found: passphrase wrong?");
 
 		entry->size = 0;
-		if (entry->d.no_macroblocks > entry->d.reserved_macroblocks) entry->size = ((entry->d.no_macroblocks-entry->d.reserved_macroblocks)<<entry->d.b->mesoblk_log)*entry->d.b->mmpm;
+		entry->size = ((uint64_t)blockio_dev_usable_macroblocks(&entry->d)*
+				entry->d.b->mmpm)<<entry->d.b->mesoblk_log;
 
 		scubed3_init(&entry->l, &entry->d);
 
 		assert(!entry->d.bi);
-		if (entry->size > 0) blockio_dev_select_next_macroblock(&entry->d);
+		/* also if the size is 0, removals may be pending */
+		if (entry->d.no_macroblocks)
+			blockio_dev_select_next_macroblock(&entry->d);
 
 		// really only used for test
 		//ecch_throw(ECCH_DEFAULT, "break off, we're testing");
@@ -472,8 +482,16 @@ static int control_info(int s, control_thread_priv_t *priv, char *argv[]) {
 
 	if (control_write_status(s, 0)) return -1;
 
+	/* no_macroblocks is the size the partition has, or will have
+	 * when all pending removals are done */
 	if (control_write_line(s, "no_macroblocks=%d\n",
-				entry->d.no_macroblocks)) return -1;
+				entry->d.no_macroblocks -
+				entry->d.pending_removals)) return -1;
+
+	if (control_write_line(s, "pending_removals=%d\n",
+				entry->d.pending_removals)) return -1;
+
+	if (control_write_line(s, "trims=%d\n", entry->d.no_trims)) return -1;
 
 	if (control_write_line(s, "reserved_macroblocks=%d\n",
 				entry->d.reserved_macroblocks)) return -1;
@@ -515,9 +533,10 @@ static int control_close(int s, control_thread_priv_t *priv, char *argv[]) {
 
 static int control_resize(int s, control_thread_priv_t *priv, char *argv[]) {
 	int size = 0, reserved = 0; // shut compiler up
-	int err;
+	uint32_t target, old_usable, new_usable;
 	fuse_io_entry_t *entry = hashtbl_find_element_bykey(priv->h, argv[0]);
 	blockio_dev_t *dev;
+	int ret;
 
 	if (!entry) return control_write_complete(s, 1,
 			"partition \"%s\" not found", argv[0]);
@@ -529,20 +548,16 @@ static int control_resize(int s, control_thread_priv_t *priv, char *argv[]) {
 	}
 	dev = &entry->d;
 
-	if (parse_int(s, &size, argv[1])) return -1;
-	if (parse_int(s, &reserved, argv[2])) return -1;
+	if (parse_int(s, &size, argv[1]) || parse_int(s, &reserved, argv[2])) {
+		hashtbl_unlock_element_byptr(entry);
+		return -1;
+	}
 
 	if (!(reserved <= size) || !(size >= 0)) {
 		hashtbl_unlock_element_byptr(entry);
 		return control_write_complete(s, 1,
 			"values for new_size=%d and reserved=%d make no sense",
 			size, reserved);
-	}
-
-	if (size < dev->no_macroblocks) {
-		blockio_dev_free_macroblocks(dev, dev->no_macroblocks - size);
-		hashtbl_unlock_element_byptr(entry);
-		return control_write_complete(s, 1, "shrinking device is not yet supported");
 	}
 
 	if (size > dev->b->total_macroblocks) {
@@ -552,35 +567,66 @@ static int control_resize(int s, control_thread_priv_t *priv, char *argv[]) {
 				"has only %d blocks", dev->b->total_macroblocks);
 	}
 
-	size -= dev->no_macroblocks;
-
-	if (size == 0) {
+	target = dev->no_macroblocks - dev->pending_removals;
+	if (size == target && reserved == dev->reserved_macroblocks) {
 		hashtbl_unlock_element_byptr(entry);
 		return control_write_complete(s, 1, "nothing to do");
 	}
 
-	VERBOSE("need to allocate %d additional blocks", size);
-
-	if ((err = blockio_dev_allocate_macroblocks(dev, size))) {
+	if (size > dev->no_macroblocks && dllarr_count(&dev->b->unallocated) <
+			size - dev->no_macroblocks) {
 		hashtbl_unlock_element_byptr(entry);
-		assert(err == -1);
 		return control_write_complete(s, 1, "not enough unclaimed "
 				"blocks available for resize");
 	}
 
+	old_usable = blockio_dev_usable_macroblocks(dev);
+	new_usable = (size > reserved)?size - reserved:0;
+
+	if (new_usable < old_usable) {
+		/* the partition becomes smaller, write out the current block,
+		 * then record that references to mesoblocks past the new end
+		 * in the blocks written until now are dead */
+		scubed3_flush(&entry->l);
+		if (blockio_dev_add_trim(dev,
+					dev->bi?dev->bi->seqno:dev->j.seqno + 1,
+					new_usable*dev->b->mmpm)) {
+			hashtbl_unlock_element_byptr(entry);
+			return control_write_complete(s, 1, "too many recent "
+					"shrink operations, write some data "
+					"to the partition and try again");
+		}
+		VERBOSE("shrinking \"%s\" from %u to %d macroblocks",
+				argv[0], target, size);
+	}
+
+	if (size <= dev->no_macroblocks) {
+		/* blocks are removed later, when it is possible */
+		dev->pending_removals = dev->no_macroblocks - size;
+	} else {
+		dev->pending_removals = 0;
+		VERBOSE("need to allocate %d additional blocks",
+				size - dev->no_macroblocks);
+		ret = blockio_dev_allocate_macroblocks(dev,
+				size - dev->no_macroblocks);
+		assert(!ret);
+	}
+
 	dev->reserved_macroblocks = reserved;
 
-	if (entry->d.no_macroblocks > entry->d.reserved_macroblocks)
-		entry->size = ((entry->d.no_macroblocks -
-					entry->d.reserved_macroblocks)<<
-				entry->d.b->mesoblk_log)*entry->d.b->mmpm;
 	scubed3_reinit(&entry->l);
 
-	hashtbl_unlock_element_byptr(entry);
+	entry->size = ((uint64_t)blockio_dev_usable_macroblocks(dev)*
+			dev->b->mmpm)<<dev->b->mesoblk_log;
 
-	if (!dev->bi) blockio_dev_select_next_macroblock(dev);
+	if (!dev->bi && dev->no_macroblocks) {
+		blockio_dev_select_next_macroblock(dev);
+		entry->l.output_initialized = 0;
+	}
 
 	dev->updated = 1;
+
+	hashtbl_unlock_element_byptr(entry);
 
 	return control_write_silent_success(s);
 }

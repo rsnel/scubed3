@@ -28,6 +28,8 @@
 
 typedef struct blockio_info_s blockio_info_t;
 
+#define BLOCKIO_MAX_TRIMS 8
+
 #include "juggler.h"
 
 
@@ -61,6 +63,22 @@ typedef struct blockio_dev_s {
 
 	uint32_t no_macroblocks;
 	uint32_t reserved_macroblocks;
+
+	/* shrinking: no_macroblocks - pending_removals is the target size,
+	 * blocks are removed one by one, in the order the juggler offers
+	 * them, when they hold no data */
+	uint32_t pending_removals;
+
+	/* trims: if a block with seqno < trims[i].seqno contains a reference
+	 * to mesoblock >= trims[i].size, that reference is dead, it was
+	 * discarded by shrinking (this prevents resurrection of old data
+	 * when the partition is enlarged again); the list is kept in the
+	 * index and pruned when no block of the partition is that old */
+	uint32_t no_trims;
+	struct blockio_trim_s {
+		uint64_t seqno;
+		uint32_t size;
+	} trims[BLOCKIO_MAX_TRIMS];
 
 	blockio_info_t *bi; /* current block */
 	blockio_info_t *tail_macroblock; /* tbe block that must be cleaned out */
@@ -162,5 +180,11 @@ int blockio_dev_allocate_macroblocks(blockio_dev_t*, uint32_t);
 int blockio_dev_free_macroblocks(blockio_dev_t*, uint32_t);
 
 void blockio_prepare_block(blockio_info_t*);
+
+uint32_t blockio_dev_usable_macroblocks(blockio_dev_t*);
+
+int blockio_dev_add_trim(blockio_dev_t*, uint64_t, uint32_t);
+
+int blockio_dev_is_trimmed(blockio_dev_t*, uint64_t, uint32_t);
 
 #endif /* INCLUDE_SCUBED3_BLOCKIO_H */

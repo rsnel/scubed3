@@ -43,7 +43,6 @@ typedef struct cipher_spec_s {
 	const char *name;
 } cipher_spec_t;
 
-extern const cipher_spec_t cipher_abl4;
 extern const cipher_spec_t cipher_null;
 extern const cipher_spec_t cipher_cbc_plain;
 extern const cipher_spec_t cipher_cbc_essiv;

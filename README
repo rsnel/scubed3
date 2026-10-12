@@ -26,15 +26,36 @@ indexblock: the first mesoblock in each macroblock contains information
 about the other mesoblocks in said macroblock
 
 ESSIV is a function that turns an uint64_t and two uint32_t's in a 128 bit
-block for use as IV.
+block for use as IV (see Encryption).
 
-indexblocks are encrypted with IV = ESSIV(0, macroblock_number, 0)
+indexblocks are encrypted with IV = ESSIV(0, 0, macroblock_number)
 
-mesoblocks are encrypted with IV = ESSIV(seqno, macroblock_number, index)
+mesoblocks are encrypted with IV = ESSIV(seqno, mesoblock_number,
+macroblock_number), mesoblock_number is 1..255
 
 the indexblock IV will repeat when the same disk block is written
 
 the mesoblock IV will never repeat (as long as the seqno is not reset)
+
+Encryption
+~~~~~~~~~~
+
+Every mesoblock (also the indexblock) is encrypted on its own with
+CBC_ESSIV(AES256): AES-256 in CBC mode, the IV is ESSIV(iv0, iv1, iv2) =
+AES-256 encryption, with SHA256(key) as key, of the 16 byte block made of iv0
+(uint64_t), iv1 and iv2 (uint32_t), big endian.
+
+An earlier design used a wide block mode (ABL) for the data, so that a
+macroblock changes completely or not at all. That is not needed: every write
+of a macroblock has a new seqno, so every data mesoblock has a new IV and
+changes completely; the indexblock has a fixed IV, but its first 32 bytes are
+a hash of the rest of it, which contains the seqno, so with CBC the whole
+indexblock changes as well. To someone without the key, a macroblock changes
+completely or not at all.
+
+The cipher is given as MODE(BLOCKCIPHER) when a partition is opened or
+created; scubed3ctl always uses CBC_ESSIV(AES256). The other modes, NULL (no
+encryption) and CBC_PLAIN (CBC with the plain IV), are for testing only.
 
 Threat model
 ~~~~~~~~~~~~
@@ -149,30 +170,39 @@ The last line must be ".\n". This terminates the message.
 
 The command scubed3ctl uses this interface to communicate with scubed3.
 
-Commands:
+Commands (scubed3ctl has commands of its own, like create, open, resize and
+mount, that use these; other commands are passed on as they are):
 
-- status
+- open-internal NAME CIPHER KEY
+- create-internal NAME CIPHER KEY
 
-shows the status
+opens a partition, or creates a new one (of 0 blocks)
 
-- open NAME MODE KEY
+* NAME is the name of the file under the mountpoint, like root or swap, the
+name has no real meaning, you can open any partition under any name
 
-opens a scubed partition
+* CIPHER is the cipher, CBC_ESSIV(AES256) (see Encryption)
 
-* NAME is the name, like root or swap, whatever, the name has no real meaning,
-you can open any partition under any name
+* KEY is the cipher key, base16 encoded (hex)
 
-* MODE is the ciphermode, eg CBC_LARGE(AES)
+- close NAME
 
-* KEY is the cipher key bas16 encoded (hex).
+closes a partition (it must not be in use)
 
-- resize NAME MACROBLOCKS
+- resize-internal NAME BLOCKS RESERVED
 
-resizes a scubed partition
+resizes a partition to BLOCKS macroblocks, of which RESERVED are kept free
+(the usable size is (BLOCKS - RESERVED)*255 mesoblocks); see Shrinking
 
-* NAME ....
+- info NAME
 
-* MACROBLOCKS, the amount of macroblocks owned by the partition
+shows the state of a partition: no_macroblocks, pending_removals, trims,
+reserved_macroblocks, writes, no_indices, updated, tombstone_slots,
+tombstones_pending, mapped_mesoblocks
+
+- p
+
+shows all open partitions
 
 - check-data-integrity NAME
 
@@ -180,6 +210,20 @@ checks the hashes of all live mesoblocks of a partition, it reports the
 number of mesoblocks checked, the number of corrupt mesoblocks, and the
 corrupt parts (see Integrity) as "corrupt=OFFSET+SIZE" (in bytes, for at
 most 100 mesoblocks)
+
+- check-available NAME, set-aux NAME KEY VALUE, get-aux NAME KEY,
+  set-close-on-release NAME BOOL, static-info
+
+used by scubed3ctl (is a name free, remember the mountpoint, close the
+partition when it is unmounted, mountpoint/size/version of scubed3)
+
+- cycle NAME COUNT, verbose-juggler NAME
+
+for testing: write COUNT blocks, show the state of the juggler
+
+- help-internal, exit
+
+lists the commands, closes the connection
 
 
 Example calculation if indexblock size

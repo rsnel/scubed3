@@ -199,6 +199,29 @@ static int fuse_io_fsync(const char *path, int datasync,
 	return 0;
 }
 
+/* the size of a partition is changed with resize, truncate behaves as on a
+ * block device: open(O_TRUNC) and ftruncate() succeed, but nothing changes
+ * (dd without conv=notrunc truncates its output file, an accidental
+ * "> partition" in a shell does not destroy anything) */
+static int fuse_io_truncate(const char *path, off_t size) {
+	fuse_io_entry_t *entry = hashtbl_find_element_bykey(
+			&((fuse_io_priv_t*)fuse_get_context()->private_data)->
+			entries, path + 1);
+	if (!entry) return -ENOENT;
+
+	DEBUG("truncate of \"%s\" to %ld bytes ignored", path + 1,
+			(long)size);
+
+	hashtbl_unlock_element_byptr(entry);
+
+	return 0;
+}
+
+static int fuse_io_ftruncate(const char *path, off_t size,
+		struct fuse_file_info *fi) {
+	return fuse_io_truncate(path, size);
+}
+
 #if 0
 
 static int fuse_io_flush(const char *path, struct fuse_file_info *fi) {
@@ -225,6 +248,8 @@ static struct fuse_operations fuse_io_operations = {
 	.init = fuse_io_init,
 	.destroy = fuse_io_destroy,
 	.fsync = fuse_io_fsync,
+	.truncate = fuse_io_truncate,
+	.ftruncate = fuse_io_ftruncate,
 //	.flush = fuse_io_flush
 };
 

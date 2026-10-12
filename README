@@ -288,6 +288,11 @@ that a file is no longer open, so close and resize wait up to 3 seconds for
 that before they report that the partition is busy. scubed3ctl refuses to
 mount a partition that it has mounted already.
 
+The size of a partition is changed with resize. Truncating it (open with
+O_TRUNC, truncate(), ftruncate()) succeeds but changes nothing, as on a block
+device: dd works without conv=notrunc, and an accidental "> partition" in a
+shell destroys nothing.
+
 Shrinking
 ~~~~~~~~~
 

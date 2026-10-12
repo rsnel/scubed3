@@ -229,17 +229,51 @@ void blockio_dev_free(blockio_dev_t *dev) {
 
 	dllarr_free(&dev->replay);
 	free(dev->tmp_macroblock);
+	free(dev->out_macroblock);
 	free(dev->name);
 	if (dev->b && dev->b->close) dev->b->close(dev->io);
 }
 
 void blockio_dev_select_next_macroblock(blockio_dev_t *dev) {
+	blockio_info_t *due;
+	uint32_t i;
 	assert(!dev->bi);
 
 	dev->updated = 0;
 
+	/* if the block that is due still has live mesoblocks, it was
+	 * scheduled to be rewritten right after it was written, its live
+	 * data has not been copied elsewhere, so it must be in RAM; if it
+	 * is not (we just opened the device) load it now, while its
+	 * old seqno (needed for the IV) is still known */
+	due = juggler_get_obsoleted(&dev->j);
+	if (due && due->no_indices && due != dev->ram_block) {
+		uint32_t id = blockio_get_macroblock_index(due);
+		VERBOSE("block %u is due and still has %u indices, loading",
+				id, due->no_indices);
+		for (i = 0; i < due->no_indices; i++)
+			blockio_dev_read_mesoblk(dev, dev->tmp_macroblock +
+					((i + 1)<<dev->b->mesoblk_log), id, i);
+		dev->ram_block = due;
+	}
+
 	dev->bi = juggler_get_devblock(&dev->j, 0);
+	dev->ram_block = dev->bi; /* tmp_macroblock now belongs to bi */
 	dev->tail_macroblock = juggler_get_obsoleted(&dev->j);
+
+	/* if the (empty) selected block is scheduled to be rewritten at
+	 * the next seqno, it is its own tail: data written to it now would
+	 * have nowhere to go when it is rewritten, so we write it out
+	 * empty and select again (this happens with probability 1/N) */
+	while (dev->bi->next_seqno == dev->bi->seqno + 1 &&
+			!dev->bi->no_indices) {
+		VERBOSE("block %d is its own tail, writing it out empty",
+				blockio_get_macroblock_index(dev->bi));
+		blockio_dev_write_current_macroblock(dev);
+		dev->bi = juggler_get_devblock(&dev->j, 0);
+		dev->ram_block = dev->bi;
+		dev->tail_macroblock = juggler_get_obsoleted(&dev->j);
+	}
 
 	assert(dev->bi);
 
@@ -275,6 +309,8 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 	dev->io = (b->open)(b->open_priv);
 
 	dev->tmp_macroblock = ecalloc(1, 1<<b->macroblock_log);
+	dev->out_macroblock = ecalloc(1, 1<<b->macroblock_log);
+	dev->ram_block = NULL;
 
 	/* read macroblock headers, protected by mutex,
 	 * because we will maybe touch blocks that are owned
@@ -491,15 +527,17 @@ void blockio_dev_write_current_macroblock(blockio_dev_t *dev) {
 				0, 1<<dev->b->mesoblk_log);
 	}
 
-	/* encrypt datablocks (also the unused ones) */
+	/* encrypt datablocks (also the unused ones), the plaintext
+	 * stays in tmp_macroblock */
 	for (i = 1; i <= dev->b->mmpm; i++)
-		cipher_enc(dev->c, BASE + (i<<dev->b->mesoblk_log),
+		cipher_enc(dev->c, dev->out_macroblock +
+				(i<<dev->b->mesoblk_log),
 			BASE + (i<<dev->b->mesoblk_log),
 			dev->bi->seqno, i, id);
 
 	/* calculate hash of data, store in index */
 	gcry_md_hash_buffer(GCRY_MD_SHA256, DATABLOCKS_SHA256,
-			BASE + (1<<dev->b->mesoblk_log),
+			dev->out_macroblock + (1<<dev->b->mesoblk_log),
 			dev->b->mmpm<<dev->b->mesoblk_log);
 	//verbose_buffer("sha256_data", DATABLOCKS_HASH, 32);
 
@@ -533,11 +571,13 @@ void blockio_dev_write_current_macroblock(blockio_dev_t *dev) {
 			(1<<dev->b->mesoblk_log) - 32 /* size of hash */);
 
 	/* encrypt index */
-	cipher_enc(dev->c, BASE, BASE, 0, 0, id);
+	cipher_enc(dev->c, dev->out_macroblock, BASE, 0, 0, id);
 
-	dev->b->write(dev->io, BASE, ((off_t)id)<<dev->b->macroblock_log,
+	dev->b->write(dev->io, dev->out_macroblock,
+			((off_t)id)<<dev->b->macroblock_log,
 			1<<dev->b->macroblock_log);
 
+	dev->ram_block = dev->bi; /* its plaintext is still in RAM */
 	dev->bi = NULL; /* there is no current block */
 }
 

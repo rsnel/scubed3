@@ -363,7 +363,7 @@ static int ctl_open_create_common(ctl_priv_t *priv, char *argv[], int create) {
 	wipememory(pw, pw_len);
 	free(pw);
 
-	char hash_text[64], *ptr = hash_text;
+	char hash_text[65], *ptr = hash_text;
 
 	for (i = 0; i < gcry_md_get_algo_dlen(subalgo); i++)
 		ptr += snprintf(ptr, 3, "%02x", hash[i]);
@@ -375,7 +375,7 @@ static int ctl_open_create_common(ctl_priv_t *priv, char *argv[], int create) {
 	// WARNING: sizeof(hash_text) must be cast to int... see below
 	ret = do_server_command(priv->s, 1, "%s-internal %s %s %.*s",
 			create?"create":"open", argv[0],
-			DEFAULT_CIPHER_STRING, (int)sizeof(hash_text),
+			DEFAULT_CIPHER_STRING, 64,
 			hash_text);
 
 	// HERE BE DRAGONS! if sizeof(hash_text) is NOT cast to int, then

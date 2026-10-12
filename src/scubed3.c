@@ -85,7 +85,9 @@ static inline char *mesoblk(scubed3_t *l, uint16_t no) {
 void copy_old_block_to_current(scubed3_t *l) {
 	int k;
 	uint32_t index;
-	if (l->dev->tail_macroblock &&
+	/* the current block can be its own tail (it is rescheduled for
+	 * the next seqno), its data is in RAM and travels with it */
+	if (l->dev->tail_macroblock && l->dev->tail_macroblock != l->dev->bi &&
 			blockio_dev_get_macroblock_status(
 				l->dev->tail_macroblock) == USED) {
 		blockio_info_t *bi = l->dev->tail_macroblock;

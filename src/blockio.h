@@ -71,6 +71,12 @@ typedef struct blockio_dev_s {
 	 * to be written out to disk */
 	char *tmp_macroblock;
 
+	/* the ciphertext of the macroblock is built here, so that
+	 * tmp_macroblock keeps the plaintext; ram_block is the block
+	 * whose plaintext is in tmp_macroblock (if any) */
+	char *out_macroblock;
+	blockio_info_t *ram_block;
+
 	// use one random_t per dev, to avoid locking issues
 	random_t r;
 

@@ -227,6 +227,20 @@ FREE in the bitmap of the most recent block, or if next_seqno <= the
 highest seqno found: a block leaves the partition only through a discard
 write in its own slot.
 
+Durability
+~~~~~~~~~~
+
+Every macroblock write is followed by fdatasync() of the base device, so
+macroblocks reach the disk in the order in which they are written: the
+block that absorbed the live data of its tail is on disk before the tail
+is overwritten. Therefore only the most recently written block can be
+incomplete after a power failure; on startup its data hash is checked, if
+it doesn't match, the block is ignored (its slot is reused for the same
+block, so that the incomplete contents are overwritten).
+
+fsync() on a partition writes out the current block (if it contains new
+data), so after fsync() returns, everything written before is on disk.
+
 Random block selection
 ~~~~~~~~~~~~~~~~~~~~~~
 

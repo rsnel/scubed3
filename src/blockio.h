@@ -95,6 +95,9 @@ typedef struct blockio_dev_s {
 	char *out_macroblock;
 	blockio_info_t *ram_block;
 
+	/* the most recent block was incomplete, its slot is reused for it */
+	blockio_info_t *torn_block;
+
 	// use one random_t per dev, to avoid locking issues
 	random_t r;
 
@@ -129,6 +132,7 @@ struct blockio_s {
 	void (*read)(void*, void*, uint64_t, uint32_t);
 	void (*write)(void*, const void*, uint64_t, uint32_t);
 	void (*close)(void*);
+	void (*sync)(void*);
 };
 
 uint32_t blockio_get_macroblock_index(blockio_info_t*);

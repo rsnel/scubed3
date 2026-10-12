@@ -33,6 +33,7 @@ typedef struct juggler_s {
 	uint32_t no_scheduled, no_unscheduled;
 	uint64_t seqno;
 	random_t *r;
+	blockio_info_t *prefer; /* pick this unscheduled block next, if any */
 } juggler_t;
 
 uint32_t juggler_count(juggler_t*j);

@@ -119,15 +119,17 @@ void copy_old_block_to_current(scubed3_t *l) {
 	if (tail && tail != l->dev->bi && tail->no_nonobsolete)
 		FATAL("tail of current block does not fit in it");
 
-	/* if we are shrinking, use the remaining room (except for one
-	 * mesoblock, so that a write can always proceed) to absorb live data
+	/* if we are shrinking, use the remaining room to absorb live data
 	 * of the block after the tail; when that block is completely
-	 * absorbed, the tail can be discarded at its turn, this works out
-	 * because blocks are (on average) less than full */
+	 * absorbed, the tail can be discarded at its turn; blocks are
+	 * filled completely, otherwise a partition that is completely
+	 * written cannot reach its target size (if the current block is
+	 * filled, a pending write gets its room from do_write, which
+	 * obsoletes the old version of the mesoblock first) */
 	if (!l->dev->pending_removals) return;
 
 	next = juggler_get_due(&l->dev->j, l->dev->bi->seqno + 2);
-	if (next) absorb_block(l, next, l->dev->b->mmpm - 1);
+	if (next) absorb_block(l, next, l->dev->b->mmpm);
 }
 
 /*
@@ -179,7 +181,12 @@ static void pre_emptive_gc(scubed3_t *l) {
 */
 
 // FIXME the following two functions look almost the same...  
-void select_new_macroblock(scubed3_t *l) {
+/* select new blocks until the current block has room, or until the GC
+ * has moved mesoblock mesoff (that is about to be written) to the current
+ * block (then it can be updated in place, this guarantees progress if all
+ * blocks are completely filled with live data) */
+void select_new_macroblock(scubed3_t *l, uint32_t mesoff) {
+	uint32_t index;
 	assert(l->output_initialized);
 	//pre_emptive_gc(l);
 	do {
@@ -191,7 +198,9 @@ void select_new_macroblock(scubed3_t *l) {
 				l->dev->bi->no_indices,
 				blockio_get_macroblock_index(
 					l->dev->tail_macroblock));
-	} while (l->dev->bi->no_indices == l->dev->b->mmpm);
+		index = l->block_indices[mesoff];
+	} while (l->dev->bi->no_indices == l->dev->b->mmpm &&
+			(index == 0xFFFFFFFF || ID != id(l->dev->bi)));
 }
 
 void initialize_output(scubed3_t *l) {
@@ -272,6 +281,18 @@ void scubed3_free(scubed3_t *l) {
 	if (l->dev && l->dev->bi && l->dev->updated) initialize_output(l);
 
 	free(l->block_indices);
+}
+
+/* make everything that was written to the partition durable: write out
+ * the current block if it contains new data (the write is followed by a
+ * sync of the base device) and select the next block */
+void scubed3_fsync(scubed3_t *l) {
+	if (!l->dev->bi || !l->dev->updated) return;
+
+	initialize_output(l);
+	blockio_dev_write_current_macroblock(l->dev);
+	blockio_dev_select_next_macroblock(l->dev);
+	l->output_initialized = 0;
 }
 
 /* write out the current block (if it contains anything), afterwards
@@ -380,8 +401,8 @@ void do_cow(scubed3_t *l, uint32_t index, uint32_t muoff,
 int do_write(scubed3_t *l, uint32_t mesoff, uint32_t muoff, uint32_t size,
 		char *in) {
 	uint32_t index;
-	char buf[1<<l->dev->b->mesoblk_log];
 	assert(muoff + size <= 1<<l->dev->b->mesoblk_log);
+	void *addr;
 	/* three possibilities:
 	 * 1. the block is currently in RAM, we update it
 	 * 2. the block was never written, we add it to RAM
@@ -395,32 +416,36 @@ int do_write(scubed3_t *l, uint32_t mesoff, uint32_t muoff, uint32_t size,
 	 * the mesoblock from the tail to the current block */
 	index = l->block_indices[mesoff];
 
-	if (ID == id(l->dev->bi)) { /* in RAM */
-		memcpy(mesoblk(l, NO) + muoff, in, size);
-		l->dev->updated = 1;
-		return 0;
+	if (ID != id(l->dev->bi)) {
+		/* could be that the new block is full after
+		 * garbage collecting (depends on the way the
+		 * to-be-freed block is selected); the old version of
+		 * the mesoblock stays live until the new version is
+		 * in the current block, so one of them is always on disk */
+		if (l->dev->bi->no_indices == l->dev->b->mmpm)
+			select_new_macroblock(l, mesoff);
+
+		index = l->block_indices[mesoff];
 	}
 
-	/* build the new mesoblock; if we do not write the complete
-	 * mesoblock, read the other parts from disk (if possible) or zero
-	 * them, this must be done before a new block is selected, the old
-	 * version may be in a block that gets a new seqno then */
-	memcpy(buf + muoff, in, size);
-	do_cow(l, index, muoff, size, buf);
+	addr = mesoblk(l, (ID == id(l->dev->bi))?NO:l->dev->bi->no_indices);
+	memcpy(addr + muoff, in, size);
 
-	/* mark old mesoblock obsolete (if there is one) before a new block
-	 * is selected: if all blocks are completely filled with live data,
-	 * this creates the room that is needed to make progress */
-	obsolete_mesoblk_byidx(l, index);
-	l->block_indices[mesoff] = 0xFFFFFFFF;
+	/* if not, the mesoblock is in RAM */
+	if (ID != id(l->dev->bi)) { /* we are on disk */
+		/* if we do not write the complete mesoblock, read the
+		 * other parts from disk (if possible) or zero them, the
+		 * old version is still on disk: its block can only have
+		 * been reused after it was moved to another block */
+		do_cow(l, index, muoff, size, addr);
 
-	if (l->dev->bi->no_indices == l->dev->b->mmpm)
-		select_new_macroblock(l);
+		/* mark old mesoblock obsolete, if there is one */
+		obsolete_mesoblk_byidx(l, index);
 
-	/* add new reference */
-	memcpy(mesoblk(l, l->dev->bi->no_indices), buf,
-			1<<l->dev->b->mesoblk_log);
-	add_blockref(l, mesoff);
+		/* add new reference */
+		add_blockref(l, mesoff);
+	}
+
 	l->dev->updated = 1;
 
 	return 0;

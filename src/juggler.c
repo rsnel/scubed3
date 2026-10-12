@@ -34,6 +34,7 @@ void juggler_init(juggler_t *j, random_t *r) {
 	j->no_scheduled = j->no_unscheduled = 0;
 	j->r = r;
 	j->seqno = 0;
+	j->prefer = NULL;
 }
 
 uint32_t juggler_count(juggler_t *j) {
@@ -97,6 +98,7 @@ blockio_info_t *juggler_remove_unscheduled(juggler_t *j) {
 	*iterate = ret->next;
 	ret->next = NULL;
 	j->no_unscheduled--;
+	if (j->prefer == ret) j->prefer = NULL;
 
 	return ret;
 }
@@ -153,6 +155,13 @@ blockio_info_t *juggler_get_devblock(juggler_t *j, int discard) {
 		uint32_t index = random_custom(j->r, j->no_unscheduled);
 		//VERBOSE("requested index is %u", index);
 		iterate = &j->unscheduled;
+		if (j->prefer) { /* use the preferred block, if available */
+			while (*iterate && *iterate != j->prefer)
+				iterate = &((*iterate)->next);
+			if (!*iterate) iterate = &j->unscheduled;
+			else index = 0;
+		}
+		j->prefer = NULL;
 		while (index--) iterate = &((*iterate)->next);
 		next = *iterate;
 		*iterate =  next->next;

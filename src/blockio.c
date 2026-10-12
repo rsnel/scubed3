@@ -26,6 +26,7 @@
 #include <limits.h>
 #include <assert.h>
 #include <unistd.h>
+#include <time.h>
 #include "blockio.h"
 #include "bitmap.h"
 #include "verbose.h"
@@ -61,11 +62,34 @@ static void stream_write(void *fp, const void *buf, uint64_t offset,
 	static int writes = 0;
 	char *crash = getenv("SCUBED3_CRASH_AFTER");
 	if (crash && ++writes > atoi(crash)) {
-		WARNING("simulated crash before write %d", writes);
+		uint32_t i, written = 0;
+		if (getenv("SCUBED3_TEAR")) {
+			/* power failure during the write: a random subset
+			 * of the 4096 byte pieces reaches the disk */
+			srand(getpid() ^ time(NULL));
+			for (i = 0; i + 4096 <= size; i += 4096) {
+				if (rand()&1) continue;
+				if (fseeko(fp, offset + i, SEEK_SET) ||
+						fwrite(buf + i, 4096, 1, fp) != 1)
+					FATAL("tear: %s", strerror(errno));
+				written++;
+			}
+			fflush(fp);
+		}
+		WARNING("simulated crash before write %d (%u pieces of it "
+				"written)", writes, written);
 		_exit(9);
 	}
 #endif
 	stream_io(fp, (void*)buf, offset, size, fwrite, "writing");
+}
+
+/* make everything written so far durable */
+static void stream_sync(void *fp) {
+	if (fflush(fp))
+		FATAL("error flushing: %s", strerror(errno));
+	if (fdatasync(fileno(fp)))
+		FATAL("error syncing: %s", strerror(errno));
 }
 
 static void stream_close(void *fp) {
@@ -150,6 +174,7 @@ void blockio_init_file(blockio_t *b, const char *path, uint8_t macroblock_log,
 	b->read = stream_read;
 	b->write = stream_write;
 	b->close = stream_close;
+	b->sync = stream_sync;
 
 	/* each scubed device has it's own handle
 	 * to the file (for thead safity), we open the
@@ -204,6 +229,10 @@ void blockio_init_file(blockio_t *b, const char *path, uint8_t macroblock_log,
 }
 
 static const char magic[8] = "SSS3v0.1";
+
+static void blockio_dev_take_index(blockio_dev_t*);
+
+static void blockio_dev_read_index(blockio_dev_t*, blockio_info_t*);
 
 void blockio_dev_free(blockio_dev_t *dev) {
 	int i;
@@ -442,6 +471,7 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 		const char *name) {
 	int i; 
 	uint64_t seqno = 0;
+	blockio_info_t *bi, *next;
 
 	assert(b && c);
 	assert(b->mesoblk_log < b->macroblock_log);
@@ -479,13 +509,49 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 		return;
 	}
 
+	/* only the most recently written block can be incomplete (see
+	 * blockio_dev_write_current_macroblock), if it is, we ignore it,
+	 * as if it was never written: its old contents were absorbed by
+	 * the block written before it */
+	dev->torn_block = NULL;
+	while ((bi = dllarr_last(&dev->replay)) &&
+			!blockio_check_data_hash(bi)) {
+		dev->torn_block = bi;
+		WARNING("most recent block %u (seqno=%lu) of \"%s\" is "
+				"incomplete (interrupted write), ignoring it",
+				blockio_get_macroblock_index(bi), bi->seqno,
+				dev->name);
+		pthd_mutex_lock(&b->unallocated_mutex);
+		dllarr_remove(&dev->replay, bi);
+		free(bi->indices);
+		bi->indices = NULL;
+		bi->dev = NULL;
+		bi->seqno = bi->next_seqno = 0;
+		dllarr_append(&b->unallocated, bi);
+		pthd_mutex_unlock(&b->unallocated_mutex);
+
+		if (!(bi = dllarr_last(&dev->replay))) {
+			/* nothing left, the partition was never written */
+			seqno = 0;
+			dev->no_macroblocks = 0;
+			return;
+		}
+	}
+
+	/* take the state of the partition from the most recent block (with
+	 * equal seqnos, the scan may have taken it from another block) */
+	bi = dllarr_last(&dev->replay);
+	seqno = bi->seqno;
+	blockio_dev_read_index(dev, bi);
+	blockio_dev_take_index(dev);
+
 	/* blocks with our signature that are FREE in the most recent
 	 * bitmap, or whose next_seqno has passed, are stale: they left
 	 * the partition through a discard write, we don't replay them;
 	 * if they are USED, the loop below adds them as fresh blocks */
 	pthd_mutex_lock(&b->unallocated_mutex);
 
-	blockio_info_t *bi = dllarr_first(&dev->replay), *next;
+	bi = dllarr_first(&dev->replay);
 	while (bi) {
 		next = dllarr_next(&dev->replay, bi);
 		if (blockio_dev_get_macroblock_status(bi) == FREE ||
@@ -538,11 +604,64 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 			dllarr_count(&dev->replay) + juggler_count(&dev->j))
 		FATAL("count of macroblocks does not match "
 				"the amount of blocks we have");
+
+	/* the slot of an interrupted write is reused for the same block,
+	 * so that its incomplete contents are overwritten */
+	if (dev->torn_block) {
+		if (dev->torn_block->dev == dev) {
+			VERBOSE("redoing the interrupted write in block %u",
+					blockio_get_macroblock_index(
+						dev->torn_block));
+			dev->j.prefer = dev->torn_block;
+		}
+		dev->torn_block = NULL;
+	}
+}
+
+/* take the state of the partition (bitmap, size, ...) from the decrypted
+ * index in BASE, this is done for the most recent block */
+static void blockio_dev_take_index(blockio_dev_t *dev) {
+	uint32_t i;
+
+	bitmap_read(&dev->status, (uint32_t*)BITMAP);
+
+	memcpy(dev->seqnos_hash, SEQNOS_SHA256, 32);
+
+	dev->no_macroblocks = binio_read_uint32_be(NO_MACROBLOCKS_UINT32);
+	dev->reserved_macroblocks = binio_read_uint32_be(
+			RESERVED_BLOCKS_UINT32);
+	dev->pending_removals = binio_read_uint32_be(PENDING_UINT32);
+	if (dev->pending_removals > dev->no_macroblocks)
+		FATAL("more pending removals than blocks");
+	dev->no_trims = binio_read_uint32_be(NO_TRIMS_UINT32);
+	assert(dev->no_trims <= BLOCKIO_MAX_TRIMS); /* checked by scan */
+	for (i = 0; i < dev->no_trims; i++) {
+		dev->trims[i].seqno = binio_read_uint64_be(TRIM_SEQNO_UINT64(i));
+		dev->trims[i].size = binio_read_uint32_be(TRIM_SIZE_UINT32(i));
+	}
+}
+
+/* read and decrypt the index of a block of ours into BASE */
+static void blockio_dev_read_index(blockio_dev_t *dev, blockio_info_t *bi) {
+	uint32_t no = bi - dev->b->blockio_infos;
+	char sha256[32];
+
+	dev->b->read(dev->io, BASE, ((off_t)no)<<dev->b->macroblock_log,
+			1<<dev->b->mesoblk_log);
+	cipher_dec(dev->c, BASE, BASE, 0, 0, no);
+
+	gcry_md_hash_buffer(GCRY_MD_SHA256, sha256, BASE + sizeof(sha256),
+			(1<<dev->b->mesoblk_log) - sizeof(sha256));
+	if (memcmp(magic, MAGIC64, sizeof(magic)) ||
+			memcmp(INDEXBLOCK_SHA256, sha256, sizeof(sha256)))
+		FATAL("index of block %u changed while opening", no);
 }
 
 static void sort_to_replay(dllarr_t *replay, blockio_info_t *bi) {
+	/* equal seqnos are possible: an interrupted (ignored) write leaves
+	 * a block that may be FREE now, with the same seqno as the block
+	 * that was written in its slot later, the stale filter removes it */
 	void *compare_seqno(blockio_info_t *bi, uint64_t *seqno) {
-		assert(*seqno != bi->seqno);
 		if (*seqno > bi->seqno) return NULL;
 		else return bi;
 	}
@@ -636,29 +755,9 @@ void blockio_dev_scan_header(dllarr_t *replay, blockio_dev_t *dev,
 	dllarr_remove(&dev->b->unallocated, bi);
 	sort_to_replay(replay, bi);
 
-	assert(bi->seqno != *seqno);
 	if (bi->seqno > *seqno) { // candidate found for highest seqno
 		*seqno = bi->seqno;
-
-		bitmap_read(&dev->status, (uint32_t*)BITMAP);
-
-		memcpy(dev->seqnos_hash, SEQNOS_SHA256, 32);
-
-		dev->no_macroblocks = binio_read_uint32_be(
-				NO_MACROBLOCKS_UINT32);
-		dev->reserved_macroblocks = binio_read_uint32_be(
-				RESERVED_BLOCKS_UINT32);
-		dev->pending_removals = binio_read_uint32_be(PENDING_UINT32);
-		if (dev->pending_removals > dev->no_macroblocks)
-			FATAL("more pending removals than blocks");
-		dev->no_trims = no_trims;
-		for (i = 0; i < no_trims; i++) {
-			dev->trims[i].seqno =
-				binio_read_uint64_be(TRIM_SEQNO_UINT64(i));
-			dev->trims[i].size =
-				binio_read_uint32_be(TRIM_SIZE_UINT32(i));
-		}
-
+		blockio_dev_take_index(dev);
 		//VERBOSE("block %u is candidate for highest seqno", no);
 	}
 
@@ -690,13 +789,14 @@ int blockio_check_data_hash(blockio_info_t *bi) {
 	uint32_t id = blockio_get_macroblock_index(bi);
 	size_t size = (1<<bi->dev->b->macroblock_log) -
 		(1<<bi->dev->b->mesoblk_log);
-	char data[size];
+	char *data = ecalloc(1, size);
 	char hash[32];
 	bi->dev->b->read(bi->dev->io, data,
 			(((off_t)id)<<bi->dev->b->macroblock_log) +
 			(1<<bi->dev->b->mesoblk_log), size);
 
 	gcry_md_hash_buffer(GCRY_MD_SHA256, hash, data, size);
+	free(data);
 
 	//verbose_buffer("sha256_data", hash, 32);
 
@@ -777,6 +877,12 @@ void blockio_dev_write_current_macroblock(blockio_dev_t *dev) {
 	dev->b->write(dev->io, dev->out_macroblock,
 			((off_t)id)<<dev->b->macroblock_log,
 			1<<dev->b->macroblock_log);
+
+	/* the block must be on disk before the next block is written: the
+	 * next block may be the tail of this block, its live data is in
+	 * this block now; this also means that only the most recently
+	 * written block can be incomplete after a power failure */
+	dev->b->sync(dev->io);
 
 	dev->ram_block = dev->bi; /* its plaintext is still in RAM */
 	dev->bi = NULL; /* there is no current block */

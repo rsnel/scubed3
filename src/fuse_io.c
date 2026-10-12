@@ -177,12 +177,21 @@ void *fuse_io_init(struct fuse_conn_info *conn) {
 	return fuse_get_context()->private_data;
 }
 
-#if 0
 static int fuse_io_fsync(const char *path, int datasync,
 		struct fuse_file_info *fi) {
-	VERBOSE("fsync on %s", path);
+	fuse_io_entry_t *entry = hashtbl_find_element_bykey(
+			&((fuse_io_priv_t*)fuse_get_context()->private_data)->
+			entries, path + 1);
+	if (!entry) return -ENOENT;
+
+	scubed3_fsync(&entry->l);
+
+	hashtbl_unlock_element_byptr(entry);
+
 	return 0;
 }
+
+#if 0
 
 static int fuse_io_flush(const char *path, struct fuse_file_info *fi) {
 	VERBOSE("flush on %s", path);
@@ -207,7 +216,7 @@ static struct fuse_operations fuse_io_operations = {
 	.release = fuse_io_release,
 	.init = fuse_io_init,
 	.destroy = fuse_io_destroy,
-//	.fsync = fuse_io_fsync,
+	.fsync = fuse_io_fsync,
 //	.flush = fuse_io_flush
 };
 

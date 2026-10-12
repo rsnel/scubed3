@@ -70,8 +70,12 @@ static inline void update_block_indices(scubed3_t *l, uint32_t offset,
 	l->block_indices[offset] = (id<<l->mesobits) + no;
 }
 
-static void add_blockref(scubed3_t *l, uint32_t offset) {
+/* add a reference to the mesoblock that was put in the next free slot of
+ * the current block, corrupt is the mask of its corrupt parts (they stay
+ * marked as corrupt), the hash is computed when the block is written */
+static void add_blockref(scubed3_t *l, uint32_t offset, int corrupt) {
 	l->dev->bi->indices[l->dev->bi->no_indices] = offset;
+	l->dev->bi->hashes[l->dev->bi->no_indices] = corrupt;
 	update_block_indices(l, offset, id(l->dev->bi),
 			l->dev->bi->no_indices);
 	l->dev->bi->no_indices++;
@@ -99,11 +103,12 @@ static void absorb_block(scubed3_t *l, blockio_info_t *bi, uint32_t limit) {
 			index = l->block_indices[bi->indices[k]];
 			if (index != 0xFFFFFFFF &&
 					&l->dev->b->blockio_infos[ID] == bi) {
-				blockio_dev_read_mesoblk(l->dev, mesoblk(l,
-						l->dev->bi->no_indices),
-						id(bi), k);
-
-				add_blockref(l, bi->indices[k]);
+				/* a corrupt mesoblock is copied as well, but
+				 * its corrupt parts stay marked as corrupt */
+				add_blockref(l, bi->indices[k],
+						blockio_dev_read_mesoblk(l->dev,
+						mesoblk(l, l->dev->bi->no_indices),
+						id(bi), k));
 
 				obsolete_mesoblk(l, bi, k);
 			}
@@ -375,29 +380,100 @@ void scubed3_init(scubed3_t *l, blockio_dev_t *dev) {
 		dllarr_remove(&dev->replay, bi);
 }
 
-void blockio_dev_fake_mesoblk_part(blockio_dev_t *dev, void *addr,
-		uint32_t id, uint32_t no, uint32_t offset, uint32_t size) {
-	memset(addr, 0, size);
+/* check the hashes of all live mesoblocks of the partition, report() is
+ * called for every corrupt one (with its offset in mesoblocks and the mask
+ * of its corrupt parts), returns the number of live mesoblocks that were
+ * checked */
+uint32_t scubed3_check(scubed3_t *l, void (*report)(void*, uint32_t, int),
+		void *priv) {
+	blockio_info_t *bi;
+	char *live = ecalloc(l->dev->b->mmpm, 1);
+	uint32_t i, k, index, checked = 0, no_live;
+
+	for (i = 0; i < juggler_count(&l->dev->j); i++) {
+		bi = juggler_nth(&l->dev->j, i);
+
+		/* which mesoblocks of this block are live? */
+		memset(live, 0, l->dev->b->mmpm);
+		no_live = 0;
+		for (k = 0; k < bi->no_indices; k++) {
+			if (bi->indices[k] >= l->no_block_indices) continue;
+			index = l->block_indices[bi->indices[k]];
+			if (index == 0xFFFFFFFF || ID != id(bi) || NO != k)
+				continue;
+			live[k] = 1;
+			no_live++;
+		}
+		if (!no_live) continue;
+		checked += no_live;
+
+		/* the current block is in RAM, only the corrupt parts of
+		 * the mesoblocks that were copied into it are known */
+		if (bi == l->dev->bi) {
+			for (k = 0; k < bi->no_indices; k++)
+				if (live[k] && bi->hashes[k]&BLOCKIO_CORRUPT_MASK)
+					live[k] = 2 + (bi->hashes[k]&
+						BLOCKIO_CORRUPT_MASK);
+		} else blockio_check_data_hashes(bi, live);
+
+		for (k = 0; k < bi->no_indices; k++)
+			if (live[k] >= 2) report(priv, bi->indices[k],
+					live[k] - 2);
+	}
+
+	free(live);
+
+	return checked;
 }
 
-void do_cow(scubed3_t *l, uint32_t index, uint32_t muoff,
+int blockio_dev_fake_mesoblk_part(blockio_dev_t *dev, void *addr,
+		uint32_t id, uint32_t no, uint32_t offset, uint32_t size) {
+	memset(addr, 0, size);
+	return 0;
+}
+
+/* returns the mask of corrupt parts of the old version of the mesoblock
+ * (if it was read) */
+int do_cow(scubed3_t *l, uint32_t index, uint32_t muoff,
 		uint32_t size, void *addr) {
-	void (*readorfake)(blockio_dev_t*, void*, uint32_t, uint32_t,
+	int corrupt = 0;
+	int (*readorfake)(blockio_dev_t*, void*, uint32_t, uint32_t,
 			uint32_t, uint32_t) = blockio_dev_fake_mesoblk_part;
 
 	if (index != 0xFFFFFFFF) readorfake = blockio_dev_read_mesoblk_part;
 
 	/* read the parts of the  mesoblock we don't modify from disk
 	 * otherwise, set it to zero */
-	if (muoff) readorfake(l->dev, addr, ID, NO, 0, muoff);
+	if (muoff) corrupt |= readorfake(l->dev, addr, ID, NO, 0, muoff);
 	if (1<<l->dev->b->mesoblk_log > size + muoff)
-		readorfake(l->dev, addr + muoff + size, ID, NO, muoff + size,
-				(1<<l->dev->b->mesoblk_log) - size - muoff);
+		corrupt |= readorfake(l->dev, addr + muoff + size, ID, NO,
+				muoff + size, (1<<l->dev->b->mesoblk_log) -
+				size - muoff);
+
+	return corrupt;
+}
+
+/* the mask of the parts of a mesoblock that are touched by [off, off+size),
+ * and of the parts that are completely covered by it */
+static int parts_touched(scubed3_t *l, uint32_t off, uint32_t size) {
+	uint8_t log = l->dev->b->mesoblk_log - 2; /* BLOCKIO_PARTS == 4 */
+
+	return ((1<<(((off + size - 1)>>log) + 1)) - 1)&~((1<<(off>>log)) - 1);
+}
+
+static int parts_covered(scubed3_t *l, uint32_t off, uint32_t size) {
+	uint8_t log = l->dev->b->mesoblk_log - 2; /* BLOCKIO_PARTS == 4 */
+	uint32_t first = (off + (1<<log) - 1)>>log, end = (off + size)>>log;
+
+	if (end <= first) return 0;
+
+	return ((1<<end) - 1)&~((1<<first) - 1);
 }
 
 int do_write(scubed3_t *l, uint32_t mesoff, uint32_t muoff, uint32_t size,
 		char *in) {
 	uint32_t index;
+	int touched, covered, corrupt;
 	assert(muoff + size <= 1<<l->dev->b->mesoblk_log);
 	void *addr;
 	/* three possibilities:
@@ -425,6 +501,17 @@ int do_write(scubed3_t *l, uint32_t mesoff, uint32_t muoff, uint32_t size,
 		index = l->block_indices[mesoff];
 	}
 
+	/* a corrupt part of a mesoblock is repaired by writing it
+	 * completely (as a disk remaps an unreadable sector when it is
+	 * written), a write that covers it partially would need its
+	 * contents, it fails with EIO */
+	touched = parts_touched(l, muoff, size);
+	covered = parts_covered(l, muoff, size);
+	if (ID == id(l->dev->bi)) { /* in RAM */
+		if (l->dev->bi->hashes[NO]&touched&~covered) return -EIO;
+		l->dev->bi->hashes[NO] &= ~(uint64_t)covered;
+	}
+
 	addr = mesoblk(l, (ID == id(l->dev->bi))?NO:l->dev->bi->no_indices);
 	memcpy(addr + muoff, in, size);
 
@@ -433,14 +520,18 @@ int do_write(scubed3_t *l, uint32_t mesoff, uint32_t muoff, uint32_t size,
 		/* if we do not write the complete mesoblock, read the
 		 * other parts from disk (if possible) or zero them, the
 		 * old version is still on disk: its block can only have
-		 * been reused after it was moved to another block */
-		do_cow(l, index, muoff, size, addr);
+		 * been reused after it was moved to another block; the
+		 * slot we wrote to is not used yet, so if we fail
+		 * nothing has changed */
+		corrupt = do_cow(l, index, muoff, size, addr);
+		if (corrupt&touched&~covered) return -EIO;
 
 		/* mark old mesoblock obsolete, if there is one */
 		obsolete_mesoblk_byidx(l, index);
 
-		/* add new reference */
-		add_blockref(l, mesoff);
+		/* add new reference, the parts that were not written
+		 * may still be corrupt */
+		add_blockref(l, mesoff, corrupt&~covered);
 	}
 
 	l->dev->updated = 1;
@@ -456,13 +547,16 @@ int do_read(scubed3_t *l, uint32_t mesoff, uint32_t muoff, uint32_t size,
 	 * 2. the block was never written, we return zeroes
 	 * 3. the block is on disk */
 
-	if (ID == id(l->dev->bi)) /* in RAM */
-		memcpy(out, mesoblk(l, NO) + muoff, size);
-	else if (index == 0xFFFFFFFF) /* never written */
+	if (index == 0xFFFFFFFF) /* never written */
 		memset(out, 0, size);
-	else /* we are on disk */
-		blockio_dev_read_mesoblk_part(l->dev,
-				out, ID, NO, muoff, size);
+	else if (ID == id(l->dev->bi)) { /* in RAM */
+		if (l->dev->bi->hashes[NO]&parts_touched(l, muoff, size))
+			return -EIO;
+		memcpy(out, mesoblk(l, NO) + muoff, size);
+	} else if (blockio_dev_read_mesoblk_part(l->dev, /* on disk */
+				out, ID, NO, muoff, size)&
+			parts_touched(l, muoff, size)) return -EIO;
+
 	return 0;
 }
 
@@ -472,6 +566,7 @@ int do_req(scubed3_t *l, scubed3_io_t cmd, uint64_t r_offset, size_t size,
 	uint32_t meso = r_offset>>l->dev->b->mesoblk_log;
 	uint32_t inmeso = r_offset%(1<<l->dev->b->mesoblk_log);
 	uint32_t ooff = 0, reqsz;
+	int ret;
 	int (*action)(scubed3_t*, uint32_t, uint32_t, uint32_t, char*) =
 		(cmd == SCUBED3_WRITE)?do_write:do_read;
 
@@ -484,30 +579,32 @@ int do_req(scubed3_t *l, scubed3_io_t cmd, uint64_t r_offset, size_t size,
 		WARNING("%s access past end of device \"%s\"", 
 				(cmd == SCUBED3_WRITE)?"write":"read",
 				l->dev->name);
-		return 1;
+		return 0;
 	}
 
 	if (inmeso) {
 		if (inmeso + size <= 1<<l->dev->b->mesoblk_log) reqsz = size;
 		else reqsz = (1<<l->dev->b->mesoblk_log) - inmeso;
 
-		if (action(l, meso, inmeso, reqsz, buf + ooff)) return 0;
+		if ((ret = action(l, meso, inmeso, reqsz, buf + ooff)))
+			return ret;
 		meso++;
 		size -= reqsz;
 		ooff += reqsz;
 	}
 
 	while (size >= 1<<l->dev->b->mesoblk_log) {
-		if (action(l, meso, 0, 1<<l->dev->b->mesoblk_log, buf + ooff))
-			return 0;
+		if ((ret = action(l, meso, 0, 1<<l->dev->b->mesoblk_log,
+						buf + ooff))) return ret;
 		meso++;
 		size -= 1<<l->dev->b->mesoblk_log;
 		ooff += 1<<l->dev->b->mesoblk_log;
 	}
 
-	if (size > 0 && action(l, meso, 0, size, buf + ooff)) return 0;
+	if (size > 0 && (ret = action(l, meso, 0, size, buf + ooff)))
+		return ret;
 
-	return 1;
+	return 0;
 }
 
 #define SCUBED3_OPT_KEY(a,b,c) { a, offsetof(struct options, b), c }

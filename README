@@ -128,6 +128,13 @@ resizes a scubed partition
 
 * MACROBLOCKS, the amount of macroblocks owned by the partition
 
+- check-data-integrity NAME
+
+checks the hashes of all live mesoblocks of a partition, it reports the
+number of mesoblocks checked, the number of corrupt mesoblocks, and the
+corrupt parts (see Integrity) as "corrupt=OFFSET+SIZE" (in bytes, for at
+most 100 mesoblocks)
+
 
 Example calculation if indexblock size
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -151,14 +158,14 @@ the mesoblocks.
 Layout of macroblock:
 
 0x000000 SHA256_HASH_INDEXBLOCK hash of 0x000020 - 0x003FFF
-0x000020 SHA256_HASH_DATA (hash of ciphertext)
+0x000020 32 bytes, MUST be 0
 0x000040 uint64_t trim_floor (blocks with seqno < trim_floor are stale)
 0x000048 24 bytes, MUST be 0
 0x000060 uint64_t seqno
 0x000068 uint32_t next_block (the block that will be written after this one,
          0xFFFFFFFF if none)
 0x00006C 4 bytes, MUST be 0
-0x000070 8byte literal "SSS3v0.2"
+0x000070 8byte literal "SSS3v0.3"
 0x000078 uint32_t no_macroblocks
 0x00007C uint32_t reserved_blocks
 0x000080 uint32_t pending_removals (shrinking: blocks still to be removed)
@@ -172,7 +179,13 @@ Layout of macroblock:
 0x000108 uint32_t idx0x02
 ......
 0x0004FC uint32_t idx0xff
-0x000500 bitmap: each bit represents a macroblock of the base device
+0x000500 uint64_t hash0x01 (hash of the ciphertext of mesoblock 1, see
+                            Integrity)
+0x000508 uint64_t hash0x02
+......
+0x000CF0 uint64_t hash0xff
+0x000CF8 8 bytes, MUST be 0
+0x000D00 bitmap: each bit represents a macroblock of the base device
 		 0 FREE
 		   this block may be ours: if so, it has our signature
 		   on disk (otherwise we wouldn't be able to know that
@@ -193,16 +206,17 @@ Layout of macroblock:
 0x3FC000 mesoblock255
 0x400000 end
 
-There is space to index 0x4000 - 0x0500 = 0x3B00 = 15104 bytes,
-which corresponds to a base device size of 15104*8 = 120832 macroblocks,
-which correspond to 4MiB * 120832 = 472GiB
+There is space to index 0x4000 - 0x0D00 = 0x3300 = 13056 bytes,
+which corresponds to a base device size of 13056*8 = 104448 macroblocks,
+which correspond to 4MiB * 104448 = 408GiB
 
 Maximum usable size of the device is 2^32*(1<<mesoblock_log) = 64TiB, which is
 sufficient in the light of the maximum size of the backing device.
 
 In general the indexblock requires:
 - fixed size: 260 bytes (including 128 bytes of reserved space)
-- 4 bytes for every mesoblock in a macroblock
+- 4 bytes for every mesoblock in a macroblock (index)
+- 8 bytes for every mesoblock in a macroblock (hash)
 - 1 bit for every macroblock
 
 Write order (the juggler)
@@ -225,6 +239,32 @@ Paranoia level 2 can be built on top of this: to write a block of the whole
 disk, pick a partition with a probability proportional to its pool size,
 that partition writes the block it has chosen as next_block. All writes on
 the disk are then in uniform random order.
+
+Integrity
+~~~~~~~~~
+
+The index holds a hash of the ciphertext of every mesoblock: the first 60
+bits of its SHA256, the low 4 bits of the uint64_t mark corrupt parts of the
+mesoblock. A mesoblock is divided in 4 parts of 4KiB, bit i is set if part i
+is corrupt. The hashes are in the encrypted index, so someone without the key
+cannot change a mesoblock (or put back an older version of it) and fix the
+hash.
+
+Every mesoblock that is read is checked against its hash. If the hash does
+not match, all its parts are corrupt. Reading a corrupt part gives EIO.
+
+When the GC copies a mesoblock with corrupt parts to the current block, the
+corrupt parts stay marked as corrupt (in the new block the hash is valid
+again, the mark keeps the corruption from being laundered).
+
+Writing a corrupt part completely repairs it (as a disk remaps an unreadable
+sector when it is written), so a filesystem that rewrites a 4KiB block can
+recover. A write that covers a corrupt part only partially gives EIO, it
+would need the corrupt contents.
+
+The most recent block is checked completely on startup (see Durability), the
+other blocks when they are read, and all live mesoblocks of a partition with
+check-data-integrity.
 
 Shrinking
 ~~~~~~~~~
@@ -259,8 +299,10 @@ Every macroblock write is followed by fdatasync() of the base device, so
 macroblocks reach the disk in the order in which they are written: the
 block that absorbed the live data of its tail is on disk before the tail
 is overwritten. Therefore only the most recently written block can be
-incomplete after a power failure; on startup its data hash is checked, if
-it doesn't match, the block is ignored. The index of the block before it
+incomplete after a power failure; on startup the hashes of all its
+mesoblocks are checked, if one of them doesn't match, the block is ignored
+(corruption of the most recent block by other causes looks the same, its
+data is then lost). The index of the block before it
 names the same block as next_block, so it will be written again and the
 incomplete contents are overwritten.
 

@@ -173,29 +173,61 @@ static int control_verbose_juggler(int s, control_thread_priv_t *priv, char *arg
 	return control_write_complete(s, 0, "see debug output");
 }
 
+/* check the hashes of all live mesoblocks of a partition, reports the
+ * byte offsets of the corrupt mesoblocks (at most 100) */
+typedef struct control_check_priv_s {
+	uint32_t corrupt;
+	struct {
+		uint32_t mesoff;
+		int mask;
+	} found[100]; /* the first 100 corrupt mesoblocks */
+} control_check_priv_t;
+
+static void control_check_report(void *priv, uint32_t mesoff, int mask) {
+	control_check_priv_t *p = priv;
+
+	if (p->corrupt < sizeof(p->found)/sizeof(p->found[0])) {
+		p->found[p->corrupt].mesoff = mesoff;
+		p->found[p->corrupt].mask = mask;
+	}
+	p->corrupt++;
+}
+
+/* check the hashes of all live mesoblocks of a partition, reports the
+ * number of corrupt mesoblocks and the byte offsets and sizes of the
+ * corrupt parts (of at most 100 mesoblocks) */
 static int control_check_data_integrity(int s, control_thread_priv_t *priv,
 		char *argv[]) {
-#if 0
-	void *check_block(blockio_info_t *bi, blockio_dev_t *dev) {
-		if (blockio_check_data_hash(bi)) {
-			VERBOSE("%ld %ld OK", bi - dev->b->blockio_infos,
-					bi->seqno);
-		} else {
-			VERBOSE("%ld %ld FAIL", bi - dev->b->blockio_infos,
-					bi->seqno);
-		}
-		return NULL;
-	}
+	control_check_priv_t check_priv = { };
+	uint32_t checked, i, k;
+	uint8_t mesoblk_log;
 	fuse_io_entry_t *entry = hashtbl_find_element_bykey(priv->h, argv[0]);
 	if (!entry) return control_write_complete(s, 1,
 			"partition \"%s\" not found", argv[0]);
 
-	dllarr_iterate(&entry->d.used_blocks, (dllarr_iterator_t)check_block,
-			&entry->d);
+	checked = scubed3_check(&entry->l, control_check_report, &check_priv);
+	mesoblk_log = entry->d.b->mesoblk_log;
 
 	hashtbl_unlock_element_byptr(entry);
-#endif
-	return control_write_complete(s, 1, "not implemented");
+
+	if (control_write_status(s, 0)) return -1;
+
+	if (control_write_line(s, "checked=%u\n", checked)) return -1;
+
+	if (control_write_line(s, "corrupt_mesoblocks=%u\n",
+				check_priv.corrupt)) return -1;
+
+	for (i = 0; i < check_priv.corrupt &&
+			i < sizeof(check_priv.found)/
+			sizeof(check_priv.found[0]); i++)
+		for (k = 0; k < BLOCKIO_PARTS; k++)
+			if (check_priv.found[i].mask&(1<<k) &&
+					control_write_line(s, "corrupt=%lu+%u\n",
+					(((uint64_t)check_priv.found[i].mesoff)<<
+					 mesoblk_log) + (k<<(mesoblk_log - 2)),
+					1<<(mesoblk_log - 2))) return -1;
+
+	return control_write_terminate(s);
 }
 
 static int control_static_info(int s, control_thread_priv_t *priv, char *argv[]) {

@@ -109,7 +109,7 @@ static void *stream_open(const char *path) {
 
 #define BASE			(dev->tmp_macroblock)
 #define INDEXBLOCK_SHA256	(BASE + 0x000)
-#define DATABLOCKS_SHA256	(BASE + 0x020)
+#define RESERVED32		(BASE + 0x020) /* MUST be 0 */
 #define TRIM_FLOOR_UINT64	(BASE + 0x040) /* followed by 24 zero bytes */
 #define SEQNO_UINT64		(BASE + 0x060)
 #define NEXT_BLOCK_UINT32	(BASE + 0x068) /* followed by 4 zero bytes */
@@ -123,7 +123,31 @@ static void *stream_open(const char *path) {
 #define TRIM_SEQNO_UINT64(i)	(TRIMS + 12*(i))
 #define TRIM_SIZE_UINT32(i)	(TRIMS + 12*(i) + 8)
 #define NO_INDICES_UINT32	(BASE + 0x100)
+#define HASH_UINT64(k)		(BASE + dev->b->hashes_offset + ((k)<<3))
 #define BITMAP			(BASE + dev->b->bitmap_offset)
+
+/* allocate and free the per block tables (indices and hashes) */
+static void blockio_info_alloc_tables(blockio_info_t *bi, uint16_t mmpm) {
+	bi->indices = ecalloc(mmpm, sizeof(uint32_t));
+	bi->hashes = ecalloc(mmpm, sizeof(uint64_t));
+}
+
+static void blockio_info_free_tables(blockio_info_t *bi) {
+	free(bi->indices);
+	free(bi->hashes);
+	bi->indices = NULL;
+	bi->hashes = NULL;
+}
+
+/* truncated SHA256 of the ciphertext of a mesoblock, the low bits are
+ * left zero, they mark corrupt parts */
+static uint64_t mesoblk_hash(const void *ciphertext, size_t size) {
+	unsigned char sha256[32];
+
+	gcry_md_hash_buffer(GCRY_MD_SHA256, sha256, ciphertext, size);
+
+	return binio_read_uint64_be(sha256)&~(uint64_t)BLOCKIO_CORRUPT_MASK;
+}
 
 void blockio_free(blockio_t *b) {
 	assert(b);
@@ -160,7 +184,11 @@ void blockio_init_file(blockio_t *b, const char *path, uint8_t macroblock_log,
 	VERBOSE("%ld mesoblocks per macroblock, including index",
 			1L<<(macroblock_log - mesoblk_log));
 
-        b->bitmap_offset = 256 + (4<<(macroblock_log - mesoblk_log));
+	/* fixed part, indices and mesoblock hashes (the hashes of the
+	 * mesoblocks and one unused uint64_t, to keep it simple) */
+	b->hashes_offset = 256 + (4<<(macroblock_log - mesoblk_log));
+	b->bitmap_offset = b->hashes_offset +
+		(8<<(macroblock_log - mesoblk_log));
 	if (b->bitmap_offset >= 1<<mesoblk_log)
 		FATAL("not enough room for indexblock in mesoblock");
         VERBOSE("required minimumsize of indexblock excluding macroblock "
@@ -228,7 +256,7 @@ void blockio_init_file(blockio_t *b, const char *path, uint8_t macroblock_log,
 	pthd_mutex_init(&b->unallocated_mutex);
 }
 
-static const char magic[8] = "SSS3v0.2";
+static const char magic[8] = "SSS3v0.3";
 
 static void blockio_dev_take_index(blockio_dev_t*);
 
@@ -251,7 +279,7 @@ void blockio_dev_free(blockio_dev_t *dev) {
 	for (i = 0; i < dev->b->total_macroblocks; i++) {
 		bi = &dev->b->blockio_infos[i];
 		if (bi->dev == dev) {
-			free(bi->indices);
+			blockio_info_free_tables(bi);
 			bi->dev = NULL;
 		}
 	}
@@ -382,8 +410,7 @@ static void blockio_dev_release_removed(blockio_dev_t *dev) {
 	pthd_mutex_lock(&dev->b->unallocated_mutex);
 	while ((bi = dllarr_last(&dev->release))) {
 		dllarr_remove(&dev->release, bi);
-		free(bi->indices);
-		bi->indices = NULL;
+		blockio_info_free_tables(bi);
 		bi->dev = NULL;
 		bi->seqno = 0;
 		dllarr_append(&dev->b->unallocated, bi);
@@ -424,7 +451,8 @@ void blockio_dev_select_next_macroblock(blockio_dev_t *dev) {
 		VERBOSE("block %u is due and still has %u indices, loading",
 				id, due->no_indices);
 		for (i = 0; i < due->no_indices; i++)
-			blockio_dev_read_mesoblk(dev, dev->tmp_macroblock +
+			due->hashes[i] |= blockio_dev_read_mesoblk(dev,
+					dev->tmp_macroblock +
 					((i + 1)<<dev->b->mesoblk_log), id, i);
 		dev->ram_block = due;
 	}
@@ -486,7 +514,7 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 
 	dev->b = b;
 	dev->c = c;
-	assert(bitmap_size(&dev->status) + 260 + (dev->b->mmpm<<2) ==
+	assert(bitmap_size(&dev->status) + dev->b->bitmap_offset ==
 			1<<dev->b->mesoblk_log);
 
 	assert(b->open);
@@ -519,15 +547,14 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 	 * the block written before it, and the index of that block says
 	 * that it is written next, so the write will be redone */
 	while ((bi = dllarr_last(&dev->replay)) &&
-			!blockio_check_data_hash(bi)) {
+			blockio_check_data_hashes(bi, NULL)) {
 		WARNING("most recent block %u (seqno=%lu) of \"%s\" is "
 				"incomplete (interrupted write), ignoring it",
 				blockio_get_macroblock_index(bi), bi->seqno,
 				dev->name);
 		pthd_mutex_lock(&b->unallocated_mutex);
 		dllarr_remove(&dev->replay, bi);
-		free(bi->indices);
-		bi->indices = NULL;
+		blockio_info_free_tables(bi);
 		bi->dev = NULL;
 		bi->seqno = 0;
 		dllarr_append(&b->unallocated, bi);
@@ -564,8 +591,7 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 					blockio_get_macroblock_index(bi),
 					bi->seqno);
 			dllarr_remove(&dev->replay, bi);
-			free(bi->indices);
-			bi->indices = NULL;
+			blockio_info_free_tables(bi);
 			bi->dev = NULL;
 			bi->seqno = 0;
 			dllarr_append(&b->unallocated, bi);
@@ -723,8 +749,7 @@ void blockio_dev_scan_header(dllarr_t *replay, blockio_dev_t *dev,
 	}
 
 	/* block seems to belong to us */
-	/* store the hash of the datablocks, seqno and next block */
-	memcpy(bi->data_hash, DATABLOCKS_SHA256, 32);
+	/* store the seqno and next block */
 	bi->seqno = binio_read_uint64_be(SEQNO_UINT64);
 	bi->next_block = binio_read_uint32_be(NEXT_BLOCK_UINT32);
 
@@ -738,8 +763,11 @@ void blockio_dev_scan_header(dllarr_t *replay, blockio_dev_t *dev,
 
 	bi->no_nonobsolete = bi->no_indices =
 		binio_read_uint32_be(NO_INDICES_UINT32);
-	bi->indices = ecalloc(dev->b->mmpm, sizeof(uint32_t));
-	
+	blockio_info_alloc_tables(bi, dev->b->mmpm);
+
+	for (i = 0; i < dev->b->mmpm; i++)
+		bi->hashes[i] = binio_read_uint64_be(HASH_UINT64(i));
+
 	for (i = 1; i <= bi->no_indices; i++) {
 		bi->indices[i-1] = binio_read_uint32_be(
 				((uint32_t*)NO_INDICES_UINT32) + i);
@@ -767,44 +795,63 @@ void blockio_dev_scan_header(dllarr_t *replay, blockio_dev_t *dev,
 	bi->dev = dev;
 }
 
-void blockio_dev_read_mesoblk_part(blockio_dev_t *dev, void *buf, uint32_t id,
+int blockio_dev_read_mesoblk_part(blockio_dev_t *dev, void *buf, uint32_t id,
 		uint32_t no, uint32_t offset, uint32_t len) {
 	assert(dev->b && dev->b->read && id < dev->b->total_macroblocks &&
 			no < dev->b->mmpm);
 	unsigned char mesoblk[1<<dev->b->mesoblk_log];
+	int corrupt;
 
 	/* FIXME: maybe do some caching */
-	blockio_dev_read_mesoblk(dev, mesoblk, id, no);
+	corrupt = blockio_dev_read_mesoblk(dev, mesoblk, id, no);
 	memcpy(buf, mesoblk + offset, len);
+
+	return corrupt;
 }
 
-void blockio_dev_read_mesoblk(blockio_dev_t *dev,
+/* read and decrypt a mesoblock, its ciphertext is checked against the
+ * hash in the index of its block */
+int blockio_dev_read_mesoblk(blockio_dev_t *dev,
 		void *buf, uint32_t id, uint32_t no) {
+	blockio_info_t *bi = &dev->b->blockio_infos[id];
+	int corrupt = bi->hashes[no]&BLOCKIO_CORRUPT_MASK;
+
 	dev->b->read(dev->io, buf, (((off_t)id)<<dev->b->macroblock_log) +
 			((no + 1)<<dev->b->mesoblk_log) +
 			0, 1<<dev->b->mesoblk_log);
-	cipher_dec(dev->c, buf, buf, dev->b->blockio_infos[id].seqno,
-			no + 1, id);
+	if ((bi->hashes[no]&~(uint64_t)BLOCKIO_CORRUPT_MASK) !=
+			mesoblk_hash(buf, 1<<dev->b->mesoblk_log)) {
+		WARNING("mesoblock %u of block %u (seqno=%lu) of \"%s\" is "
+				"corrupt", no, id, bi->seqno, dev->name);
+		corrupt = BLOCKIO_CORRUPT_MASK;
+	}
+	cipher_dec(dev->c, buf, buf, bi->seqno, no + 1, id);
+
+	return corrupt;
 }
 
-int blockio_check_data_hash(blockio_info_t *bi) {
-	uint32_t id = blockio_get_macroblock_index(bi);
-	size_t size = (1<<bi->dev->b->macroblock_log) -
-		(1<<bi->dev->b->mesoblk_log);
-	char *data = ecalloc(1, size);
-	char hash[32];
-	bi->dev->b->read(bi->dev->io, data,
-			(((off_t)id)<<bi->dev->b->macroblock_log) +
-			(1<<bi->dev->b->mesoblk_log), size);
+uint32_t blockio_check_data_hashes(blockio_info_t *bi, char *live) {
+	uint32_t id = blockio_get_macroblock_index(bi), k, mismatches = 0;
+	blockio_t *b = bi->dev->b;
+	char *data = ecalloc(b->mmpm, 1<<b->mesoblk_log);
 
-	gcry_md_hash_buffer(GCRY_MD_SHA256, hash, data, size);
+	b->read(bi->dev->io, data, (((off_t)id)<<b->macroblock_log) +
+			(1<<b->mesoblk_log), b->mmpm<<b->mesoblk_log);
+
+	for (k = 0; k < b->mmpm; k++) {
+		if (live && !live[k]) continue;
+		if ((bi->hashes[k]&~(uint64_t)BLOCKIO_CORRUPT_MASK) !=
+				mesoblk_hash(data + (k<<b->mesoblk_log),
+					1<<b->mesoblk_log)) {
+			mismatches++;
+			if (live) live[k] = 2 + BLOCKIO_CORRUPT_MASK;
+		} else if (live && bi->hashes[k]&BLOCKIO_CORRUPT_MASK)
+			live[k] = 2 + (bi->hashes[k]&BLOCKIO_CORRUPT_MASK);
+	}
+
 	free(data);
 
-	//verbose_buffer("sha256_data", hash, 32);
-
-	if (memcmp(bi->data_hash, hash, sizeof(hash))) return 0;
-
-	return 1;
+	return mismatches;
 }
 
 void blockio_dev_write_current_macroblock(blockio_dev_t *dev) {
@@ -823,18 +870,24 @@ void blockio_dev_write_current_macroblock(blockio_dev_t *dev) {
 	}
 
 	/* encrypt datablocks (also the unused ones), the plaintext
-	 * stays in tmp_macroblock */
-	for (i = 1; i <= dev->b->mmpm; i++)
+	 * stays in tmp_macroblock, store the hash of each ciphertext
+	 * in the index, together with the corrupt parts of the mesoblocks
+	 * (corrupt mesoblocks that were copied into this block stay marked
+	 * as corrupt) */
+	for (i = 1; i <= dev->b->mmpm; i++) {
 		cipher_enc(dev->c, dev->out_macroblock +
 				(i<<dev->b->mesoblk_log),
 			BASE + (i<<dev->b->mesoblk_log),
 			dev->bi->seqno, i, id);
-
-	/* calculate hash of data, store in index */
-	gcry_md_hash_buffer(GCRY_MD_SHA256, DATABLOCKS_SHA256,
-			dev->out_macroblock + (1<<dev->b->mesoblk_log),
-			dev->b->mmpm<<dev->b->mesoblk_log);
-	//verbose_buffer("sha256_data", DATABLOCKS_HASH, 32);
+		dev->bi->hashes[i-1] = mesoblk_hash(dev->out_macroblock +
+				(i<<dev->b->mesoblk_log),
+				1<<dev->b->mesoblk_log)|
+			((i <= dev->bi->no_indices)?
+			 (dev->bi->hashes[i-1]&BLOCKIO_CORRUPT_MASK):0);
+		binio_write_uint64_be(HASH_UINT64(i-1), dev->bi->hashes[i-1]);
+	}
+	memset(HASH_UINT64(dev->b->mmpm), 0, 8); /* unused */
+	memset(RESERVED32, 0, 32);
 
 	/* write static data, also which block is written next (its live
 	 * data is absorbed by this block) */
@@ -928,7 +981,7 @@ void blockio_prepare_block(blockio_info_t *bi) {
 	assert(bi->dev);
 	bi->seqno = 0;
 	bi->no_indices = bi->no_nonobsolete = 0;
-	bi->indices = ecalloc(bi->dev->b->mmpm, sizeof(uint32_t));
+	blockio_info_alloc_tables(bi, bi->dev->b->mmpm);
 }
 
 int blockio_dev_allocate_macroblocks(blockio_dev_t *dev, uint32_t size) {

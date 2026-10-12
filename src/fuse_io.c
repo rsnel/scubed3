@@ -138,31 +138,33 @@ static int fuse_io_release(const char *path, struct fuse_file_info *fi) {
 
 static int fuse_io_read(const char *path, char *buf, size_t size, off_t offset,
 		struct fuse_file_info *fi) {
+	int ret;
 	fuse_io_entry_t *entry = hashtbl_find_element_bykey(
 			&((fuse_io_priv_t*)fuse_get_context()->private_data)->
 			entries, path + 1);
 
 	if (!entry) return -ENOENT;
 
-	do_req(&entry->l, SCUBED3_READ, offset, size, (char*)buf);
+	ret = do_req(&entry->l, SCUBED3_READ, offset, size, (char*)buf);
 
 	hashtbl_unlock_element_byptr(entry);
 
-	return size;
+	return ret?ret:size;
 }
 
 static int fuse_io_write(const char *path, const char *buf, size_t size,
 		off_t offset, struct fuse_file_info *fi) {
+	int ret;
 	fuse_io_entry_t *entry = hashtbl_find_element_bykey(
 			&((fuse_io_priv_t*)fuse_get_context()->private_data)->
 			entries, path + 1);
 	if (!entry) return -ENOENT;
 
-	do_req(&entry->l, SCUBED3_WRITE, offset, size, (char*)buf);
+	ret = do_req(&entry->l, SCUBED3_WRITE, offset, size, (char*)buf);
 
 	hashtbl_unlock_element_byptr(entry);
 
-	return size;
+	return ret?ret:size;
 }
 
 void *fuse_io_init(struct fuse_conn_info *conn) {

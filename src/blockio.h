@@ -30,6 +30,12 @@ typedef struct blockio_info_s blockio_info_t;
 
 #define BLOCKIO_MAX_TRIMS 8
 
+/* each mesoblock is divided in 4 parts (4KiB for 16KiB mesoblocks), the
+ * low 4 bits of the hash of a mesoblock say which parts are corrupt (bit
+ * i is part i), the other 60 bits are the truncated SHA256 hash */
+#define BLOCKIO_PARTS 4
+#define BLOCKIO_CORRUPT_MASK ((1<<BLOCKIO_PARTS) - 1)
+
 #include "juggler.h"
 
 
@@ -42,12 +48,17 @@ struct blockio_info_s {
 	dllarr_elt_t ur;
 	uint64_t seqno;
 	uint32_t next_block; /* from the index: the block written after it */
-	char data_hash[32];
-	//char seqnos_hash[32];
 
 	uint32_t no_indices;
 	uint32_t no_nonobsolete;
 	uint32_t *indices;
+
+	/* truncated SHA256 of the ciphertext of each mesoblock (all mmpm of
+	 * them, also the unused ones), the low bits mark the parts of the
+	 * mesoblock that are known to be corrupt (see BLOCKIO_PARTS); in
+	 * the current block only the low bits are meaningful, the hashes
+	 * are computed when the block is written */
+	uint64_t *hashes;
 
 	/* the scubed device associated with this block, if any */
 	struct blockio_dev_s *dev;
@@ -120,6 +131,7 @@ struct blockio_s {
 	uint8_t macroblock_log;
 	uint32_t total_macroblocks; /* amount of raw macroblocks */
 	uint32_t max_macroblocks;
+	uint32_t hashes_offset;
 	uint32_t bitmap_offset;
 
 	/* the mutex protects the unallocated list
@@ -156,12 +168,18 @@ void blockio_dev_scan_header(dllarr_t*, blockio_dev_t*,
 
 blockio_info_t *blockio_dev_get_new_macroblock(blockio_dev_t*);
 
-void blockio_dev_read_mesoblk(blockio_dev_t*, void*, uint32_t, uint32_t);
+// return the mask of corrupt parts of the mesoblock (if the hash does not
+// match, all parts are corrupt), the decrypted data is in buf anyway
+int blockio_dev_read_mesoblk(blockio_dev_t*, void*, uint32_t, uint32_t);
 
-void blockio_dev_read_mesoblk_part(blockio_dev_t*, void*, uint32_t,
+int blockio_dev_read_mesoblk_part(blockio_dev_t*, void*, uint32_t,
 		uint32_t, uint32_t, uint32_t);
 
-int blockio_check_data_hash(blockio_info_t*);
+// return the number of mesoblocks in the block that do not match their
+// hash; if live is not NULL, only the mesoblocks k with live[k] != 0 are
+// checked and live[k] is set to 2 + the mask of corrupt parts if the
+// mesoblock has corrupt parts
+uint32_t blockio_check_data_hashes(blockio_info_t*, char *live);
 
 void blockio_dev_write_current_macroblock(blockio_dev_t*);
 

@@ -90,6 +90,15 @@ anything. (you would, however, need to write a custom blockio_init_* function
 and provide read, write and close methods to it if it is not a file or a block
 device)
 
+	scubed3 -b BASE [-a CONTROL_SOCKET] [-m MESOBLOCK_LOG] [-M MACROBLOCK_LOG]
+		[FUSE options] MOUNTPOINT
+
+The mesoblock size is 2^MESOBLOCK_LOG bytes (12..20, default 14: 16KiB), the
+macroblock size 2^MACROBLOCK_LOG bytes (at most 2^30, default 22: 4MiB), a
+macroblock has 2 to 2^16 mesoblocks, and the index must fit in one mesoblock.
+The sizes are not stored in the macroblocks: a set of macroblocks must always
+be used with the same sizes.
+
 
 Key derivation
 ~~~~~~~~~~~~~~

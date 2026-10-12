@@ -294,6 +294,12 @@ void blockio_init_file(blockio_t *b, const char *path, uint8_t macroblock_log,
 	if (tmp > b->max_macroblocks) FATAL("device is too large");
 	b->total_macroblocks = tmp;
 
+	/* a location (macroblock, mesoblock) must fit in 32 bits, and must
+	 * not be 0xFFFFFFFF (unused) */
+	if (((uint64_t)b->total_macroblocks<<(macroblock_log - mesoblk_log)) >=
+			0xFFFFFFFF)
+		FATAL("device is too large for these block sizes");
+
 	b->blockio_infos = ecalloc(sizeof(blockio_info_t),
 			b->total_macroblocks);
 

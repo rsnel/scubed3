@@ -845,8 +845,9 @@ int main(int argc, char **argv) {
 	struct options {
 		char *base;
 		char *control;
-		uint8_t mesoblock_log;
-		uint8_t macroblock_log;
+		/* fuse_opt_parse stores %d in an int */
+		int mesoblock_log;
+		int macroblock_log;
 	} options = {
 		.base = NULL,
 		.control = NULL,
@@ -873,6 +874,19 @@ int main(int argc, char **argv) {
 		FATAL("error parsing options");
 
 	if (!options.base) FATAL("argument -b FILE is required");
+
+	/* a mesoblock has 4 parts (see BLOCKIO_PARTS) and is in RAM (on the
+	 * stack) a few times, there are at most 65535 data mesoblocks in a
+	 * macroblock (uint16_t mmpm) */
+	if (options.mesoblock_log < 12 || options.mesoblock_log > 20)
+		FATAL("-m %d: the mesoblock size must be between 2^12 and 2^20 "
+				"bytes", options.mesoblock_log);
+	if (options.macroblock_log <= options.mesoblock_log ||
+			options.macroblock_log > 30 ||
+			options.macroblock_log - options.mesoblock_log > 16)
+		FATAL("-M %d: the macroblock size must be between 2 and 2^16 "
+				"mesoblocks, and at most 2^30 bytes",
+				options.macroblock_log);
 
 	/* lock me into memory; don't leak info to swap */
 	if (mlockall(MCL_CURRENT|MCL_FUTURE)<0)

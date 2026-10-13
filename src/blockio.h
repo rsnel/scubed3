@@ -71,6 +71,10 @@ struct blockio_info_s {
 	 * not written before the partition is opened again */
 	int readded;
 
+	/* the block still has an index of a partition that was removed, it
+	 * is wiped (see blockio_dev_start_wipe) */
+	int wipe;
+
 	/* truncated SHA256 of the ciphertext of each mesoblock (all mmpm of
 	 * them, also the unused ones), the low bits mark the parts of the
 	 * mesoblock that are known to be corrupt (see BLOCKIO_PARTS); in
@@ -172,6 +176,21 @@ typedef struct blockio_dev_s {
 	/* paranoia level 2: this partition may write one block now */
 	int turn;
 
+	/* shrinking to 0 blocks: zero[0] and zero[1] are the two most
+	 * recently written (different) blocks, their indices say that the
+	 * partition has size 0; final_write: the current block is the last
+	 * block, it is removed by its write */
+	blockio_info_t *zero[2];
+	int final_write;
+
+	/* the partition was removed (shrunk to 0 blocks), the blocks that
+	 * still have an index of it are wiped (see blockio_dev_start_wipe):
+	 * the blocks in wipe first, last and prelast (the blocks with its two
+	 * most recent indices, they say that it is empty) after them */
+	int dying;
+	dllarr_t wipe;
+	blockio_info_t *last, *prelast;
+
 	void *io;
 } blockio_dev_t;
 
@@ -239,6 +258,12 @@ struct blockio_s {
 #define BLOCKIO_DEFAULT_RATE (800<<10)
 
 void blockio_set_paranoia(blockio_t*, int, uint64_t);
+
+void blockio_dev_wipe_all(blockio_dev_t*);
+
+uint32_t blockio_dev_wipe_left(blockio_dev_t*);
+
+void blockio_finish_wipes(blockio_t*);
 
 void blockio_io_lock(blockio_t*);
 

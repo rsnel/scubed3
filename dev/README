@@ -151,8 +151,8 @@ ioerrtest.py DAEMON-crash
 	also with -o direct_io; read errors of the base device
 	(SCUBED3_BAD_READ): the daemon keeps running, the mesoblock gives EIO,
 	check-data-integrity reports it, rewriting repairs it; an unreadable
-	index of an unallocated block is harmless, of a block of the partition
-	fatal.
+	index of an unallocated block is harmless, of a block of the partition:
+	the partition is not opened (the daemon keeps running).
 
 openertest.py DAEMON SCUBED3CTL ROUNDS
 	Several openers of a partition and no EBUSY races: two file descriptors
@@ -186,14 +186,24 @@ sockettest.sh DAEMON SCUBED3CTL
 Paranoia levels and the write order
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
+wipetest.py DAEMON-crash SEED
+	Removing a partition wipes every block that has an index of it: in
+	level 1 at once (also the blocks it gave away in an earlier shrink); in
+	level 3 in random order, while it cannot be closed or resized and its
+	key cannot be used; kill -9 while it is wiped never brings its data
+	back; a partition whose old index uses blocks of another open partition
+	is not opened (and the daemon keeps running).
+
 churntest.py DAEMON ROUNDS SEED LEVEL [KIBPS]
 	Partitions are created, enlarged, shrunk to 0 blocks (removed) and
 	closed, over and over, while two other partitions are written as fast
 	as possible, in paranoia level LEVEL (0 to 3; level 3 with KIBPS,
 	default 6400 KiB/s: 100 writes per second); the new partition must
 	contain what was written to it, the level must stay the same, the block
-	counts must add up, and the other partitions must contain exactly what
-	was written to them (also after a restart).
+	counts must add up, the other partitions must contain exactly what
+	was written to them (also after a restart), and in the end no block may
+	have an index of a removed partition (in level 2 and 3 the test waits
+	until it is wiped before it closes it).
 
 paranoiatest.py DAEMON-crash SCUBED3CTL SEED
 	Level 2 with three partitions and free space (small blocks: -m 12

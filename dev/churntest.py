@@ -8,7 +8,8 @@
 # shrinks it to 0 blocks (it is destroyed) and closes it; the level must stay
 # the same (closing a partition without blocks does not switch it off), the
 # block counts of the status must add up, and at the end (also after a
-# restart) a and b must contain exactly what was written
+# restart) a and b must contain exactly what was written, and no block may
+# have an index of a removed partition
 #
 # usage: churntest.py DAEMON ROUNDS SEED LEVEL [KIBPS]
 # (small blocks: -m 12 -M 16, 64 KiB macroblocks; level 3 with KIBPS, default
@@ -112,7 +113,7 @@ th = [threading.Thread(target=writer, args=(n,)) for n in PARTS]
 for t in th: t.start()
 
 # ------------------------------------------------------------- churn
-t0 = time.monotonic(); created = 0
+t0 = time.monotonic(); created = 0; wiped = []
 for r in range(rounds):
     name, k = "c", key("c%d-%d" % (seed, r))
     try:
@@ -138,7 +139,19 @@ for r in range(rounds):
             if int(i["pending_removals"]) == 0 and int(i["no_macroblocks"]) == 0: break
             cmd("cycle %s 1" % name)
         else: fail("round %d: c does not shrink to 0" % r)
+        # in level 2 and 3 its blocks are wiped in random order, it cannot
+        # be closed until that is done (the writers of a and b make the
+        # scheduler draw)
+        if level >= 2:
+            t = cmd("close " + name, ok=False)
+            if int(info(name)["wipe_left"]) and "not wiped yet" not in t:
+                fail("round %d: close of c while it is wiped: %r" % (r, t))
+            for _ in range(6000):
+                if int(info(name)["wipe_left"]) == 0: break
+                time.sleep(0.05)
+            else: fail("round %d: c is not wiped" % r)
         cmd("close " + name)
+        wiped.append(k)
         check_counts(("a", "b"))
         created += 1
     except RuntimeError as e:
@@ -151,6 +164,21 @@ print("%d rounds of create/enlarge/destroy of c in %.0fs, while a and b were wri
       "(%d and %d mesoblock writes)" % (created, el, writes["a"], writes["b"]), flush=True)
 
 # ------------------------------------------------------------- check
+# no block may have an index of a removed partition c anymore
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+import struct
+def has_index(f, mid, k):
+    k = bytes.fromhex(k)
+    f.seek(mid * MACRO); c = f.read(MESO)
+    iv = Cipher(algorithms.AES(hashlib.sha256(k).digest()), modes.ECB()).encryptor().update(
+            struct.pack(">QII", 0, 0, mid))
+    p = Cipher(algorithms.AES(k), modes.CBC(iv)).decryptor().update(c)
+    return p[0x70:0x78] == b"SSS3v0.4" and hashlib.sha256(p[32:]).digest() == p[:32]
+with open(base, "rb") as f:
+    left = sum(has_index(f, mid, k) for k in wiped for mid in range(TOTAL))
+if left: fail("%d blocks still have an index of a removed partition" % left)
+else: print("no block has an index of the %d removed partitions" % len(wiped), flush=True)
 for n in PARTS:
     bad = verify(n, usable(PARTS[n]), model[n])
     if bad: fail("%s: %d bad mesoblocks" % (n, len(bad)))

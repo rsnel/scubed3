@@ -4,7 +4,8 @@
 # read errors of the base device (SCUBED3_BAD_READ, needs a daemon built with
 # -DSCUBED3_CRASH_TEST): the daemon keeps running, the mesoblock gives EIO,
 # check-data-integrity reports it, rewriting repairs it; an unreadable index
-# of an unallocated block is harmless, of a block of the partition fatal
+# of an unallocated block is harmless, of a block of the partition: the
+# partition is not opened (the daemon keeps running)
 #
 # usage: ioerrtest.py DAEMON (the -crash variant)
 import os, sys, time, socket, hashlib, subprocess, errno
@@ -139,14 +140,11 @@ for m in range(len(data)): assert pread(m * MESO, MESO) == data[m], m
 cmd("close t"); stop()
 print("unreadable index of an unallocated block OK", flush=True)
 start({"SCUBED3_BAD_READ": str(sorted(ours)[0] * MACRO + 7)})
-try: cmd("open-internal t CBC_ESSIV(AES256) " + KEY, ok=False)
-except OSError: pass
-P.wait(timeout=30)
-lg = open(B + "/ioerr.log").read()
-assert "cannot be read" in lg, lg[-500:]
-print("unreadable index of a block of the partition: %s" %
-        [l for l in lg.split("\n") if "cannot be read" in l][-1].strip(), flush=True)
-subprocess.run(["fusermount", "-u", "-z", MNT], capture_output=True)
+t = cmd("open-internal t CBC_ESSIV(AES256) " + KEY, ok=False)
+assert t.startswith("ERR") and "cannot be read" in t, t
+assert P.poll() is None, "daemon died"
+print("unreadable index of a block of the partition: %s" % t.split("\n")[1], flush=True)
+stop()
 start(); opn()
 for m in range(len(data)): assert pread(m * MESO, MESO) == data[m], m
 cmd("close t"); stop()

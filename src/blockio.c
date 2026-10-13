@@ -360,6 +360,15 @@ void blockio_dev_free(blockio_dev_t *dev) {
 	VERBOSE("closing \"%s\", %s", dev->name,
 			dev->updated?"SHOULD BE WRITTEN":"no updates");
 	if (dev->updated) blockio_dev_write_current_macroblock(dev);
+
+	/* a removed partition that is not completely wiped is wiped now (in
+	 * paranoia level 2 and 3 control refuses to close it, but scubed3 may
+	 * be stopped) */
+	if (dev->dying) {
+		if (dev->b->paranoia >= 2) WARNING("\"%s\" is closed before it "
+				"is wiped, wiping it at once", dev->name);
+		blockio_dev_wipe_all(dev);
+	}
 	random_free(&dev->r);
 	bitmap_free(&dev->status);
 
@@ -605,6 +614,8 @@ blockio_info_t *blockio_dev_find_victim(blockio_dev_t *dev) {
 	for (i = 0; i < juggler_count(&dev->j); i++) {
 		bi = juggler_nth(&dev->j, i);
 		if (bi == dev->bi || bi == dev->j.next) continue;
+		/* while shrinking to 0, see blockio_dev_select_next_macroblock */
+		if (bi == dev->zero[0] || bi == dev->zero[1]) continue;
 		if (!victim || bi->no_nonobsolete < victim->no_nonobsolete)
 			victim = bi;
 	}
@@ -680,22 +691,36 @@ void blockio_dev_select_next_macroblock(blockio_dev_t *dev) {
 	if (!juggler_count(&dev->j)) return;
 
 	/* removing the last blocks of the partition (it shrinks to 0): the
-	 * last two blocks are always the current and the next block, they
-	 * cannot be removed one by one (see blockio_dev_find_victim), so
-	 * when none of the remaining blocks has live data they are removed
-	 * at once; the current block gets one more write (in its turn), in
-	 * which they are FREE, so that the removal is on disk (if that write
-	 * is interrupted, the state falls back to the block before it, the
-	 * removed blocks are released after the write); afterwards there is
-	 * no current block; in paranoia level 2 and 3 the write waits for
-	 * its turn (it is done by the scheduler, this function is called
-	 * after a write, and one turn is one write) */
+	 * last blocks are the current and the next block (and the blocks in
+	 * zero, see below), they cannot be removed one by one (see
+	 * blockio_dev_find_victim), so when none of the remaining blocks has
+	 * live data they are removed at once; the current block gets one more
+	 * write (in its turn), in which they are FREE, so that the removal is
+	 * on disk; afterwards there is no current block, and the partition is
+	 * wiped (see blockio_dev_start_wipe); in paranoia level 2 and 3 the
+	 * write waits for its turn (it is done by the scheduler, this
+	 * function is called after a write, and one turn is one write);
+	 *
+	 * the block before the final write must also say that the size is 0
+	 * (prelast, it is kept until the end of the wipe: if the final write,
+	 * or a later write of the last index, is interrupted, the state falls
+	 * back to it; an older state would bring the partition back with its
+	 * data), so one of the two blocks in zero must not be the current
+	 * block, otherwise there is one more write first */
+	victim = NULL;
 	if (dev->pending_removals &&
 			dev->pending_removals == juggler_count(&dev->j)) {
 		for (i = 0; i < juggler_count(&dev->j); i++)
 			if (juggler_nth(&dev->j, i)->no_nonobsolete) break;
 	} else i = 0;
 	if (dev->pending_removals && i == juggler_count(&dev->j)) {
+		victim = dev->zero[0] != dev->j.next?dev->zero[0]:dev->zero[1];
+		if (victim == dev->j.next) victim = NULL;
+		if (!victim && juggler_count(&dev->j) > 1) i = 0;
+	}
+	if (dev->pending_removals && i == juggler_count(&dev->j)) {
+		dev->prelast = victim; /* may be NULL with one block */
+		dev->final_write = 1;
 		blockio_dev_take_current(dev);
 		juggler_set_next(&dev->j, NULL);
 		VERBOSE("removing the last block %u",
@@ -776,6 +801,7 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 	uint32_t next_block;
 	blockio_info_t *bi, *next, *prev;
 	bitmap_t prev_status;
+	char err[256] = "";
 	int have_prev = 0;
 
 	assert(b && c);
@@ -783,6 +809,7 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 	random_init(&dev->r);
 	dllarr_init(&dev->replay, offsetof(blockio_info_t, ur));
 	dllarr_init(&dev->release, offsetof(blockio_info_t, ur));
+	dllarr_init(&dev->wipe, offsetof(blockio_info_t, ur));
 	bitmap_init(&dev->status, b->max_macroblocks);
 	juggler_init(&dev->j, &dev->r);
 
@@ -912,26 +939,38 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 	VERBOSE("we currently got %d blocks, and we expect %d blocks",
 			dllarr_count(&dev->replay), dev->no_macroblocks);
 
+	/* if the state of the partition does not fit, it is not opened (the
+	 * other partitions are not affected, the blocks that we took are
+	 * given back by blockio_dev_free); this happens if the most recent
+	 * index of the partition was overwritten, and an old one, from before
+	 * it gave blocks away, is used (for example after it was removed) */
 	pthd_mutex_lock(&b->unallocated_mutex);
 
-	for (i = 0; i < dev->b->max_macroblocks; i++) {
+	for (i = 0; i < dev->b->max_macroblocks && !*err; i++) {
 		if (blockio_dev_get_macroblock_status_bynum(dev, i) == USED) {
-			if (i >= dev->b->total_macroblocks)
-				FATAL("macroblock marked as USED that "
-						"does not exist");
+			if (i >= dev->b->total_macroblocks) {
+				snprintf(err, sizeof(err), "block %u is used "
+						"but it does not exist", i);
+				break;
+			}
 
 			bi = &dev->b->blockio_infos[i];
 			if (bi->dev == dev) continue; // ok
-			else if (bi->dev)
-				FATAL("block %u USED by us but claimed "
-						"by another device", i);
+			else if (bi->dev) {
+				snprintf(err, sizeof(err), "block %u is used, "
+						"but it belongs to partition "
+						"\"%s\"", i, bi->dev->name);
+				break;
+			}
 
 			/* we don't know what it contains, if it has
 			 * data, adding it as a fresh block would lose
 			 * that data silently */
-			if (bi->unreadable)
-				FATAL("block %u of \"%s\" cannot be read",
-						i, dev->name);
+			if (bi->unreadable) {
+				snprintf(err, sizeof(err), "block %u cannot be "
+						"read", i);
+				break;
+			}
 
 			dllarr_remove(&dev->b->unallocated, bi);
 			bi->dev = dev;
@@ -948,17 +987,25 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 			bi = dllarr_next(&dev->replay, bi))
 		juggler_add_macroblock(&dev->j, bi);
 
-	if (dev->no_macroblocks != juggler_count(&dev->j))
-		FATAL("count of macroblocks does not match "
-				"the amount of blocks we have");
+	if (!*err && dev->no_macroblocks != juggler_count(&dev->j))
+		snprintf(err, sizeof(err), "count of macroblocks does not "
+				"match the amount of blocks we have");
+
+	if (!*err && next_block != 0xFFFFFFFF &&
+			(next_block >= dev->b->total_macroblocks ||
+			 dev->b->blockio_infos[next_block].dev != dev))
+		snprintf(err, sizeof(err), "next block %u is not part of the "
+				"partition", next_block);
+
+	if (*err) {
+		dev->no_macroblocks = 0;
+		ecch_throw(ECCH_DEFAULT, "\"%s\" is not opened: %s",
+				dev->name, err);
+	}
 
 	/* the most recent block says which block is written next, its
 	 * live data is in the most recent block */
 	if (next_block != 0xFFFFFFFF) {
-		if (next_block >= dev->b->total_macroblocks ||
-				dev->b->blockio_infos[next_block].dev != dev)
-			FATAL("next block %u is not part of the partition",
-					next_block);
 		juggler_drawn_next(&dev->j, &dev->b->blockio_infos[next_block]);
 
 		/* the blocks that are removed but not released are in the
@@ -1225,6 +1272,18 @@ static blockio_info_t *nth_fresh_block(blockio_dev_t *dev, uint32_t n,
 	uint32_t i;
 
 	*fresh = *pool = 0;
+
+	/* the blocks of a removed partition that are wiped (it has no draw
+	 * set), see blockio_dev_wipe_step */
+	if (dev->dying) {
+		for (bi = dllarr_first(&dev->wipe); bi;
+				bi = dllarr_next(&dev->wipe, bi))
+			if ((*fresh)++ == n) ret = bi;
+		if (dev->prelast && (*fresh)++ == n) ret = dev->prelast;
+		if (dev->last && (*fresh)++ == n) ret = dev->last;
+		return ret;
+	}
+
 	if (!dev->bi) return NULL; /* not yet started, or no blocks */
 
 	for (i = 0; i < juggler_count(&dev->j); i++) {
@@ -1285,6 +1344,160 @@ static void blockio_write_random(blockio_t *b, void *io, blockio_info_t *bi) {
 	free(buf);
 }
 
+/* a wiped block (or a block that is not needed anymore) of a partition that
+ * is removed is given to the unallocated blocks */
+static void blockio_dev_release_wiped(blockio_dev_t *dev, blockio_info_t *bi) {
+	pthd_mutex_lock(&dev->b->unallocated_mutex);
+	if (bi->wipe) dllarr_remove(&dev->wipe, bi);
+	bi->wipe = 0;
+	if (bi == dev->last) dev->last = NULL;
+	if (bi == dev->prelast) dev->prelast = NULL;
+	blockio_info_free_tables(bi);
+	bi->dev = NULL;
+	bi->seqno = 0;
+	dllarr_append(&dev->b->unallocated, bi);
+	pthd_mutex_unlock(&dev->b->unallocated_mutex);
+}
+
+/* does the (free) block have an index of this partition? */
+static int blockio_dev_has_index(blockio_dev_t *dev, blockio_info_t *bi) {
+	uint32_t no = bi - dev->b->blockio_infos;
+	unsigned char *buf = ecalloc(1, 1<<dev->b->mesoblk_log);
+	char sha256[32];
+	int ret = 0;
+
+	if (dev->b->read(dev->io, buf, ((off_t)no)<<dev->b->macroblock_log,
+				1<<dev->b->mesoblk_log)) goto out;
+	cipher_dec(dev->c, (char*)buf, (char*)buf, 0, 0, no);
+	if (memcmp(magic, buf + 0x070, sizeof(magic))) goto out;
+	gcry_md_hash_buffer(GCRY_MD_SHA256, sha256, buf + sizeof(sha256),
+			(1<<dev->b->mesoblk_log) - sizeof(sha256));
+	ret = !memcmp(buf, sha256, sizeof(sha256));
+out:
+	wipememory(buf, 1<<dev->b->mesoblk_log);
+	free(buf);
+	return ret;
+}
+
+/* the partition is removed: its last index (the final write, in dev->bi)
+ * says that it has no blocks; but blocks that still have an older index of
+ * it would bring it back (with its data) if that index is the most recent
+ * one that is left, when the partition is opened again: they are wiped
+ * (random data), the blocks that it removed, and the free blocks with an
+ * old index of it (from an earlier shrink, or stale when it was opened);
+ * the last two indices (last and prelast, both say that the size is 0)
+ * are kept until the others are wiped, then they are wiped too; in
+ * paranoia level 0 and 1 this is done at once, in level 2 and 3 the
+ * blocks are wiped when the scheduler draws them (see
+ * blockio_dev_wipe_step), so the writes stay uniform; until then the
+ * partition stays open, and its key cannot be used by another partition */
+static void blockio_dev_start_wipe(blockio_dev_t *dev) {
+	blockio_t *b = dev->b;
+	blockio_info_t *bi, *next;
+	uint32_t i, found = 0;
+
+	dev->last = dev->bi;
+	pthd_mutex_lock(&b->unallocated_mutex);
+	for (bi = dllarr_first(&dev->release); bi; bi = next) {
+		next = dllarr_next(&dev->release, bi);
+		dllarr_remove(&dev->release, bi);
+		if (bi == dev->last || bi == dev->prelast) continue;
+		bi->wipe = 1;
+		dllarr_append(&dev->wipe, bi);
+	}
+	for (i = 0; i < b->total_macroblocks; i++) {
+		bi = &b->blockio_infos[i];
+		if (bi->dev || !blockio_dev_has_index(dev, bi)) continue;
+		dllarr_remove(&b->unallocated, bi);
+		bi->dev = dev;
+		bi->wipe = 1;
+		dllarr_append(&dev->wipe, bi);
+		found++;
+	}
+	pthd_mutex_unlock(&b->unallocated_mutex);
+
+	dev->dying = 1;
+	VERBOSE("\"%s\" is removed, %u blocks are wiped (%u free blocks had "
+			"an old index of it)", dev->name, dllarr_count(&dev->wipe) +
+			(dev->last?1:0) + (dev->prelast?1:0), found);
+
+	if (b->paranoia < 2) blockio_dev_wipe_all(dev);
+}
+
+/* the most recent index of a removed partition is written (again) to bi:
+ * it says that the partition has no blocks */
+static void blockio_dev_write_marker(blockio_dev_t *dev, blockio_info_t *bi) {
+	assert(!dev->bi && bi->dev == dev && !dev->no_macroblocks);
+	if (!bi->indices) blockio_info_alloc_tables(bi, dev->b->mmpm);
+	bi->no_indices = 0;
+	bi->seqno = ++dev->j.seqno;
+	dev->bi = bi;
+	dev->no_old_ondisk = 0;
+	dev->turn = 1; /* this is the turn */
+	blockio_dev_write_current_macroblock(dev);
+}
+
+/* the scheduler (paranoia level 2 or 3) drew block bi of a removed
+ * partition (see blockio_dev_start_wipe): a block in wipe is overwritten
+ * with random data; if it is last, its index is written again, if it is
+ * prelast, the index is written there, then it is last (so there are
+ * always two indices that say that the partition is empty, if a write is
+ * interrupted, the other one is left); when only last and prelast are
+ * left, they are wiped in the order in which they are drawn */
+static void blockio_dev_wipe_step(blockio_dev_t *dev, blockio_info_t *bi,
+		void *io) {
+	if (bi->wipe || !dllarr_count(&dev->wipe)) {
+		blockio_write_random(dev->b, io, bi);
+		blockio_dev_release_wiped(dev, bi);
+		if (!dev->last && dev->prelast) {
+			dev->last = dev->prelast;
+			dev->prelast = NULL;
+		}
+		if (!dev->last) {
+			dev->dying = 0;
+			VERBOSE("\"%s\" is wiped", dev->name);
+		}
+		return;
+	}
+
+	blockio_dev_write_marker(dev, bi);
+	if (bi == dev->prelast) {
+		dev->prelast = dev->last;
+		dev->last = bi;
+	}
+}
+
+/* the number of blocks of a removed partition that are not wiped yet (in
+ * paranoia level 2 and 3, when it waits for its final write, all its
+ * blocks) */
+uint32_t blockio_dev_wipe_left(blockio_dev_t *dev) {
+	if (dev->dying) return dllarr_count(&dev->wipe) + (dev->last?1:0) +
+		(dev->prelast?1:0);
+	if (dev->final_write) return dllarr_count(&dev->release);
+	return 0;
+}
+
+/* wipe a removed partition at once (paranoia level 0 and 1, or when it is
+ * closed) */
+void blockio_dev_wipe_all(blockio_dev_t *dev) {
+	blockio_info_t *bi;
+
+	if (!dev->dying) return;
+	while ((bi = dllarr_first(&dev->wipe)))
+		blockio_dev_wipe_step(dev, bi, dev->io);
+	while (dev->dying) blockio_dev_wipe_step(dev, dev->prelast?
+			dev->prelast:dev->last, dev->io);
+}
+
+/* the paranoia level is below 2: removed partitions are wiped at once (the
+ * caller holds io_mutex) */
+void blockio_finish_wipes(blockio_t *b) {
+	uint32_t i;
+
+	if (b->paranoia >= 2) return;
+	for (i = 0; i < b->no_devs; i++) blockio_dev_wipe_all(b->devs[i]);
+}
+
 /* paranoia level 2: one draw of the scheduler, a write goes to a uniformly
  * random block of the whole base device: with probability proportional to
  * its weight an open partition (it writes its current block, which is
@@ -1316,7 +1529,9 @@ static blockio_dev_t *blockio_draw(blockio_t *b, void *io) {
 		bi = nth_free_block(b, r, &no_free);
 		assert(bi);
 		pthd_mutex_unlock(&b->unallocated_mutex);
-		blockio_write_random(b, io, bi);
+		if (bi->dev && bi->dev->dying)
+			blockio_dev_wipe_step(bi->dev, bi, io);
+		else blockio_write_random(b, io, bi);
 		return NULL;
 	}
 	pthd_mutex_unlock(&b->unallocated_mutex);
@@ -1674,8 +1889,23 @@ void blockio_dev_write_current_macroblock(blockio_dev_t *dev) {
 	blockio_dev_count_ondisk(dev, dev->bi, 1);
 	dev->bi->readded = 0;
 
-	/* removed blocks are not part of the partition on disk anymore */
-	blockio_dev_release_removed(dev);
+	/* while shrinking to 0: remember the two most recently written
+	 * (different) blocks (see blockio_dev_select_next_macroblock) */
+	if (dev->pending_removals &&
+			dev->pending_removals == dev->no_macroblocks) {
+		if (dev->bi != dev->zero[0]) {
+			dev->zero[1] = dev->zero[0];
+			dev->zero[0] = dev->bi;
+		}
+	} else if (!dev->final_write) dev->zero[0] = dev->zero[1] = NULL;
+
+	/* removed blocks are not part of the partition on disk anymore; the
+	 * final write: the partition is removed, it is wiped */
+	if (dev->final_write) {
+		dev->final_write = 0;
+		dev->zero[0] = dev->zero[1] = NULL;
+		blockio_dev_start_wipe(dev);
+	} else if (!dev->dying) blockio_dev_release_removed(dev);
 
 	dev->ram_block = dev->bi; /* its plaintext is still in RAM */
 	if (dev->bi->dev != dev) dev->ram_block = NULL; /* was removed */

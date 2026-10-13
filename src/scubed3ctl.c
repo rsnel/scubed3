@@ -556,6 +556,19 @@ only safe if ALL your scubed3 partitions are open, continue? [No] ";
 		} else {
 			assert(no_macroblocks > new);
 			warning();
+			if (!new) {
+				printf("removing %s: all its data is lost, its "
+						"blocks are wiped, in paranoia\nlevel 2 "
+						"and 3 in random order, that takes "
+						"long (\"p\" shows how many\nblocks "
+						"are left, %s cannot be closed until "
+						"they are wiped);\nDO NOT USE ITS "
+						"PASSPHRASE AGAIN UNTIL ALL ITS BLOCKS "
+						"ARE WIPED\n", argv[0], argv[0]);
+				if (!yesno("continue? [No] ")) return 0;
+				return do_server_command(priv->s, 1,
+						"resize-internal %s 0 0", argv[0]);
+			}
 			printf("removing %d blocks from the end of %s, those blocks\n",
 					no_macroblocks - new, argv[0]);
 			printf("will be added to the unclaimed pool, if you have a "

@@ -117,9 +117,9 @@ Switch it on with "paranoia 2" in scubed3ctl, after opening ALL partitions
 then all partitions are still open); closing a partition switches back to
 level 1 (its blocks would look free, a partition without blocks does not
 matter). The level is not stored, after starting scubed3 it is level 1.
-Creating, enlarging, shrinking and removing (shrinking to 0 blocks)
-partitions is safe in level 2 and 3: a new partition is open, and the
-blocks it gets were free.
+Creating, enlarging, shrinking and removing (shrinking to 0 blocks, see
+"Shrinking") partitions is safe in level 2 and 3: a new partition is open,
+and the blocks it gets were free.
 
 Level 2 hides where the writes go, not how many there are: if you write only
 to a hidden partition and reveal the key of another partition, the revealed
@@ -274,7 +274,8 @@ completely full could not make progress)
 - info NAME
 
 shows the state of a partition: no_macroblocks, pending_removals, trims,
-reserved_macroblocks, writes, no_indices, updated, tombstone_slots,
+reserved_macroblocks, writes, no_indices, updated, wipe_left (a removed
+partition: blocks that are not wiped yet), tombstone_slots,
 tombstones_pending, mapped_mesoblocks
 
 - p
@@ -564,10 +565,40 @@ removed blocks are given back. On startup, the blocks that the most recent
 block removed are given back after the first write. A grow takes back the removed
 blocks of the partition that are not given back yet, before it takes
 unallocated blocks.
-When a partition shrinks to 0 blocks, its last two blocks are always the
-current and the next block, so they are removed together, when none of them
-has live data: by a final write of the current block, with both FREE in its
-bitmap.
+Removing a partition (shrinking it to 0 blocks): its last blocks (the
+current and the next block, and the two most recently written blocks) are
+removed together, when none of them has live data: by a final write of the
+current block, with them FREE in its bitmap. The block written before it
+also says that the size is 0 (if it is the current block, there is one more
+write first).
+
+Then the partition is wiped: blocks that still have an index of it would
+bring it back, with its data, when it is opened again and its more recent
+indices are overwritten (by random data in level 2 and 3, or by another
+partition). All its blocks are overwritten with random data: the blocks it
+removed, and the free blocks that still have an old index of it (from an
+earlier shrink, they are found by reading the index of every free block).
+The two blocks with its two most recent indices (last and prelast, they say
+that the partition is empty) are kept until the others are wiped, then they
+are wiped too. In level 0 and 1 this is done at once. In level 2 and 3 the
+blocks are wiped when the scheduler draws them as free blocks, so the writes
+stay uniform: a block that is not last or prelast gets random data, if last
+is drawn its index is written again, if prelast is drawn the index is
+written there and it becomes last (so there are always two indices that say
+that it is empty: if a write is interrupted, the other one is left), when
+only those two are left they get random data when they are drawn. That
+takes long: about N*ln(k) block writes for k blocks on a base device of N
+blocks. Until it is done, the partition stays open and cannot be closed or
+resized ("p" and "info" show how many blocks are left), and its key cannot be
+used for another partition. Switching to level 0 or 1 wipes it at once;
+stopping scubed3 too. DO NOT USE THE PASSPHRASE OF A REMOVED PARTITION AGAIN
+UNTIL IT IS COMPLETELY WIPED: a new partition with it would get lower
+sequence numbers than the indices of the old one that are left.
+
+A block of a partition that is being opened, that belongs to another open
+partition (an old index of it is the most recent one that is left), means
+that the state of the partition is damaged: it is not opened (the other
+partitions are not affected).
 
 A removed block is not written to by its partition: removing blocks causes
 no extra writes and the write order stays uniform.

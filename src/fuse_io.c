@@ -346,11 +346,14 @@ static void freer(fuse_io_entry_t *entry) {
 		WARNING("\"%s\" is closed, paranoia level %d is switched off "
 				"(level 1)", entry->head.key, entry->d.b->paranoia);
 		blockio_set_paranoia(entry->d.b, 1, 0);
+		blockio_finish_wipes(entry->d.b);
 	}
 	free(entry->head.key);
 	free(entry->mountpoint);
 	scubed3_free(&entry->l);
-	blockio_dev_free(&entry->d);
+	/* an open that failed early (key not valid or already in use) did
+	 * not get to blockio_dev_init */
+	if (entry->d.b) blockio_dev_free(&entry->d);
 	cipher_free(&entry->c);
 	if (entry->ids) {
 		hashtbl_delete_element_byptr(entry->ids, &entry->unique_id);

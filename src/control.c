@@ -264,6 +264,14 @@ static int control_paranoia(int s, control_thread_priv_t *priv,
 
 	blockio_set_paranoia(priv->b, level, ((uint64_t)kibps)<<10);
 
+	/* removed partitions that are wiped in random order are wiped at
+	 * once below level 2 */
+	if (level < 2) {
+		blockio_io_lock(priv->b);
+		blockio_finish_wipes(priv->b);
+		blockio_io_unlock(priv->b);
+	}
+
 	return control_write_silent_success(s);
 }
 
@@ -322,6 +330,12 @@ static int control_status(int s, control_thread_priv_t *priv, char *argv[]) {
 					"%u blocks still to be removed)\n",
 					entry->head.key,
 					entry->d.pending_removals)) return -1;
+		}
+		if (blockio_dev_wipe_left(&entry->d)) {
+			if (control_write_line(priv->s, "(%s is removed, %u "
+					"blocks still to be wiped)\n",
+					entry->head.key, blockio_dev_wipe_left(
+						&entry->d))) return -1;
 		}
                 return control_write_line(priv->s,
 				"%07u blocks in %s (%.1fMiB)%s%s%s%s%s\n",
@@ -582,6 +596,10 @@ static int control_info(int s, control_thread_priv_t *priv, char *argv[]) {
 
 	if (control_write_line(s, "updated=%d\n", entry->d.updated)) return -1;
 
+	/* a removed partition: blocks that are not wiped yet */
+	if (control_write_line(s, "wipe_left=%u\n",
+				blockio_dev_wipe_left(&entry->d))) return -1;
+
 	/* tombstones on disk (slots of them), and waiting in RAM */
 	{
 		uint32_t i, k, slots = 0;
@@ -635,6 +653,16 @@ static int control_close(int s, control_thread_priv_t *priv, char *argv[]) {
 		hashtbl_unlock_element_byptr(entry);
 		return control_write_complete(s, 1,
 				"partition \"%s\" is busy", argv[0]);
+	}
+
+	/* a removed partition is wiped in random order in paranoia level 2
+	 * and 3, it stays open until that is done (see blockio.c) */
+	if (blockio_dev_wipe_left(&entry->d) && priv->b->paranoia >= 2) {
+		uint32_t left = blockio_dev_wipe_left(&entry->d);
+		hashtbl_unlock_element_byptr(entry);
+		return control_write_complete(s, 1, "partition \"%s\" is "
+				"removed, %u of its blocks are not wiped yet, it "
+				"can be closed when they are", argv[0], left);
 	}
 
 	entry->to_be_deleted = 1;
@@ -697,6 +725,14 @@ static int control_resize(int s, control_thread_priv_t *priv, char *argv[]) {
 		return control_write_complete(s, 1,
 				"not enough blocks available, base device "
 				"has only %d blocks", dev->b->total_macroblocks);
+	}
+
+	/* its indices that say that it is empty would be written again */
+	if (blockio_dev_wipe_left(dev)) {
+		hashtbl_unlock_element_byptr(entry);
+		return control_write_complete(s, 1, "partition \"%s\" is "
+				"removed and not wiped yet, it cannot be resized",
+				argv[0]);
 	}
 
 	target = dev->no_macroblocks - dev->pending_removals;

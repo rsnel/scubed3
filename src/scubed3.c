@@ -262,6 +262,16 @@ void initialize_output(scubed3_t *l) {
 	}
 }
 
+/* if the current block is its own next block (drawn twice), it is written out
+ * empty first; that write must not carry a change of the state of the
+ * partition (like a resize): if the next write (of the same block) is
+ * interrupted, the state falls back to the block before it, so it is done
+ * before such a change (the write is the same as the one that was done at
+ * once when the block was selected, before writes were one per turn) */
+void scubed3_settle(scubed3_t *l) {
+	while (l->dev->bi && l->dev->self_tail) scubed3_cycle(l);
+}
+
 void scubed3_cycle(scubed3_t *l) {
 	/* there is no current block if all blocks were removed */
 	if (!l->dev->bi) return;
@@ -343,7 +353,13 @@ void scubed3_free(scubed3_t *l) {
 
 	/* the current block will be written if it is updated (this
 	 * happens also after a resize), the tail must be absorbed first */
-	if (l->dev && l->dev->bi && l->dev->updated) initialize_output(l);
+	/* write out the current block; removed blocks are released after a
+	 * write of a block that is not its own next block (see
+	 * blockio_dev_write_current_macroblock), they are given away when the
+	 * partition is closed, so write until they are released */
+	while (l->dev && l->dev->bi && (l->dev->updated ||
+				dllarr_count(&l->dev->release)))
+		scubed3_cycle(l);
 
 	free(l->block_indices);
 }

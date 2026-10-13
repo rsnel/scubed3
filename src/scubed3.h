@@ -56,6 +56,8 @@ void scubed3_reinit(scubed3_t*);
 
 void scubed3_cycle(scubed3_t*);
 
+void scubed3_settle(scubed3_t*);
+
 void scubed3_free(scubed3_t*);
 
 void scubed3_flush(scubed3_t*);

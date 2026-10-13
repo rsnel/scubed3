@@ -231,6 +231,26 @@ static int control_check_data_integrity(int s, control_thread_priv_t *priv,
 	return control_write_terminate(s);
 }
 
+/* paranoia level 2 overwrites all blocks that do not belong to an open
+ * partition: it is only safe if all partitions are open (scubed3ctl asks
+ * for confirmation), closing a partition switches back to level 1 */
+static int control_paranoia(int s, control_thread_priv_t *priv,
+		char *argv[]) {
+	int level = 0;
+
+	if (parse_int(s, &level, argv[0])) return -1;
+
+	if (level != 1 && level != 2) return control_write_complete(s, 1,
+			"paranoia level %d is not implemented (only 1 and 2)",
+			level);
+
+	if (priv->b->paranoia != level)
+		VERBOSE("paranoia level %d", level);
+	priv->b->paranoia = level;
+
+	return control_write_silent_success(s);
+}
+
 static int control_static_info(int s, control_thread_priv_t *priv, char *argv[]) {
 	return control_write_complete(s, 0, "%s\n%d\n%s",
 			priv->mountpoint,
@@ -305,6 +325,9 @@ static int control_status(int s, control_thread_priv_t *priv, char *argv[]) {
 
 	if (control_write_line(s, "%07u blocks unclaimed\n", status_priv.macroblocks_left)) return -1;
 	if (control_write_line(s, "%07u blocks total\n", priv->b->total_macroblocks)) return -1;
+	if (control_write_line(s, "paranoia level %d (%lu blocks of the free "
+				"space overwritten)\n", priv->b->paranoia,
+				priv->b->random_writes)) return -1;
 
 	return control_write_terminate(s);
 }
@@ -632,6 +655,23 @@ static int control_resize(int s, control_thread_priv_t *priv, char *argv[]) {
 			size, reserved);
 	}
 
+	/* with one block, every write overwrites the only copy of the
+	 * state of the partition (a block is its own next block), an
+	 * interrupted write would lose it */
+	if (size == 1) {
+		hashtbl_unlock_element_byptr(entry);
+		return control_write_complete(s, 1, "a partition needs at least "
+				"2 blocks (or 0, to remove it)");
+	}
+
+	/* the GC needs room: one block is always being emptied, so at most
+	 * BLOCKS - 1 blocks can hold live data */
+	if (size > 0 && reserved < 1) {
+		hashtbl_unlock_element_byptr(entry);
+		return control_write_complete(s, 1, "at least 1 block must be "
+				"reserved");
+	}
+
 	if (size > dev->b->total_macroblocks) {
 		hashtbl_unlock_element_byptr(entry);
 		return control_write_complete(s, 1,
@@ -651,6 +691,10 @@ static int control_resize(int s, control_thread_priv_t *priv, char *argv[]) {
 		return control_write_complete(s, 1, "not enough unclaimed "
 				"blocks available for resize");
 	}
+
+	/* the resize changes the state of the partition, it must not be
+	 * written first in a block that is its own next block */
+	scubed3_settle(&entry->l);
 
 	old_usable = blockio_dev_usable_macroblocks(dev);
 	new_usable = (size > reserved)?size - reserved:0;
@@ -712,6 +756,11 @@ static control_command_t control_commands[] = {
 		.command = control_static_info,
 		.argc = 0,
 		.usage = ""
+	}, {
+		.head.key = "paranoia",
+		.command = control_paranoia,
+		.argc = 1,
+		.usage = " LEVEL"
 	}, {
 		.head.key = "exit",
 		.command = control_exit,
@@ -793,7 +842,7 @@ static control_command_t control_commands[] = {
 #define NO_COMMANDS (sizeof(control_commands)/sizeof(control_commands[0]))
 
 int control_call(int s, control_thread_priv_t *priv, char *command) {
-	int argc = 0;
+	int argc = 0, ret;
 	char *argv[MAX_ARGC+1];
 	control_command_t *cmnd;
 	argv[argc] = command;
@@ -822,7 +871,12 @@ int control_call(int s, control_thread_priv_t *priv, char *command) {
 	if (argc - 1 != cmnd->argc) 
 		return control_write_complete(s, 1, "usage: %s%s", argv[0], cmnd->usage);
 
-	return (*cmnd->command)(s, priv, argv + 1);
+	/* commands may write blocks (see blockio_t) */
+	pthd_mutex_lock(&priv->b->io_mutex);
+	ret = (*cmnd->command)(s, priv, argv + 1);
+	pthd_mutex_unlock(&priv->b->io_mutex);
+
+	return ret;
 }
 
 /* create the control socket; its directory must belong to us and only we

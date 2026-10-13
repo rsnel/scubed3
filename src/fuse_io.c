@@ -18,6 +18,7 @@
 #define FUSE_USE_VERSION 26
 
 #include <fuse.h>
+#include <stddef.h>
 #include <string.h>
 #include <unistd.h>
 #include <errno.h>
@@ -36,6 +37,29 @@ typedef struct fuse_io_priv_s {
 	pthread_t control_thread;
 	control_thread_priv_t control_thread_priv;
 } fuse_io_priv_t;
+
+/* everything that may write blocks takes the io lock of the base device
+ * before the lock of the partition (see blockio_t) */
+static void io_lock(void) {
+	pthd_mutex_lock(&((fuse_io_priv_t*)fuse_get_context()->private_data)->
+			control_thread_priv.b->io_mutex);
+}
+
+static void io_unlock(void) {
+	pthd_mutex_unlock(&((fuse_io_priv_t*)fuse_get_context()->private_data)->
+			control_thread_priv.b->io_mutex);
+}
+
+/* paranoia level 2: the scheduler lets partition dev write one block (the
+ * caller holds the io lock, and the lock of another partition) */
+static void fuse_io_step(blockio_dev_t *dev) {
+	fuse_io_entry_t *entry = (fuse_io_entry_t*)
+		((char*)dev - offsetof(fuse_io_entry_t, d));
+
+	pthd_mutex_lock(&entry->head.data_mutex);
+	scubed3_cycle(&entry->l);
+	pthd_mutex_unlock(&entry->head.data_mutex);
+}
 
 static int fuse_io_getattr(const char *path, struct stat *stbuf) {
 	fuse_io_entry_t *entry;
@@ -135,9 +159,14 @@ static int fuse_io_release(const char *path, struct fuse_file_info *fi) {
 	}
 	hashtbl_unlock_element_byptr(entry);
 
-	if (delete) hashtbl_delete_element_byptr(
-			&((fuse_io_priv_t*)fuse_get_context()->
-				private_data)-> entries, entry);
+	/* closing the partition writes its current block */
+	if (delete) {
+		io_lock();
+		hashtbl_delete_element_byptr(
+				&((fuse_io_priv_t*)fuse_get_context()->
+					private_data)-> entries, entry);
+		io_unlock();
+	}
 
 	return 0;
 }
@@ -162,14 +191,21 @@ static int fuse_io_read(const char *path, char *buf, size_t size, off_t offset,
 static int fuse_io_write(const char *path, const char *buf, size_t size,
 		off_t offset, struct fuse_file_info *fi) {
 	int ret;
-	fuse_io_entry_t *entry = hashtbl_find_element_bykey(
+	fuse_io_entry_t *entry;
+
+	io_lock();
+	entry = hashtbl_find_element_bykey(
 			&((fuse_io_priv_t*)fuse_get_context()->private_data)->
 			entries, path + 1);
-	if (!entry) return -ENOENT;
+	if (!entry) {
+		io_unlock();
+		return -ENOENT;
+	}
 
 	ret = do_req(&entry->l, SCUBED3_WRITE, offset, size, (char*)buf);
 
 	hashtbl_unlock_element_byptr(entry);
+	io_unlock();
 
 	return ret;
 }
@@ -188,14 +224,21 @@ void *fuse_io_init(struct fuse_conn_info *conn) {
 
 static int fuse_io_fsync(const char *path, int datasync,
 		struct fuse_file_info *fi) {
-	fuse_io_entry_t *entry = hashtbl_find_element_bykey(
+	fuse_io_entry_t *entry;
+
+	io_lock();
+	entry = hashtbl_find_element_bykey(
 			&((fuse_io_priv_t*)fuse_get_context()->private_data)->
 			entries, path + 1);
-	if (!entry) return -ENOENT;
+	if (!entry) {
+		io_unlock();
+		return -ENOENT;
+	}
 
 	scubed3_fsync(&entry->l);
 
 	hashtbl_unlock_element_byptr(entry);
+	io_unlock();
 
 	return 0;
 }
@@ -226,10 +269,16 @@ static int fuse_io_truncate(const char *path, off_t size) {
 static int fuse_io_fallocate(const char *path, int mode, off_t offset,
 		off_t len, struct fuse_file_info *fi) {
 	int ret = 0;
-	fuse_io_entry_t *entry = hashtbl_find_element_bykey(
+	fuse_io_entry_t *entry;
+
+	io_lock();
+	entry = hashtbl_find_element_bykey(
 			&((fuse_io_priv_t*)fuse_get_context()->private_data)->
 			entries, path + 1);
-	if (!entry) return -ENOENT;
+	if (!entry) {
+		io_unlock();
+		return -ENOENT;
+	}
 
 	if (offset < 0 || len <= 0) ret = -EINVAL;
 	else if (mode&~(FALLOC_FL_KEEP_SIZE|FALLOC_FL_PUNCH_HOLE|
@@ -239,6 +288,7 @@ static int fuse_io_fallocate(const char *path, int mode, off_t offset,
 	else if (offset + len > entry->size) ret = -ENOSPC;
 
 	hashtbl_unlock_element_byptr(entry);
+	io_unlock();
 
 	return ret;
 }
@@ -334,6 +384,7 @@ int fuse_io_start(int argc, char **argv, blockio_t *b,
 	hashtbl_init_default(&priv.ids, 32, 4, 1, 1, NULL);
 
 	priv.control_thread_priv.b = b;
+	b->step = fuse_io_step;
 
 	/* create the control socket before mounting, so that errors
 	 * are reported before scubed3 goes to the background */

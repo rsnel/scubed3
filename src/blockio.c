@@ -129,6 +129,15 @@ static void stream_write(void *fp, const void *buf, uint64_t offset,
 		_exit(9);
 	}
 	bad_sector(offset, size, 1);
+
+	/* testing only: log the offset of every write */
+	static FILE *wlog = NULL;
+	if (!wlog && getenv("SCUBED3_WRITE_LOG"))
+		wlog = fopen(getenv("SCUBED3_WRITE_LOG"), "a");
+	if (wlog) {
+		fprintf(wlog, "%lu\n", (unsigned long)offset);
+		fflush(wlog);
+	}
 #endif
 	stream_io(fp, (void*)buf, offset, size, fwrite, "writing");
 }
@@ -201,7 +210,10 @@ static uint64_t mesoblk_hash(const void *ciphertext, size_t size) {
 void blockio_free(blockio_t *b) {
 	assert(b);
 	free(b->blockio_infos);
+	free(b->devs);
+	random_free(&b->r);
 	pthd_mutex_destroy(&b->unallocated_mutex);
+	pthd_mutex_destroy(&b->io_mutex);
 }
 
 uint32_t blockio_get_macroblock_index(blockio_info_t *bi) {
@@ -309,6 +321,10 @@ void blockio_init_file(blockio_t *b, const char *path, uint8_t macroblock_log,
 
 	stream_close(priv);
 	pthd_mutex_init(&b->unallocated_mutex);
+
+	b->paranoia = 1;
+	random_init(&b->r);
+	pthd_mutex_init(&b->io_mutex);
 }
 
 static const char magic[8] = "SSS3v0.4";
@@ -325,6 +341,18 @@ void blockio_dev_free(blockio_dev_t *dev) {
 	if (dev->updated) blockio_dev_write_current_macroblock(dev);
 	random_free(&dev->r);
 	bitmap_free(&dev->status);
+
+	/* the partition is not open anymore, its blocks look free to us:
+	 * paranoia level 2 would overwrite them */
+	for (i = 0; i < dev->b->no_devs; i++) if (dev->b->devs[i] == dev) {
+		dev->b->devs[i] = dev->b->devs[--dev->b->no_devs];
+		break;
+	}
+	if (dev->b->paranoia >= 2) {
+		WARNING("\"%s\" is closed, paranoia level 2 is switched off "
+				"(level 1)", dev->name);
+		dev->b->paranoia = 1;
+	}
 
 	blockio_info_t *bi;
 
@@ -345,7 +373,8 @@ void blockio_dev_free(blockio_dev_t *dev) {
 		dllarr_remove(&dev->replay, bi);
 
 	/* re-add blocks to unallocated (removed blocks are not in the pool,
-	 * the removal is on disk: the current block was written above) */
+	 * the removal is on disk: the current block was written above, and
+	 * scubed3_free makes sure that it is not its own next block) */
 	juggler_free_and_empty_into(&dev->j, dllarr_append,
 			&dev->b->unallocated);
 	while ((bi = dllarr_last(&dev->release))) {
@@ -380,6 +409,8 @@ uint32_t blockio_dev_free_slots(blockio_dev_t *dev) {
 	uint32_t used;
 	assert(dev->bi);
 
+	if (dev->self_tail || dev->final_pending) return 0;
+
 	used = dev->bi->no_indices + (dev->no_tombs + dev->tombs_per_mesoblk -
 			1)/dev->tombs_per_mesoblk;
 	assert(used <= dev->b->mmpm);
@@ -390,6 +421,8 @@ uint32_t blockio_dev_free_slots(blockio_dev_t *dev) {
 /* do no more tombstones fit in the current block? */
 int blockio_dev_tomb_fits(blockio_dev_t *dev, uint32_t no) {
 	assert(dev->bi);
+
+	if (dev->self_tail || dev->final_pending) return 0;
 
 	return dev->bi->no_indices + (dev->no_tombs + no +
 			dev->tombs_per_mesoblk - 1)/dev->tombs_per_mesoblk <=
@@ -608,9 +641,15 @@ void blockio_dev_select_next_macroblock(blockio_dev_t *dev) {
 
 	dev->updated = 0;
 
+	/* all blocks are removed */
+	if (!juggler_count(&dev->j)) return;
+
 	/* removing the last block of the partition: it gets one more
 	 * write (in its turn, it is the only block), in which it is FREE, so
-	 * that the removal is on disk; afterwards there is no current block */
+	 * that the removal is on disk; afterwards there is no current block;
+	 * in paranoia level 2 the write waits for its turn (it is done by
+	 * the scheduler, this function is called after a write, and one
+	 * turn is one write) */
 	if (dev->pending_removals && juggler_count(&dev->j) == 1 &&
 			!juggler_nth(&dev->j, 0)->no_nonobsolete) {
 		blockio_dev_take_current(dev);
@@ -619,7 +658,8 @@ void blockio_dev_select_next_macroblock(blockio_dev_t *dev) {
 				blockio_get_macroblock_index(dev->bi));
 		dev->bi->no_indices = 0;
 		blockio_dev_remove_block(dev, dev->bi);
-		blockio_dev_write_current_macroblock(dev);
+		if (dev->b->paranoia >= 2) dev->final_pending = 1;
+		else blockio_dev_write_current_macroblock(dev);
 		return;
 	}
 
@@ -646,19 +686,19 @@ void blockio_dev_select_next_macroblock(blockio_dev_t *dev) {
 
 	/* if the (empty) selected block is drawn again for the next write,
 	 * it is its own tail: data written to it now would have nowhere to
-	 * go when it is rewritten, so we write it out empty and select
-	 * again (this happens with probability 1/N); if the partition has
-	 * only one block, it is always its own tail, and there is no other
-	 * block to absorb, so it can keep its data */
-	while (dev->tail_macroblock == dev->bi && !dev->bi->no_indices &&
+	 * go when it is rewritten, so it is written out empty first (this
+	 * happens with probability 1/N), that is the next write of this
+	 * partition: until then the block takes no data (see free_slots), so
+	 * that a write is needed (one write per turn in paranoia level 2);
+	 * if the partition has only one block, it is always its own tail,
+	 * and there is no other block to absorb, so it can keep its data */
+	if (dev->tail_macroblock == dev->bi && !dev->bi->no_indices &&
 			juggler_count(&dev->j) > 1) {
 		VERBOSE("block %d is drawn twice, writing it out empty "
 				"(pool=%u)", blockio_get_macroblock_index(dev->bi),
 				juggler_count(&dev->j));
-		blockio_dev_write_current_macroblock(dev);
-		blockio_dev_take_current(dev);
-		dev->ram_block = dev->bi;
-		dev->tail_macroblock = dev->j.next;
+		dev->self_tail = 1;
+		return;
 	}
 
 	/* if we are shrinking, blocks without live data can be removed
@@ -685,7 +725,9 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 	int i; 
 	uint64_t seqno = 0;
 	uint32_t next_block;
-	blockio_info_t *bi, *next;
+	blockio_info_t *bi, *next, *prev;
+	bitmap_t prev_status;
+	int have_prev = 0;
 
 	assert(b && c);
 	assert(b->mesoblk_log < b->macroblock_log);
@@ -697,6 +739,10 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 
 	dev->b = b;
 	dev->c = c;
+
+	/* the scheduler of paranoia level 2 needs all open partitions */
+	b->devs = erealloc(b->devs, b->no_devs + 1, sizeof(blockio_dev_t*));
+	b->devs[b->no_devs++] = dev;
 	assert(bitmap_size(&dev->status) + dev->b->bitmap_offset ==
 			1<<dev->b->mesoblk_log);
 
@@ -759,6 +805,19 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 	bi = dllarr_last(&dev->replay);
 	seqno = bi->seqno;
 	next_block = bi->next_block;
+
+	/* if the most recent block is also written next, and that write is
+	 * interrupted, the state falls back to the block before it: blocks
+	 * that it removed may still be needed then, they are released after
+	 * a write of another block (see blockio_dev_write_current_macroblock) */
+	if (next_block == blockio_get_macroblock_index(bi) &&
+			(prev = dllarr_prev(&dev->replay, bi))) {
+		bitmap_init(&prev_status, b->max_macroblocks);
+		blockio_dev_read_index(dev, prev);
+		bitmap_read(&prev_status, (uint32_t*)BITMAP);
+		have_prev = 1;
+	}
+
 	blockio_dev_read_index(dev, bi);
 	blockio_dev_take_index(dev);
 
@@ -771,7 +830,16 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 	bi = dllarr_first(&dev->replay);
 	while (bi) {
 		next = dllarr_next(&dev->replay, bi);
-		if (blockio_dev_get_macroblock_status(bi) == FREE ||
+		if (have_prev && bi->seqno >= dev->trim_floor &&
+				blockio_dev_get_macroblock_status(bi) == FREE &&
+				bitmap_getbit(&prev_status,
+					blockio_get_macroblock_index(bi))) {
+			VERBOSE("block %u (seqno=%lu) is removed, but not yet "
+					"released", blockio_get_macroblock_index(bi),
+					bi->seqno);
+			dllarr_remove(&dev->replay, bi);
+			dllarr_append(&dev->release, bi);
+		} else if (blockio_dev_get_macroblock_status(bi) == FREE ||
 				bi->seqno < dev->trim_floor) {
 			VERBOSE("block %u (seqno=%lu) is stale",
 					blockio_get_macroblock_index(bi),
@@ -786,6 +854,7 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 	}
 
 	pthd_mutex_unlock(&b->unallocated_mutex);
+	if (have_prev) bitmap_free(&prev_status);
 
 	/* the juggler continues after the most recent block */
 	dev->j.seqno = seqno;
@@ -1075,13 +1144,107 @@ uint32_t blockio_check_data_hashes(blockio_info_t *bi, char *live) {
 	return mismatches;
 }
 
+/* the number of blocks of the partition for the scheduler: the blocks in the
+ * pool of its juggler, and its last block if it waits for its final write */
+uint32_t blockio_dev_weight(blockio_dev_t *dev) {
+	return juggler_count(&dev->j) + (dev->final_pending?1:0);
+}
+
+/* the blocks that do not belong to an open partition (the unallocated
+ * blocks); a block that was removed from a partition is not free until its
+ * removal is on disk (see blockio_dev_release_removed): until then the
+ * last state on disk may need it, it is not written at all */
+static blockio_info_t *nth_free_block(blockio_t *b, uint32_t n,
+		uint32_t *count) {
+	if (count) *count = dllarr_count(&b->unallocated);
+	if (n < dllarr_count(&b->unallocated))
+		return dllarr_nth(&b->unallocated, n);
+
+	return NULL;
+}
+
+/* paranoia level 2: overwrite a free block with random data, it looks the
+ * same as a block of a partition (the io of dev is used) */
+static void blockio_dev_write_random(blockio_dev_t *dev, blockio_info_t *bi) {
+	uint32_t id = bi - dev->b->blockio_infos;
+	char *buf = ecalloc(1, 1<<dev->b->macroblock_log);
+
+	DEBUG("write random data to free block %u", id);
+	if (fread(buf, 1<<dev->b->macroblock_log, 1, dev->b->r.fp) != 1)
+		FATAL("reading from /dev/urandom: %s", strerror(errno));
+	dev->b->write(dev->io, buf, ((off_t)id)<<dev->b->macroblock_log,
+			1<<dev->b->macroblock_log);
+	dev->b->sync(dev->io);
+	dev->b->random_writes++;
+	free(buf);
+}
+
+/* paranoia level 2: every write goes to a uniformly random block of the
+ * whole base device; dev wants to write, so the scheduler draws who writes
+ * until dev is drawn: with probability proportional to its number of blocks
+ * an open partition (it writes its next block, which is uniform over its
+ * blocks, see juggler.c), or the free space (a uniformly random free block
+ * is overwritten with random data); everything that may write holds
+ * io_mutex, so the scheduler can let the other partitions write */
+static void blockio_dev_wait_turn(blockio_dev_t *dev) {
+	blockio_t *b = dev->b;
+	uint32_t i, total, no_free, r;
+	blockio_info_t *bi;
+
+	/* the scheduler gave this partition the turn */
+	if (dev->turn) {
+		dev->turn = 0;
+		return;
+	}
+
+	if (b->paranoia < 2) return;
+
+	for (;;) {
+		pthd_mutex_lock(&b->unallocated_mutex);
+		nth_free_block(b, UINT32_MAX, &no_free);
+		total = no_free;
+		for (i = 0; i < b->no_devs; i++)
+			total += blockio_dev_weight(b->devs[i]);
+		r = random_custom(&b->r, total);
+
+		for (i = 0; i < b->no_devs; i++) {
+			if (r < blockio_dev_weight(b->devs[i])) break;
+			r -= blockio_dev_weight(b->devs[i]);
+		}
+
+		if (i == b->no_devs) { /* the free space */
+			bi = nth_free_block(b, r, NULL);
+			assert(bi);
+			pthd_mutex_unlock(&b->unallocated_mutex);
+			blockio_dev_write_random(dev, bi);
+			continue;
+		}
+		pthd_mutex_unlock(&b->unallocated_mutex);
+
+		if (b->devs[i] == dev) return;
+
+		/* another partition writes one block */
+		b->devs[i]->turn = 1;
+		b->step(b->devs[i]);
+		if (b->devs[i]->turn) {
+			WARNING("partition \"%s\" did not write in its turn",
+					b->devs[i]->name);
+			b->devs[i]->turn = 0;
+		}
+	}
+}
+
 void blockio_dev_write_current_macroblock(blockio_dev_t *dev) {
 	uint32_t id = blockio_get_macroblock_index(dev->bi);
 	int i;
 	assert(dev->bi && id < dev->b->total_macroblocks);
 	
+	blockio_dev_wait_turn(dev);
+
 	DEBUG("write block %u (seqno=%lu)", id, dev->bi->seqno);
 	dev->writes++;
+	dev->self_tail = 0;
+	dev->final_pending = 0;
 
 	/* the tombstones go in slots after the data */
 	for (i = 0; i < dev->no_tombs; i += dev->tombs_per_mesoblk) {
@@ -1196,8 +1359,14 @@ void blockio_dev_write_current_macroblock(blockio_dev_t *dev) {
 	blockio_dev_count_ondisk(dev, dev->bi, 1);
 	dev->bi->readded = 0;
 
-	/* removed blocks are not part of the partition on disk anymore */
-	blockio_dev_release_removed(dev);
+	/* removed blocks are not part of the partition on disk anymore;
+	 * unless this block is its own next block: if its next write is
+	 * interrupted, the state falls back to the block before it, in which
+	 * they are not removed, so they are released after a later write */
+	if (dev->j.next != dev->bi) blockio_dev_release_removed(dev);
+	else if (dllarr_count(&dev->release))
+		VERBOSE("block %u is written next again, removed blocks are "
+				"released later", id);
 
 	dev->ram_block = dev->bi; /* its plaintext is still in RAM */
 	if (dev->bi->dev != dev) dev->ram_block = NULL; /* was removed */

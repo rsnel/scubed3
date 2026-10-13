@@ -82,18 +82,37 @@ Level 1: moderately paranoid
 it is randomly selected from all allocated blocks (see "Write order" below).
 This hurts write performance.
 
-Level 2: just paranoid (NOT IMPLEMENTED YET)
+Level 2: just paranoid
 
-a random block of the device is selected. If it happens to be allocated to the
-current device, it is used. If it happens to be allocated to another device, it
-is updated with a new seqno (therefore every bit will change with a probalility
-of .5). If the block is unallocated, it will be added to the device, another
-block will be deleted. (this level of paranoia is required for flash media,
-this kind of media keeps an internal record about the order in whichs blocks
-are written to it) It is only safe if all scubed3 devices are known to and
-(if active) managed by the scubed3 deamon managing the current device.
+every write goes to a uniformly random block of the whole base device,
+whichever partition is written to. (this level of paranoia is required for
+flash media, this kind of media keeps an internal record about the order in
+which blocks are written to it, and for an adversary that makes many
+snapshots) It is only safe if all scubed3 partitions are open in the scubed3
+process: blocks that do not belong to an open partition are overwritten with
+random data, so A PARTITION THAT IS NOT OPEN IS DESTROYED.
 
-[can be implemented as: select device (weighted by size), and write a random block]
+When a partition needs to write a block, the scheduler draws who writes,
+until that partition is drawn: an open partition, with a probability
+proportional to its number of blocks (it writes the block its juggler chose
+as its next block, uniform over its blocks, see "Write order"; also if it has
+no new data), or the free space (a uniformly random free block is overwritten
+with random data, which looks the same as an encrypted block). So the written
+blocks are independent and uniform over the base device. The cost: a write
+of a partition that has a fraction f of the blocks costs 1/f block writes on
+average, and fsync waits for the turn of the partition.
+
+Switch it on with "paranoia 2" in scubed3ctl, after opening ALL partitions
+(it asks for confirmation); closing a partition switches back to level 1
+(its blocks would look free). The level is not stored, after starting
+scubed3 it is level 1.
+
+Level 2 hides where the writes go, not how many there are: if you write only
+to a hidden partition and reveal the key of another partition, the revealed
+partition is seen to be rewritten without new data; level 3 hides that. A
+block that is removed from a partition (shrinking) is not written at all
+until the removal is on disk (the next write of its partition), the last
+state on disk may still need it.
 
 Level 3: extremely paranoid (NOT IMPLEMENTED YET)
 
@@ -192,7 +211,11 @@ closes a partition (it must not be in use)
 - resize-internal NAME BLOCKS RESERVED
 
 resizes a partition to BLOCKS macroblocks, of which RESERVED are kept free
-(the usable size is (BLOCKS - RESERVED)*255 mesoblocks); see Shrinking
+(the usable size is (BLOCKS - RESERVED)*255 mesoblocks); see Shrinking; a
+partition has at least 2 blocks (with 1 block, every write would overwrite
+the only copy of its state), 0 blocks removes it; at least 1 block is
+reserved (the GC always empties one block, a partition that would be
+completely full could not make progress)
 
 - info NAME
 
@@ -202,7 +225,14 @@ tombstones_pending, mapped_mesoblocks
 
 - p
 
-shows all open partitions
+shows all open partitions, the paranoia level and the number of free blocks
+that were overwritten with random data
+
+- paranoia LEVEL
+
+sets the paranoia level (1 or 2, see Paranoia levels); scubed3ctl has a
+command paranoia that asks for confirmation, because level 2 destroys
+partitions that are not open
 
 - check-data-integrity NAME
 
@@ -327,10 +357,15 @@ lost when the tail is overwritten. If the tail is the current block itself,
 the current block is written out without new data and the next block is
 drawn again (this happens with probability 1/N for a pool of N blocks).
 
-Paranoia level 2 can be built on top of this: to write a block of the whole
-disk, pick a partition with a probability proportional to its pool size,
+Paranoia level 2 is built on top of this: to write a block of the whole
+disk, a partition is picked with a probability proportional to its pool size
+(or the free space, with a probability proportional to its number of blocks),
 that partition writes the block it has chosen as next_block. All writes on
 the disk are then in uniform random order.
+
+When the block that is drawn twice is the current block (it is its own
+tail), it is written out empty at the next write of the partition, it takes
+no data until then (one draw is one write, also in level 2).
 
 Integrity
 ~~~~~~~~~
@@ -439,7 +474,12 @@ the pool (not the current block, not the tail) with the least live data.
 Its live mesoblocks are absorbed by the current block (up to the brim);
 when the victim holds no live data anymore, it is removed from the pool.
 A removed block is FREE in the bitmap of the next written block; it is
-given back to the unallocated blocks only after that block is on disk.
+given back to the unallocated blocks only after that block is on disk, and
+only if that block is not its own next block (if the next write of the same
+block is interrupted, the state falls back to the block before it, in which
+the removed block still belongs to the partition); closing a partition
+writes until its removed blocks are given back. For the same reason, a
+resize first writes out a current block that is its own next block.
 The last block of a partition is removed by a final write: it is written
 with itself FREE in its own bitmap.
 

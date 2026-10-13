@@ -401,6 +401,7 @@ static int ctl_help(ctl_priv_t *priv, char *argv[]) {
 	printf("close NAME\n");
 	printf("mount NAME MOUNTPOINT\n");
 	printf("umount NAME\n");
+	printf("paranoia LEVEL\n");
 	return 0;
 }
 
@@ -636,6 +637,34 @@ static int ctl_chown(ctl_priv_t *priv, char *argv[]) {
 	return 0;
 }
 
+/* paranoia level 2 (see README) overwrites every block that does not
+ * belong to an open partition, so all partitions must be open */
+static int ctl_paranoia(ctl_priv_t *priv, char *argv[]) {
+	int i;
+
+	if (strcmp(argv[0], "1") && strcmp(argv[0], "2")) {
+		printf("paranoia level must be 1 or 2\n");
+		exit_status = EXIT_FAILURE;
+		return 0;
+	}
+
+	if (!strcmp(argv[0], "2") && (!quiet || assume_yes < 3)) {
+		if (do_server_command(priv->s, 0, "p")) return -1;
+		warning();
+		printf("paranoia level 2 writes random data to every block that "
+				"does not belong\nto an open partition: partitions "
+				"that are NOT OPEN NOW WILL BE DESTROYED\n"
+				"(and closing a partition switches back to level "
+				"1), the open partitions are:\n");
+		for (i = 0; i < result.argc; i++)
+			printf("%s\n", result.argv[i]);
+		if (!yesno("are ALL your scubed3 partitions open, "
+					"continue? [No] ")) return 0;
+	}
+
+	return do_server_command(priv->s, 1, "paranoia %s", argv[0]);
+}
+
 static int ctl_umount(ctl_priv_t *priv, char *argv[]) {
 	if (*argv[0] != '/') { // figure out mountpoint
 		if (do_server_command(priv->s, 0, "get-aux %s mountpoint",
@@ -686,6 +715,11 @@ static ctl_command_t ctl_commands[] = {
 		.command = ctl_chown,
 		.argc = 2,
 		.usage = " OWNER.GROUP NAME|MOUNTPOINT"
+	}, {
+		.head.key = "paranoia",
+		.command = ctl_paranoia,
+		.argc = 1,
+		.usage = " LEVEL"
 	}, {
 		.head.key = "umount",
 		.command = ctl_umount,

@@ -159,6 +159,18 @@ typedef struct blockio_dev_s {
 
 	uint32_t writes; // no macroblocks
 
+	/* the current block is empty and it is also the block that is
+	 * written after it (its own tail): it must be written out empty
+	 * before data goes in it (see blockio_dev_select_next_macroblock) */
+	int self_tail;
+
+	/* paranoia level 2: the current block is the last block of the
+	 * partition, it is removed by its final write, when it is its turn */
+	int final_pending;
+
+	/* paranoia level 2: this partition may write one block now */
+	int turn;
+
 	void *io;
 } blockio_dev_t;
 
@@ -188,6 +200,23 @@ struct blockio_s {
 	void (*write)(void*, const void*, uint64_t, uint32_t);
 	void (*close)(void*);
 	void (*sync)(void*);
+
+	/* paranoia level (1 or 2, see README), the open partitions (devs),
+	 * and step(dev): let partition dev write one block (it gets the
+	 * turn), it is called when the scheduler of level 2 draws dev */
+	int paranoia;
+	blockio_dev_t **devs;
+	uint32_t no_devs;
+	void (*step)(blockio_dev_t*);
+	random_t r;
+
+	/* in paranoia level 2 the writes of all partitions are done one by
+	 * one (one partition may write blocks of another one): this lock is
+	 * taken before the lock of a partition by everything that may write */
+	pthread_mutex_t io_mutex;
+
+	/* statistics: blocks of the free space written with random data */
+	uint64_t random_writes;
 };
 
 uint32_t blockio_get_macroblock_index(blockio_info_t*);
@@ -249,6 +278,8 @@ void blockio_prepare_block(blockio_info_t*);
 uint32_t blockio_dev_usable_macroblocks(blockio_dev_t*);
 
 uint32_t blockio_dev_free_slots(blockio_dev_t*);
+
+uint32_t blockio_dev_weight(blockio_dev_t*);
 
 int blockio_dev_tomb_fits(blockio_dev_t*, uint32_t);
 

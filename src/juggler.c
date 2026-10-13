@@ -130,6 +130,11 @@ void juggler_remove_macroblock(juggler_t *j, blockio_info_t *b) {
 	b->removed = j->draws;
 }
 
+/* is the block in the pool? */
+int juggler_contains(juggler_t *j, blockio_info_t *b) {
+	return b->pool_index < j->no_pool && j->pool[b->pool_index] == b;
+}
+
 /* is the block in the draw set of the current block? */
 int juggler_in_current(juggler_t *j, blockio_info_t *b) {
 	return b->added < j->cur_draw && j->cur_draw <= b->removed;

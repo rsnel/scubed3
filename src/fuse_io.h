@@ -48,6 +48,6 @@ typedef struct fuse_io_id_s {
 	char *name;
 } fuse_io_id_t;
 
-int fuse_io_start(int, char**, blockio_t*, const char*);
+int fuse_io_start(int, char**, blockio_t*, const char*, int);
 
 #endif /* INCLUDE_SCUBED3_FUSE_IO_H */

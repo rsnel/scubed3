@@ -7,6 +7,8 @@
 #
 # usage: openertest.py DAEMON SCUBED3CTL ROUNDS
 import os, sys, time, socket, hashlib, subprocess, errno
+import shutil
+FUSERMOUNT = shutil.which("fusermount3") or "fusermount"   # libfuse 3 or 2
 
 B = os.environ.get("S3BUILD", os.getcwd())
 MNT, FS, FS2, SOCK, MESO = "/mnt/s3", "/mnt/ot", "/mnt/ot2", "/run/scubed3/control", 1 << 14
@@ -40,7 +42,7 @@ def size(): return os.stat(MNT + "/t").st_size
 
 for d in (FS, FS2): os.makedirs(d, exist_ok=True)
 with open(base, "wb") as f: f.write(os.urandom(40 << 22))
-subprocess.run(["fusermount", "-u", "-z", MNT], capture_output=True)
+subprocess.run([FUSERMOUNT, "-u", "-z", MNT], capture_output=True)
 if os.path.exists(SOCK): os.unlink(SOCK)
 P = subprocess.Popen([B + "/" + daemon, "-b", base, "-f", MNT], stdout=log, stderr=log)
 while not os.path.exists(SOCK): time.sleep(0.05)
@@ -114,5 +116,5 @@ subprocess.run([ctl, "-c", "umount t"], capture_output=True, text=True)
 ok("close t")
 print("scubed3ctl: %s" % out2.stdout.strip(), flush=True)
 
-run("fusermount", "-u", MNT); P.wait(timeout=30)
+run(FUSERMOUNT, "-u", MNT); P.wait(timeout=30)
 print("OPENERTEST OK", flush=True)

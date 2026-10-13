@@ -11,6 +11,7 @@ AM_INIT_AUTOMAKE
 AC_PROG_CC
 
 # Checks for libraries.
+PKG_CHECK_MODULES([FUSE], [fuse3])
 
 # Checks for header files.
 m4_warn([obsolete],

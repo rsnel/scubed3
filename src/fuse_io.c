@@ -15,9 +15,11 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
-#define FUSE_USE_VERSION 26
+/* the API of libfuse 3.1, it works with every version of libfuse 3 */
+#define FUSE_USE_VERSION 31
 
 #include <fuse.h>
+#include <fuse_lowlevel.h> /* fuse_parse_cmdline */
 #include <stddef.h>
 #include <string.h>
 #include <unistd.h>
@@ -36,6 +38,7 @@ typedef struct fuse_io_priv_s {
 	hashtbl_t entries, ids;
 	pthread_t control_thread;
 	control_thread_priv_t control_thread_priv;
+	int direct_io;
 } fuse_io_priv_t;
 
 /* everything that may write blocks takes the io lock of the base device
@@ -61,7 +64,8 @@ static void fuse_io_step(blockio_dev_t *dev) {
 	pthd_mutex_unlock(&entry->head.data_mutex);
 }
 
-static int fuse_io_getattr(const char *path, struct stat *stbuf) {
+static int fuse_io_getattr(const char *path, struct stat *stbuf,
+		struct fuse_file_info *fi) {
 	fuse_io_entry_t *entry;
 	assert(path && *path == '/');
 
@@ -93,19 +97,20 @@ typedef struct fuse_io_readdir_priv_s {
 } fuse_io_readdir_priv_t;
 
 static int fuse_io_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
-		off_t offset, struct fuse_file_info *fi) {
+		off_t offset, struct fuse_file_info *fi,
+		enum fuse_readdir_flags flags) {
 	fuse_io_readdir_priv_t priv = {
 		.filler = filler,
 		.buf = buf
 	};
 	int rep(fuse_io_readdir_priv_t *priv, fuse_io_entry_t *entry) {
-		priv->filler(priv->buf, entry->head.key, NULL, 0);
+		priv->filler(priv->buf, entry->head.key, NULL, 0, 0);
 		return 0;
 	}
 	if (strcmp(path, "/") != 0) return -ENOENT;
 
-	filler(buf, ".", NULL, 0);
-	filler(buf, "..", NULL, 0);
+	filler(buf, ".", NULL, 0, 0);
+	filler(buf, "..", NULL, 0, 0);
 
 	hashtbl_ts_traverse(
 			&((fuse_io_priv_t*)fuse_get_context()->private_data)->
@@ -210,8 +215,11 @@ static int fuse_io_write(const char *path, const char *buf, size_t size,
 	return ret;
 }
 
-void *fuse_io_init(struct fuse_conn_info *conn) {
+void *fuse_io_init(struct fuse_conn_info *conn, struct fuse_config *cfg) {
 	fuse_io_priv_t *priv = fuse_get_context()->private_data;
+
+	/* -o direct_io (libfuse 2 had it as a mount option) */
+	cfg->direct_io = priv->direct_io;
 
 	/* start control thread */
 	priv->control_thread_priv.h = &priv->entries;
@@ -247,10 +255,11 @@ static int fuse_io_fsync(const char *path, int datasync,
 }
 
 /* the size of a partition is changed with resize, truncate behaves as on a
- * block device: open(O_TRUNC) and ftruncate() succeed, but nothing changes
- * (dd without conv=notrunc truncates its output file, an accidental
- * "> partition" in a shell does not destroy anything) */
-static int fuse_io_truncate(const char *path, off_t size) {
+ * block device: open(O_TRUNC), truncate() and ftruncate() succeed, but
+ * nothing changes (dd without conv=notrunc truncates its output file, an
+ * accidental "> partition" in a shell does not destroy anything) */
+static int fuse_io_truncate(const char *path, off_t size,
+		struct fuse_file_info *fi) {
 	fuse_io_entry_t *entry = hashtbl_find_element_bykey(
 			&((fuse_io_priv_t*)fuse_get_context()->private_data)->
 			entries, path + 1);
@@ -296,11 +305,6 @@ static int fuse_io_fallocate(const char *path, int mode, off_t offset,
 	return ret;
 }
 
-static int fuse_io_ftruncate(const char *path, off_t size,
-		struct fuse_file_info *fi) {
-	return fuse_io_truncate(path, size);
-}
-
 #if 0
 
 static int fuse_io_flush(const char *path, struct fuse_file_info *fi) {
@@ -330,7 +334,6 @@ static struct fuse_operations fuse_io_operations = {
 	.destroy = fuse_io_destroy,
 	.fsync = fuse_io_fsync,
 	.truncate = fuse_io_truncate,
-	.ftruncate = fuse_io_ftruncate,
 	.fallocate = fuse_io_fallocate,
 //	.flush = fuse_io_flush
 };
@@ -362,39 +365,72 @@ static void freer(fuse_io_entry_t *entry) {
 	free(entry);
 }
 
-/* we want access to the mountpoint, so we copy
- * the definition of fuse_main_comon and pass the mountpoint
- * to the control thread */
+/* fuse_main, but we want access to the mountpoint (it is passed to the
+ * control thread) */
 static int fuse_main_custom(int argc, char *argv[],
 		const struct fuse_operations *op,
-		size_t op_size, void *user_data, int compat) {
+		size_t op_size, void *user_data) {
 	fuse_io_priv_t *priv = user_data;
+	struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
+	struct fuse_cmdline_opts opts;
+	struct fuse_session *se;
 	struct fuse *fuse;
-	int multithreaded;
-	int res;
+	int res = 1;
 
-	fuse = fuse_setup(argc, argv, op, op_size,
-			&priv->control_thread_priv.mountpoint,
-			&multithreaded, priv);
+	if (fuse_parse_cmdline(&args, &opts)) return 1;
 
-	if (!fuse) return 1;
-
-	if (*priv->control_thread_priv.mountpoint == '/') 
-		res = multithreaded?fuse_loop_mt(fuse):fuse_loop(fuse);
-	else {
-		ERROR("the mountpoint must start with a /");
-		res = -1;
+	if (opts.show_version) {
+		printf("FUSE library version %s\n", fuse_pkgversion());
+		res = 0;
+		goto out_args;
 	}
 
-	fuse_teardown(fuse, priv->control_thread_priv.mountpoint);
+	if (opts.show_help) {
+		printf("usage: %s -b BASE [options] MOUNTPOINT\n\n", argv[0]);
+		fuse_cmdline_help();
+		fuse_lib_help(&args);
+		res = 0;
+		goto out_args;
+	}
 
-	if (res == -1) return 1;
+	if (!opts.mountpoint) {
+		ERROR("no mountpoint given");
+		goto out_args;
+	}
 
-	return 0;
+	if (*opts.mountpoint != '/') {
+		ERROR("the mountpoint must start with a /");
+		goto out_args;
+	}
+	priv->control_thread_priv.mountpoint = opts.mountpoint;
+
+	if (!(fuse = fuse_new(&args, op, op_size, priv))) goto out_args;
+
+	if (fuse_mount(fuse, opts.mountpoint)) goto out_destroy;
+
+	if (fuse_daemonize(opts.foreground)) goto out_unmount;
+
+	se = fuse_get_session(fuse);
+	if (fuse_set_signal_handlers(se)) goto out_unmount;
+
+	res = opts.singlethread?fuse_loop(fuse):
+		fuse_loop_mt(fuse, opts.clone_fd);
+	res = res?1:0;
+
+	fuse_remove_signal_handlers(se);
+out_unmount:
+	fuse_unmount(fuse);
+out_destroy:
+	fuse_destroy(fuse);
+out_args:
+	free(opts.mountpoint);
+	fuse_opt_free_args(&args);
+
+	return res;
 }
 
 int fuse_io_start(int argc, char **argv, blockio_t *b,
-		const char *control_socket) {
+		const char *control_socket, int direct_io) {
 	int ret;
 	fuse_io_priv_t priv;
 	hashtbl_init_default(&priv.entries, -1, 4, 1, 1,
@@ -402,6 +438,7 @@ int fuse_io_start(int argc, char **argv, blockio_t *b,
 	hashtbl_init_default(&priv.ids, 32, 4, 1, 1, NULL);
 
 	priv.control_thread_priv.b = b;
+	priv.direct_io = direct_io;
 	b->step = fuse_io_step;
 
 	/* create the control socket before mounting, so that errors
@@ -409,7 +446,7 @@ int fuse_io_start(int argc, char **argv, blockio_t *b,
 	priv.control_thread_priv.listen_fd = control_listen(control_socket);
 
 	ret = fuse_main_custom(argc, argv, &fuse_io_operations,
-			sizeof(fuse_io_operations), &priv, 0);
+			sizeof(fuse_io_operations), &priv);
 
 	unlink(control_socket);
 

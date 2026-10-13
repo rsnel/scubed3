@@ -72,6 +72,8 @@ void juggler_drawn_next(juggler_t*, blockio_info_t*);
 
 int juggler_in_current(juggler_t*, blockio_info_t*);
 
+int juggler_contains(juggler_t*, blockio_info_t*);
+
 blockio_info_t *juggler_get_devblock(juggler_t*);
 
 void juggler_verbose(juggler_t*, uint32_t (*getnum)(blockio_info_t*, void*),

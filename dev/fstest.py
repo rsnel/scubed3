@@ -7,6 +7,8 @@
 # restart the daemon while the shrink is unfinished, write files, grow the
 # partition, grow the filesystem; after every step e2fsck -fn and checksums
 import os, sys, time, socket, random, hashlib, subprocess
+import shutil
+FUSERMOUNT = shutil.which("fusermount3") or "fusermount"   # libfuse 3 or 2
 
 B = os.environ.get("S3BUILD", os.getcwd())
 MNT, FS, SOCK = "/mnt/s3", "/mnt/fst", "/run/scubed3/control"
@@ -26,7 +28,7 @@ def sh(*a, ok=(0,)):
 
 def start():
     global P
-    sh("fusermount", "-u", "-z", MNT, ok=(0, 1))
+    sh(FUSERMOUNT, "-u", "-z", MNT, ok=(0, 1))
     if os.path.exists(SOCK): os.unlink(SOCK)
     P = subprocess.Popen([B + "/" + daemon, "-b", base, "-f", MNT],
             stdout=log, stderr=log)
@@ -34,7 +36,7 @@ def start():
     time.sleep(0.1)
 
 def stop():
-    sh("fusermount", "-u", MNT)
+    sh(FUSERMOUNT, "-u", MNT)
     P.wait(timeout=30)
 
 def cmd(line):

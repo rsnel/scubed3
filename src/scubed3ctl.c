@@ -401,8 +401,11 @@ static int ctl_help(ctl_priv_t *priv, char *argv[]) {
 	printf("create NAME\n");
 	printf("open NAME\n");
 	printf("close NAME\n");
+	printf("resize NAME MACROBLOCKS\n");
+	printf("mke2fs NAME\n");
 	printf("mount NAME MOUNTPOINT\n");
-	printf("umount NAME\n");
+	printf("umount NAME|MOUNTPOINT\n");
+	printf("chown OWNER.GROUP NAME|MOUNTPOINT\n");
 	printf("paranoia LEVEL [KIBPS]\n");
 	return 0;
 }
@@ -901,7 +904,7 @@ void show_help() {
 	printf("                  iterations=NUMBER, keep a backup of it!\n");
 	printf("-s KDF_SALT       salt used for KDF, overrides the config file (%s)\n", DEFAULT_KDF_SALT);
 	printf("-i KDF_ITERATIONS iterations done by KDF, overrides the config file (%u)\n", DEFAULT_KDF_ITERATIONS);
-	printf("-a SOCKET_ADDRESS addres of scubed3 socket (%s)\n", CONTROL_SOCKET);
+	printf("-a SOCKET_ADDRESS address of scubed3 socket (%s)\n", CONTROL_SOCKET);
 	printf("-Y                assume Yes to questions, this option is DANGEROUS\n");
 	printf("                  and must be specified 3 times to take effect\n");
 	printf("-c COMMAND        non interactive mode, run COMMAND and exit,\n");

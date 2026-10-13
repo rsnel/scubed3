@@ -1,4 +1,11 @@
-shrinking
-rwlock paranoia levels infrastructure
-ext2 block minder
+rwlock: reads of a partition wait for its writes (the lock of the partition);
+in paranoia level 3 a writer that waits for its turn blocks the reads of its
+partition (and io_mutex blocks the writes of the other partitions)
 safe backup iv's
+a crash while a removed partition is wiped leaves the blocks that are not
+wiped yet, the wipe cannot be resumed
+opening a partition reads the index of every macroblock of the base device,
+that is slow for large base devices
+the paranoia level is not stored: what is written before it is switched
+(after a start) is written in level 1, scubed3ctl could warn when a partition
+is mounted in level 0 or 1

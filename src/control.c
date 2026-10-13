@@ -24,7 +24,6 @@
 #include <sys/un.h>
 #include <sys/stat.h>
 #include <signal.h>
-#include <fuse.h>
 #include <assert.h>
 #include "verbose.h"
 #include "util.h"

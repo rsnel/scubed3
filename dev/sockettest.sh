@@ -4,6 +4,7 @@
 # takeover of a stale socket, peer check, removal at exit
 #
 # usage: sockettest.sh DAEMON SCUBED3CTL (as root, user nobody must exist)
+FUSERMOUNT=$(command -v fusermount3 || echo fusermount)
 D=$1; C=$2; T=$(mktemp -d); M=/mnt/s3; S=/run/scubed3/control
 fail() { echo "SOCKETTEST FAILED: $*"; exit 1; }
 send() { python3 -c "
@@ -22,7 +23,7 @@ mode() { stat -c '%a %U %F' $1; }
 start() { $D -b $1 -f $M $2 > $T/log.$3 2>&1 & }
 for i in 1 2; do head -c $((4<<22)) /dev/urandom > $T/base$i; done
 mkdir -p $T/m2
-fusermount -u -z $M 2>/dev/null
+$FUSERMOUNT -u -z $M 2>/dev/null
 
 start $T/base1 "" 1; waitsock $S; P1=$!
 [ "$(mode /run/scubed3)" = "700 root directory" ] || fail "dir: $(mode /run/scubed3)"
@@ -56,12 +57,12 @@ grep -q "refused connection on the control socket from uid 65534" $T/log.1 || fa
 echo "peer check: nobody's connection $r"
 
 # stale socket after kill -9 is taken over
-kill -9 $P1; wait $P1 2>/dev/null; fusermount -u -z $M
+kill -9 $P1; wait $P1 2>/dev/null; $FUSERMOUNT -u -z $M
 [ -S $S ] || fail "socket gone after kill -9?"
 start $T/base1 "" 3; P3=$!; sleep 1
 [ "$(send $S)" = OK ] || fail "stale socket not taken over: $(tail -2 $T/log.3)"
 echo "stale socket taken over"
-fusermount -u $M; wait $P3
+$FUSERMOUNT -u $M; wait $P3
 [ -e $S ] && fail "socket not removed at exit"
 echo "socket removed at exit"
 
@@ -77,6 +78,6 @@ start $T/base1 "-a $T/new/control" 5; waitsock $T/new/control; P5=$!
 [ "$(mode $T/new)" = "700 root directory" ] || fail "new dir: $(mode $T/new)"
 $C -q -a $T/new/control -c static-info > /dev/null || fail "scubed3ctl -a"
 echo "-a $T/new/control: directory created, $(mode $T/new)"
-fusermount -u $M; wait $P5
+$FUSERMOUNT -u $M; wait $P5
 rm -rf $T
 echo "SOCKETTEST OK"

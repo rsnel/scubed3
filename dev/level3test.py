@@ -18,6 +18,8 @@
 # usage: level3test.py DAEMON-crash SCUBED3CTL SEED
 # (small blocks are used: -m 12 -M 16, 64 KiB macroblocks)
 import os, sys, time, socket, random, hashlib, subprocess, errno, math, threading, atexit
+import shutil
+FUSERMOUNT = shutil.which("fusermount3") or "fusermount"   # libfuse 3 or 2
 
 B = os.environ.get("S3BUILD", os.getcwd())
 MNT, SOCK = "/mnt/s3", "/run/scubed3/control"
@@ -41,7 +43,7 @@ def size(n): return (PARTS[n] - reserved(PARTS[n])) * MMPM
 
 def start():
     global P
-    subprocess.run(["fusermount", "-u", "-z", MNT], capture_output=True)
+    subprocess.run([FUSERMOUNT, "-u", "-z", MNT], capture_output=True)
     if os.path.exists(SOCK): os.unlink(SOCK)
     P = subprocess.Popen([B + "/" + daemon, "-b", base, "-m", str(M_LOG), "-M", str(MM_LOG),
         "-f", "-o", "direct_io", MNT], stdout=log, stderr=log,
@@ -53,11 +55,11 @@ def start():
 
 def stop():
     for n in PARTS: cmd("close " + n, ok=False)
-    subprocess.run(["fusermount", "-u", MNT], check=True); P.wait(timeout=60)
+    subprocess.run([FUSERMOUNT, "-u", MNT], check=True); P.wait(timeout=60)
 
 def kill():
     P.kill(); P.wait()
-    subprocess.run(["fusermount", "-u", "-z", MNT], capture_output=True)
+    subprocess.run([FUSERMOUNT, "-u", "-z", MNT], capture_output=True)
 
 def cmd(line, ok=True):
     s = socket.socket(socket.AF_UNIX); s.connect(SOCK)
@@ -217,6 +219,6 @@ time.sleep(0.5); w0 = len(wlog_read()); time.sleep(3); w1 = len(wlog_read())
 check("paranoia level 1" in st and w1 == w0, "closing a partition switches back to level 1, "
       "no more writes (%d)" % (w1 - w0))
 cmd("close a")
-subprocess.run(["fusermount", "-u", MNT]); P.wait(timeout=60)
+subprocess.run([FUSERMOUNT, "-u", MNT]); P.wait(timeout=60)
 os.unlink(base)
 print("LEVEL3TEST %s" % ("OK" if not errors else "FAILED: %s" % errors), flush=True)

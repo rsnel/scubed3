@@ -4,15 +4,15 @@ License
 GPL v3 or (at your option) any later version
 
 
-Terminoloy
-~~~~~~~~~~
+Terminology
+~~~~~~~~~~~
 
 base device: this file/device/database holds all macroblocks, our worst case
 threat-model assumes an adversary can make snapshots of it at will, each block
 has a number
 
 scubed3 partition: a block device whose contents are managed by a scubed3
-deamon, writing to a scubed3 partition causes changes to the macroblocks in
+daemon, writing to a scubed3 partition causes changes to the macroblocks in
 the base device
 
 macroblocks: the smallest bit of information to someone who doesn't have the
@@ -31,7 +31,7 @@ block for use as IV (see Encryption).
 indexblocks are encrypted with IV = ESSIV(0, 0, macroblock_number)
 
 mesoblocks are encrypted with IV = ESSIV(seqno, mesoblock_number,
-macroblock_number), mesoblock_number is 1..255
+macroblock_number), mesoblock_number is 1..255 (with the default sizes)
 
 the indexblock IV will repeat when the same disk block is written
 
@@ -62,7 +62,7 @@ Threat model
 
 The adversary has full knowledge about the macroblocks (including history) and
 may even have write access to them. This adversary may have keys to some
-scubed3 partitions. The goal is to be able to plausibly deny the existance of
+scubed3 partitions. The goal is to be able to plausibly deny the existence of
 partitions to which the adversary has no keys.  Only paranoia level 3 protects
 completely against this. We assume the adversary cannot detect read access.
 
@@ -74,7 +74,7 @@ When a new macroblock needs to be selected:
 
 Level 0: not paranoid
 
-it is selected from all allocated blocks based on it's emptyness, the most
+it is selected from all allocated blocks based on its emptiness, the most
 empty block gets selected (the block with the least live data, at random if
 there are more of them; not the block that is written now). The garbage
 collector then copies the least data, so writing is faster, but the order
@@ -82,7 +82,7 @@ of the writes shows which blocks hold old data. A block with a lot of live
 data is not rewritten as long as there are emptier blocks, so old versions
 of discarded data in it stay on disk (they stay dead: their tombstones are
 kept as long as they are on disk). Switch it on with
-"paranoia 0" in scubed3ctl. After switching from level 0 to level 1 or 2,
+"paranoia 0" in scubed3ctl. After switching from level 0 to level 1, 2 or 3,
 the first two writes of every partition go to blocks that were chosen in
 level 0 (they are chosen in advance, see "Write order").
 
@@ -124,8 +124,8 @@ and the blocks it gets were free.
 Level 2 hides where the writes go, not how many there are: if you write only
 to a hidden partition and reveal the key of another partition, the revealed
 partition is seen to be rewritten without new data; level 3 hides that.
-The same goes for the timing of the writes (level 3 hides that too): a partition writes its current
-block when it is full, and the current block first takes the live data of
+The same goes for the timing of the writes (level 3 hides that too): a
+partition writes its current block when it is full, and the current block first takes the live data of
 the next block, so the less live data the next block has, the more new data
 fits before the next write. Someone who knows when you write data, can see
 that the writes right after a pause more often go to blocks with little
@@ -174,8 +174,51 @@ with the rate, it writes as fast as it can (writes that are more than 4
 average intervals plus 1 second late are skipped).
 
 
+Quick start
+~~~~~~~~~~~
+
+As root, with a base file (or a block device) filled with random data, the
+daemon, and scubed3ctl (it asks for the passphrase, twice when creating):
+
+	# head -c 4G /dev/urandom > /var/lib/scubed3.base
+	# scubed3 -b /var/lib/scubed3.base /mnt/scubed3
+	# scubed3ctl
+	s3> create secret
+	s3> resize secret 400
+	s3> mke2fs secret
+	s3> mount secret /mnt/secret
+	...
+	s3> umount secret
+
+"resize secret 400" gives the partition 400 macroblocks of 4 MiB (a quarter
+of them is reserved for the garbage collector, so it holds 1.2 GiB); help
+lists the commands of scubed3ctl. mount opens the partition if needed, and
+then umount closes it. The files of the open partitions are in /mnt/scubed3,
+any program can use them, losetup(8) makes block devices of them.
+
+Keep the -m and -M options of scubed3 the same forever: the sizes are not
+stored, with other sizes the partitions are not found. With the default sizes
+the base device can be at most 408 GiB, larger devices need larger
+mesoblocks (see "Example calculation of indexblock size").
+
+In paranoia level 2 and 3, do it in this order: open ALL partitions (open
+NAME), switch the level (paranoia 2), then mount them. The level is not
+stored, after a start of scubed3 it is level 1, and what is written before
+the level is switched (mounting a filesystem writes to it) is written in
+level 1, that shows which blocks belong to which partition. Do not close or
+umount a partition while you want to stay in level 2 or 3: closing switches
+back to level 1.
+
 How to start
 ~~~~~~~~~~~~
+
+Building needs libfuse 3, libgcrypt and readline (and their development
+files), and autoconf, automake and pkg-config:
+
+	./autogen.sh && ./configure && make
+
+The programs are src/scubed3 and src/scubed3ctl.
+
 
 You need to provide a set of macroblocks to scubed3, to which it has read/write
 access. Normally this is either a file or a block device, but it may be
@@ -192,6 +235,12 @@ macroblock has 2 to 2^16 mesoblocks, and the index must fit in one mesoblock.
 The sizes are not stored in the macroblocks: a set of macroblocks must always
 be used with the same sizes. KIBPS is the rate of paranoia level 3 in KiB/s
 (default 800), it does not switch level 3 on.
+
+The FUSE options are those of libfuse 3 (see mount.fuse3(8)), for example
+-f (stay in the foreground), -d (debug output) and -o allow_other. scubed3
+also accepts -o direct_io, which libfuse 2 had and libfuse 3 has not: reads
+and writes of the partition files then bypass the page cache of the kernel.
+A partition is unmounted with fusermount3 -u MOUNTPOINT (or umount, as root).
 
 
 Key derivation
@@ -260,12 +309,14 @@ name has no real meaning, you can open any partition under any name
 
 - close NAME
 
-closes a partition (it must not be in use)
+closes a partition (it must not be in use; a removed partition in level 2
+or 3 only when it is wiped, see Shrinking)
 
 - resize-internal NAME BLOCKS RESERVED
 
 resizes a partition to BLOCKS macroblocks, of which RESERVED are kept free
-(the usable size is (BLOCKS - RESERVED)*255 mesoblocks); see Shrinking; a
+(the usable size is (BLOCKS - RESERVED)*(mesoblocks per macroblock - 1)
+mesoblocks); see Shrinking; a
 partition has at least 2 blocks (with 1 block, every write would overwrite
 the only copy of its state), 0 blocks removes it; at least 1 block is
 reserved (the GC always empties one block, a partition that would be
@@ -313,7 +364,7 @@ for testing: write COUNT blocks, show the state of the juggler
 lists the commands, closes the connection
 
 
-Example calculation if indexblock size
+Example calculation of indexblock size
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 For this example we assume the following. Macroblock size 4MB (m). Mesoblock
@@ -413,6 +464,8 @@ block is written, it absorbs all live mesoblocks of the tail, so nothing is
 lost when the tail is overwritten. If the tail is the current block itself,
 the current block is written out without new data and the next block is
 drawn again (this happens with probability 1/N for a pool of N blocks).
+In paranoia level 0 the next block is not drawn: it is the block with the
+least live data (not the current block).
 
 Paranoia level 2 is built on top of this: to write a block of the whole
 disk, a partition is picked with a probability proportional to its pool size
@@ -565,6 +618,7 @@ removed blocks are given back. On startup, the blocks that the most recent
 block removed are given back after the first write. A grow takes back the removed
 blocks of the partition that are not given back yet, before it takes
 unallocated blocks.
+
 Removing a partition (shrinking it to 0 blocks): its last blocks (the
 current and the next block, and the two most recently written blocks) are
 removed together, when none of them has live data: by a final write of the
@@ -600,8 +654,9 @@ partition (an old index of it is the most recent one that is left), means
 that the state of the partition is damaged: it is not opened (the other
 partitions are not affected).
 
-A removed block is not written to by its partition: removing blocks causes
-no extra writes and the write order stays uniform.
+Apart from the wiping of a removed partition, a removed block is not
+written to by its partition: removing blocks causes no extra writes and the
+write order stays uniform.
 
 On startup, a block with our signature is stale (not replayed) if it is
 FREE in the bitmap of the most recent block, or if its seqno < trim_floor.
@@ -630,311 +685,3 @@ The directory dev/ contains the tests and the development tools: torture
 tests (grow, shrink, crashes, torn writes), tests with filesystems on top,
 statistical tests of the paranoia levels and an independent offline reader
 of the format; dev/README explains them.
-
-Random block selection
-~~~~~~~~~~~~~~~~~~~~~~
-
-How to randomly select blocks and assign roles to them?
-
-In this example, we use 6 macroblocks, each write a group of 3 blocks needs to
-be preserved. 
-
-Suppose we have the random numbers 20312015..
-
-The algorithm works as follows:
-- assume the current list of random numbers is valid
-- add a number
-  * check for problems caused by this number, stop if no problems
-  * mark problem causing number as unused, check for problems
-    caused by this shift, of so continue here
-
-step  | disk   | rng output | commentary
-      | 012345 | 20312015.. |
----------------------------------------------------------------------
-0     |   0    | 2          | check none, use empty #2 as DATA0
-1     | 1 0    | 20         | check [0..0], use empty #0 as DATA1
-2     | 1 02   | 203        | check [0..1], use empty #3 as DATA2
-3     | 1302   | 2031 	    | check [0..2], use empty #1 as DATA3
-4     | 1342   | 20312      | check [1..3], overwrite DATA0 at #2 with DATA4
-5     | 5342   | 203120     | check [2..4], overwrite DATA1 at #0 with DATA5
-6     | 5642   | 203_201    | check [3..5], conflict at #1 with DATA3, mark as unused
-6.5   | 5642   | 2_3_201    | check [1..5], conflict at #0 with DATA1, mark as unused
-6.4   | 5642   | __3_201    | check [0..4], conflict at #2 with DATA0, mark as unused
-7     | 5642 7 | __3_2015   | check [], conflict at #2 with DATA0, mark as unused
-
-So, how to know when a block designation as datablock is definitive (i.e.: will not be changed to _)?
-
-Let's take for example (NO_BLOCKS=6, SIMULTANEOUS_BLOCKS=3)
-
-012345012345
-
-This looks pretty safe. Lets try to add numbers to break it
-
-012345012345 ++ 145
-0123450231451
-012345023451 251
-01234503425
-
-012345012345  ++ 1 -> 0123450123451
-0123450123451 ++ 4 -> 0123450123514
-0123450123514 ++ 5 -> 012345023145
-012345023145  ++ 1 -> 012345023451
-
-012345012345 ++ 1451 -> 012345023451
-012345023451 ++ 2512 -> 012345034512
-012345034512 ++ 3123 -> 0123045123
-0123045123
-
-012345012345 
-
-SIMULTANEOUS_BLOCKS=0 -> all blocks are immediately safe
-SIMULTANEOUS_BLOCKS=1 -> a block is safe if it is followed by another block
-SIMULTANEOUS_BLOCKS=2 -> ? due to cascade effect, you are never safe ?
-
-for example: NO_BLOCKS=4, SIMULTANEOUS_BLOCKS=2
-01230123 21
-0123012321 2
-0123012312 13
-01230123213 1
-01230123231 32
-012301232132 3
-01230123123
-
------------------------------
-NONSENSE, to delete:
-
-In this example, we use 6 macroblocks, each write a group of 3 blocks needs to
-be preserved (as can be seen in testing/, this is not possible (if you try it,
-every block will be marked as filler)), but it leads to a nice example that
-illustrates the recursive workings of the algorithm.
-
-Randomly select blocks to write is easy; just use an RNG. But how to select
-roles? We must do it in such a way, that after every write the group of 2
-blocks (that contain the state of the scubed3 device) are preserved.
-
-Suppose we have the random numbers 20312015..
-
-The algorithm works as follows. The the first random number, mark the block as used
-on de disk as a DATA block. Take the next random number:
-- if we overwrite an old data block, a filler block or an empty block, just continue
-- if we overwrite a data block that is not old enough, backtrack to that block,
-  mark it as filler and then revisit all blocks between the old block and the current block
-  (revisiting: because we lost a data block, we have to check that new data blocks
-  do not overwrite data blocks that are too young, if we overwrite a block that is too young,
-  backtrack and mark that block as filler etc....)
-
-
-step  | disk   | rng output | commentary
-      | 012345 | 20312015.. |
----------------------------------------------------------------------
-0     |   0    | 0          | use empty #2 as DATA0
-1     | 1 0    | 01         | use empty #0 as DATA1
-2     | 1 02   | 012        | use empty #3 as DATA2
-3     | 1302   | 0123 	    | use empty #1 as DATA3
-4     | 1342   | 01234      | overwrite DATA0 at #2 with DATA4
-5     | 5342   | 012345     | overwrite DATA1 at #0 with DATA5
-6     | 5*42   | 012345*    | conflict at #1 with DATA3, rewind to 3
-6.3   | 1-02   | 012-       |  mark #1 as FILLER
-6.4   | 1-*2   | 012-*      |  conflict at #2 with DATA0, rewind to 0
-6.4.0 |   -    | -          |   mark #1 as FILLER
-6.4.1 | 0 -    | -0         |   use empty #0 as DATA0
-6.4.2 | 0 -1   | -01        |   use empty #3 as DATA1
-6.4.3 | 0--1   | -01-       |   block #1 already marked as FILLER
-6.4.4 | 0-21   | -01-2      |   overwrite FILLER at #2 with DATA2
-6.5   | *-21   | -01-2*     |  conflict at #0 with DATA0, rewind to 1
-6.5.1 | - -    | --         |   mark #0 as FILLER
-6.5.2 | - -0   | --0        |   use empty #3 as DATA0
-6.5.3 | ---0   | --0-       |   block #1 already marked as FILLER
-6.5.4 | --10   | --0-1      |   overwrite FILLER at #2 with DATA1
-6.5.5 | 2-10   | --0-12     |   overwrite FILLER at #0 with DATA2
-6.6   | 2310   | --0-123    |   overwrite FILLER at #1 with DATA3
-7     | 2310 4 | --0-1234   | use empty #5 as DATA4
-ETC   | ETC    | ETC        | ETC
-
-step      | disk | rng output    |
-          | 0123 | 0123012301231 |
-------------------------------------------------
-0         | 0    | 0             | use empty #0 as DATA0
-1         | 01   | 01            | use empty #1 as DATA1
-2         | 012  | 012           | use empty #2 as DATA2
-3         | 0123 | 0123          | use empty #3 as DATA3
-4         | 4123 | 01234         | overwrite DATA0 at #0 with DATA4
-5         | 4523 | 012345        | overwrite DATA1 at #1 with DATA5
-6         | 4563 | 0123456       | overwrite DATA2 at #2 with DATA6
-7         | 4567 | 01234567      | overwrite DATA3 at #3 with DATA7
-8         | 8567 | 012345678     | overwrite DATA4 at #0 with DATA8
-9         | 8967 | 0123456789    | overwrite DATA5 at #1 with DATA9
-a         | 89a7 | 0123456789a   | overwrite DATA6 at #2 with DATAa
-b         | 89ab | 0123456789ab  | overwrite DATA7 at #3 with DATAb
-c         | 8*ab | 0123456789ab* | conflict at #1 with DATA9, rewind to 9
-c.9       | 8-67 | 012345678-    |  mark #1 as FILLER
-c.a       | 8-*  | 012345678-*   |  conflict at #2 with DATA6, rewind to 6
-c.a.6     | 45-3 | 012345-       |   mark #2 as FILLER
-c.a.7     | 45-* | 012345-*      |   conflict at #3 with DATA3, rewind to 3
-c.a.7.3   | 012- | 012-          |    mark #3 as FILLER
-c.a.7.4   | *12- | 012-*         |    conflict at #0 with DATA4, rewind to 0
-c.a.7.4.0 | -    | -             |     mark #0 as FILLER
-c.a.7.4.1 | -0   | -0            |     use empty #1 as DATA0
-c.a.7.4.2 | -01  | -01           |     use empty #2 as DATA1
-c.a.7.4.3 | -01- | -01-          |     block #3 already marked as FILLER
-c.a.7.4.4 | 201- | -01-2         |     overwrite FILLER at #0 with DATA2
-c.a.7.5   | 2*1- | -01-2*        |     conflict at #1 with DATA0, rewind to 1
-c.a.7.5.1 | --   | --            |      mark #1 as FILLER
-
-
-How can we be sure that te numbering of a data block is definitive?
-
-Well, just look at maximum backtrack the algorithm produces, if we are far away
-from the maximum backtrack, we assume everyhting is ok. If we would continue
-with the above example, all blocks will eventually be labeled as FILLER.
-
-[TODO: find criterium for definitive numbering]
-
-Suppose we have 4 macro blocks with the following roles:
-D1 D0 D2 D3 D1 D0
- 0  1  2  3  4  5
-
-D1 D0 D2 D1 D0 D3
- 0  1  2  3  4  5
-
-D1 -2 -3 -0 -3 -2 -3 -3 D2 -3 -1 -3 -1 D0 D3 D1
- 0                       1              2  3  4
-
-D1 -2 -3 -0 -3 -2 -3 -3 D2 -3 -1 -3 -1 -0 D3 D1 D0
- 0                       1                 2  3  4
-
--1 -2 -3 -0 -3 -2 -3 -3 D2 -3 -1 -3 -1 -0 -3 D1 D0 D3
-                         0                    1  2  3
-
--1 -2 -3 -0 -3 -2 -3 -3 D2 -3 -1 -3 -1 -0 -3 D1 D0 D3 D2
-                         0                    1  2  3  4
-
--1 -2 -3 -0 -3 -2 -3 -3 D2 -3 -1 -3 -1 -0 -3 D1 -0 D3 D2 D0
-                         0                    1     2  3  4
-
--1 -2 -3 -0 -3 -2 -3 -3 -2 -3 -1 -3 -1 -0 -3 D1 -0 -3 D2 D0 D3
-                                              0        1  2  3 
-
-NO_BLOCKS=5, SIMULTANEOUS_BLOCKS=2
-D4 D3 D0 D2 D1 D3 D0 D4 D2 D0 D1 D3 D2 D1 D0 D2 D4 D1 D3 D0 D2
-D4 D3 D0 D2 D1 D3 D0 D4 D2 D0 D1 D3 D2 D1 D0 D2 D4 D1 D3 D0 D2 D1
-D4 D3 D0 D2 D1 D3 D0 D4 D2 D0 D1 D3 D2 D1 D0 D2 D4 D1 D3 D2 D1 D0
-D4 D3 D0 D2 D1 D3 D0 D4 D2 D0 D1 D3 D2 D1 D0 D2 D4 D3 D1 D0 D2
-D4 D3 D0 D2 D1 D3 D0 D4 D2 D0 D1 D3 D2 D1 D0 D2 D4 D3 D0 D2 D1
-D4 D3 D0 D2 D1 D3 D0 D4 D2 D0 D1 D3 D2 D1 D0 D2 D4 D3 D0 D2 D1 D2
-
-1 2 3 4 5 1 2 3 4 5
-1 2 3 4 5 1 2 3 4 5 2 1
-1 2 3 4 5 1 2 3 - 5 2 4
-1 2 3 4 5 1 3 2 4 5
-
-1 2 3 4 5 1 2 3 4 5
-1 2 3 4 5 1 2 3 4 5 2
-1 2 3 4 5 1 2 3 - 5 2 4
-1 2 3 4 5 1 - 3 - 4 5 2 3
-1 2 3 4 5 1 - 3 - 4 - 2 3 5
-1 2 3 4 5 1 3 4 5 2 3
-1 2 3 4 5 1 3 4 5 2
-1 2 3 4 5 1 3 4 5 2 3
-1 2 3 4 5 1 3 4 5 2
-1 2 3 4 5 1 3 4 5 2 1
-
-1 2 3 4 5 1 2 5 3 4
-
-1234512345
-1234512354
-12345125432
-12345125423
-123415234
-y
-
-512345 ++ 43234
--1---5--234
-
-15234 ++ 134
-152--134
-
-NO_BLOCKS=3 SIMULTANEOUS_BLOCKS=2
-012012012 ++ 1
-0-2-1-0-21
-
-32103213201
-321032132012
-32103213021
-
-Maximum backtrack (in situations where not all blocks will be marked as FILLER
-
-eventually) is about equal to two times NO_BLOCKS for a run of 300000 blocks.
-So we wait 5 times NO_BLOCKS to be sure.
-
-How to restart the RNG after close/open or resize?
-
-Generate a random sequence, and assign roles according to the algorithm. Then permute the numbers
-so that the new sequence is consistent with the state of the disk.
-
-An example:
-
-Suppose the disk is at sequence 39:
-
-(the numbers here are sequence numbers, every block has
-a sequence number, in step n of the writing process, the block
-with sequence number n is written)
-
-39: 0/35~ 1/39- 2/34~ 3/38- 4/37D 5/29~ 6/32~ 7/36D
-
-This means that:
-
-block 0 OLD data block established at seqno 35
-block 1 FILLER block established at seqno 39
-block 2 OLD data block established at seqno 34
-block 3 FILLER block established at seqno 38
-block 4 CURRENT data block established at seqno 37
-block 5 OLD data block established at seqno 29
-block 6 OLD data block established at seqno 32
-block 7 CURRENT data block established at seqno 36
-
-Now we want to sync the RNG to this harddisk state.
-Assume the RNG generated  464047060734627375331140...
-our algorithm gives       -D-DDD-DDDDDDD-DDD-D-DDD...
-
-Interpret RNG output as symbols using this translation
-	01234567
-	stuvwxyz
-
-Note that this translation does not affect the roles assigned to the blocks
-by the algorithm. We get: wywswzsyszvwyuzvzxvvttws...
-
-This is the reconstructed timeline based on the pattern on disk
-and our new data.
-
-data block and prospective datablock turned to FILLER blocks ages,
-age is 0, 1 or '~' (meaning OLD), '.' overwritten or ' ' empty
-
-  3333333344444444
-  2345678901234567
-  ~.~~DD!!-D-DDD-D
-  6?207431wywswzsy
-  --old--><--new--
-0 ...01~~~
-1 .......0
-2 ..01~~~~
-3 ......01
-4 .....000
-5 ~~~~~~~~
-6 ~~~~~~~~
-7 ....0111
-
-' ' is an empty block on disk (MAY overwrite) (not shown in the example)
-'~' is an old data block on disk (MAY overwrite)
-'.' is a block that is not on disk anymore (ignore)
-'D' is a current data block (MUST NOT overwrite until it's obsolete)
-'!' is an old FILLER block (MUST overwrite
-
-Now we must choose the values of stuvwxyz based on the constraints. Since each data block
-encodes the disk block that obsoletes it, we already know the value of y and s.
-
-Furthermore:
-
-- w or y must be equal to 3 to obsolete disk block 3 in time
-- w, y or s must be equal to 1 to obsolete disk block 1 in time
-

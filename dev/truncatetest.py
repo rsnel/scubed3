@@ -5,6 +5,8 @@
 #
 # usage: truncatetest.py DAEMON
 import os, sys, time, socket, hashlib, subprocess
+import shutil
+FUSERMOUNT = shutil.which("fusermount3") or "fusermount"   # libfuse 3 or 2
 
 B = os.environ.get("S3BUILD", os.getcwd())
 MNT, SOCK = "/mnt/s3", "/run/scubed3/control"
@@ -31,7 +33,7 @@ def check(what):
     print("%s: OK" % what, flush=True)
 
 with open(base, "wb") as f: f.write(os.urandom(12 << 22))
-subprocess.run(["fusermount", "-u", "-z", MNT], capture_output=True)
+subprocess.run([FUSERMOUNT, "-u", "-z", MNT], capture_output=True)
 if os.path.exists(SOCK): os.unlink(SOCK)
 P = subprocess.Popen([B + "/" + sys.argv[1], "-b", base, "-f", MNT], stdout=log, stderr=log)
 while not os.path.exists(SOCK): time.sleep(0.05)
@@ -50,6 +52,6 @@ run(": > " + T, shell=True); check("> partition")
 run("truncate", "-s", "0", T); run("truncate", "-s", "+1M", T); check("truncate -s 0 / +1M")
 with open(T, "r+b") as f: f.truncate(12345)
 check("ftruncate")
-ok("close t"); run("fusermount", "-u", MNT); P.wait(timeout=30)
+ok("close t"); run(FUSERMOUNT, "-u", MNT); P.wait(timeout=30)
 os.unlink(B + "/trunc.img"); os.unlink(B + "/trunc.patch")
 print("TRUNCATETEST OK", flush=True)

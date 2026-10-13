@@ -4,6 +4,8 @@
 #
 # usage: sizetest.py DAEMON
 import os, sys, time, socket, hashlib, subprocess, random
+import shutil
+FUSERMOUNT = shutil.which("fusermount3") or "fusermount"   # libfuse 3 or 2
 
 B = os.environ.get("S3BUILD", os.getcwd())
 MNT, FS, SOCK = "/mnt/s3", "/mnt/sz", "/run/scubed3/control"
@@ -26,7 +28,7 @@ def run(*a):
     if r.returncode: raise RuntimeError("%s: %s %s" % (a, r.stdout, r.stderr))
 
 def start(opts):
-    subprocess.run(["fusermount", "-u", "-z", MNT], capture_output=True)
+    subprocess.run([FUSERMOUNT, "-u", "-z", MNT], capture_output=True)
     if os.path.exists(SOCK): os.unlink(SOCK)
     p = subprocess.Popen([B + "/" + sys.argv[1], "-b", base, *opts, "-f", MNT],
             stdout=open(B + "/size.log", "a"), stderr=subprocess.STDOUT)
@@ -36,7 +38,7 @@ def start(opts):
     time.sleep(0.1)
     return p
 
-def stop(p): run("fusermount", "-u", MNT); p.wait(timeout=60)
+def stop(p): run(FUSERMOUNT, "-u", MNT); p.wait(timeout=60)
 
 os.makedirs(FS, exist_ok=True)
 open(B + "/size.log", "w").close()

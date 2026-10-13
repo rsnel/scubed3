@@ -14,6 +14,8 @@
 # usage: paranoiatest.py DAEMON-crash SCUBED3CTL SEED
 # (small blocks are used: -m 12 -M 16, 64 KiB macroblocks)
 import os, sys, time, socket, random, hashlib, subprocess, errno, ctypes, math
+import shutil
+FUSERMOUNT = shutil.which("fusermount3") or "fusermount"   # libfuse 3 or 2
 
 B = os.environ.get("S3BUILD", os.getcwd())
 MNT, SOCK = "/mnt/s3", "/run/scubed3/control"
@@ -32,7 +34,7 @@ def key(name): return hashlib.pbkdf2_hmac("sha256", name.encode(), b"scubed3_pro
 
 def start():
     global P
-    subprocess.run(["fusermount", "-u", "-z", MNT], capture_output=True)
+    subprocess.run([FUSERMOUNT, "-u", "-z", MNT], capture_output=True)
     if os.path.exists(SOCK): os.unlink(SOCK)
     P = subprocess.Popen([B + "/" + daemon, "-b", base, "-m", str(M_LOG), "-M", str(MM_LOG),
         "-f", "-o", "direct_io", MNT], stdout=log, stderr=log,
@@ -43,11 +45,11 @@ def start():
     time.sleep(0.1)
 
 def stop():
-    subprocess.run(["fusermount", "-u", MNT], check=True); P.wait(timeout=60)
+    subprocess.run([FUSERMOUNT, "-u", MNT], check=True); P.wait(timeout=60)
 
 def kill():
     P.kill(); P.wait()
-    subprocess.run(["fusermount", "-u", "-z", MNT], capture_output=True)
+    subprocess.run([FUSERMOUNT, "-u", "-z", MNT], capture_output=True)
 
 def cmd(line, ok=True):
     s = socket.socket(socket.AF_UNIX); s.connect(SOCK)
@@ -262,7 +264,7 @@ if not lost:
 print("   c was not open during level 2: %s (as documented)" %
         ("its blocks were overwritten" if lost else "survived?!"), flush=True)
 if not lost: raise RuntimeError("c survived level 2 while closed?")
-if died: subprocess.run(["fusermount", "-u", "-z", MNT], capture_output=True)
+if died: subprocess.run([FUSERMOUNT, "-u", "-z", MNT], capture_output=True)
 else:
     for n in ("a", "b"): cmd("close " + n)
     try: cmd("close c")

@@ -5,6 +5,8 @@
 # the blocks of the partition must be uniform)
 # usage: memoryless.py DAEMON-crash WRITES [fsync-probability]
 import os, sys, time, socket, hashlib, subprocess, errno, random, atexit, collections, math
+import shutil
+FUSERMOUNT = shutil.which("fusermount3") or "fusermount"   # libfuse 3 or 2
 B = os.environ.get("S3BUILD", os.getcwd())
 MNT, SOCK = "/mnt/s3", "/run/scubed3/control"
 MESO, MACRO = 1 << 12, 1 << 16
@@ -21,7 +23,7 @@ def cmd(line):
         if not x: break
         buf += x
     if not buf.startswith(b"OK"): raise RuntimeError(buf)
-subprocess.run(["fusermount", "-u", "-z", MNT], capture_output=True)
+subprocess.run([FUSERMOUNT, "-u", "-z", MNT], capture_output=True)
 if os.path.exists(SOCK): os.unlink(SOCK)
 with open(base, "wb") as f: f.write(os.urandom(TOTAL * MACRO))
 if os.path.exists(wlog): os.unlink(wlog)
@@ -43,7 +45,7 @@ while nw() < writes:
         os.pwrite(fd, os.urandom(MESO), rng.randrange(int(size * 0.7)) * MESO)
         if rng.random() < pf: os.fsync(fd)
 os.close(fd)
-cmd("close a"); subprocess.run(["fusermount", "-u", MNT]); P.wait()
+cmd("close a"); subprocess.run([FUSERMOUNT, "-u", MNT]); P.wait()
 wl = [int(x) // MACRO for x in open(wlog)]
 pool = sorted(set(wl)); n = len(pool)
 last = {b: -1 for b in pool}; ranks = collections.Counter()

@@ -18,6 +18,8 @@
 #
 # usage: discardtest.py DAEMON SEED
 import os, sys, time, socket, random, hashlib, subprocess, errno, ctypes, shutil
+import shutil
+FUSERMOUNT = shutil.which("fusermount3") or "fusermount"   # libfuse 3 or 2
 
 B = os.environ.get("S3BUILD", os.getcwd())
 MNT, FS, SOCK, MESO = "/mnt/s3", "/mnt/dt", "/run/scubed3/control", 1 << 14
@@ -33,7 +35,7 @@ KEEP, PUNCH, ZERO = 1, 2, 0x10
 
 def start():
     global P
-    subprocess.run(["fusermount", "-u", "-z", MNT], capture_output=True)
+    subprocess.run([FUSERMOUNT, "-u", "-z", MNT], capture_output=True)
     if os.path.exists(SOCK): os.unlink(SOCK)
     P = subprocess.Popen([B + "/" + daemon, "-b", base, "-f", MNT], stdout=log, stderr=log)
     while not os.path.exists(SOCK): time.sleep(0.05)
@@ -41,7 +43,7 @@ def start():
     if P.poll() is not None: raise RuntimeError("daemon did not start, see log")
 
 def stop():
-    subprocess.run(["fusermount", "-u", MNT], check=True); P.wait(timeout=60)
+    subprocess.run([FUSERMOUNT, "-u", MNT], check=True); P.wait(timeout=60)
 
 def cmd(line):
     s = socket.socket(socket.AF_UNIX); s.connect(SOCK)

@@ -6,6 +6,8 @@
 # usage: killtest.py DAEMON ROUNDS SEED
 # (DISCARD=1: mount with -o discard and run fstrim before the kill)
 import os, sys, time, socket, random, hashlib, subprocess, signal
+import shutil
+FUSERMOUNT = shutil.which("fusermount3") or "fusermount"   # libfuse 3 or 2
 
 B = os.environ.get("S3BUILD", os.getcwd())
 MNT, FS, SOCK = "/mnt/s3", "/mnt/kt", "/run/scubed3/control"
@@ -25,7 +27,7 @@ def run(*a, ok=(0,)):
 
 def start():
     global P
-    run("fusermount", "-u", "-z", MNT, ok=(0, 1))
+    run(FUSERMOUNT, "-u", "-z", MNT, ok=(0, 1))
     if os.path.exists(SOCK): os.unlink(SOCK)
     P = subprocess.Popen([B + "/" + daemon, "-b", base, "-f", MNT], stdout=log, stderr=log)
     while not os.path.exists(SOCK): time.sleep(0.05)
@@ -130,4 +132,4 @@ for rnd in range(rounds):
 print("KILLTEST %s: %d rounds, %d synced files lost or corrupt" %
         ("OK" if not lost else "FAILED", rounds, lost), flush=True)
 cmd("open-internal t CBC_ESSIV(AES256) " + KEY); cmd("close t")
-run("fusermount", "-u", MNT)
+run(FUSERMOUNT, "-u", MNT)

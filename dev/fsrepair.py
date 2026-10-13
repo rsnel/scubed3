@@ -2,6 +2,8 @@
 # fsrepair.py - ext4 on scubed3: corrupt one 4KiB block of a file on disk, reading
 # the file gives EIO, rewriting the file in place repairs it, e2fsck stays clean
 import os, sys, time, socket, hashlib, subprocess, re
+import shutil
+FUSERMOUNT = shutil.which("fusermount3") or "fusermount"   # libfuse 3 or 2
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__))); import s3read
 B=os.environ.get("S3BUILD", os.getcwd()); MNT="/mnt/s3"; FS="/mnt/fr"; SOCK="/run/scubed3/control"
 KEY=hashlib.pbkdf2_hmac("sha256",b"fr",b"scubed3_prod",1000,32).hex()
@@ -9,12 +11,12 @@ base=B+"/fr.base"; open(base,"wb").write(os.urandom(16<<22)); os.makedirs(FS,exi
 log=open(B+"/fr.log","w")
 def start():
     global P
-    subprocess.run(["fusermount","-u","-z",MNT],capture_output=True)
+    subprocess.run([FUSERMOUNT,"-u","-z",MNT],capture_output=True)
     if os.path.exists(SOCK): os.unlink(SOCK)
     P=subprocess.Popen([B+"/scubed3","-b",base,"-f",MNT],stdout=log,stderr=log)
     while not os.path.exists(SOCK): time.sleep(.05)
     time.sleep(.1)
-def stop(): subprocess.run(["fusermount","-u",MNT]); P.wait()
+def stop(): subprocess.run([FUSERMOUNT,"-u",MNT]); P.wait()
 def cmd(l):
     for _ in range(100):
         s=socket.socket(socket.AF_UNIX); s.connect(SOCK); s.sendall((l+"\nexit\n").encode()); b=b""

@@ -13,7 +13,9 @@ They are not needed to use scubed3.
 Requirements
 ~~~~~~~~~~~~
 
-- Linux with FUSE, run as root (FUSE mounts, loop devices, mount(8))
+- Linux with FUSE (libfuse 3; the tests unmount with fusermount3, or with
+  fusermount if that is not there), run as root (FUSE mounts, loop devices,
+  mount(8))
 - python3, with the "cryptography" module for s3read.py and s3diff.py (and
   the tests that use s3read.py: corrupttest.py, ioerrtest.py, fsrepair.py)
 - e2fsprogs (mkfs.ext2/3/4, e2fsck, resize2fs), util-linux (losetup, fstrim,

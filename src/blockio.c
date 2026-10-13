@@ -399,9 +399,13 @@ void blockio_dev_free(blockio_dev_t *dev) {
 	}
 
 	/* the replay list may still contain blocks (creating an existing
-	 * device for example), they are also in the pool of the juggler */
-	while ((bi = dllarr_last(&dev->replay)))
+	 * device for example), they are also in the pool of the juggler,
+	 * unless opening failed before they were added to it */
+	while ((bi = dllarr_last(&dev->replay))) {
 		dllarr_remove(&dev->replay, bi);
+		if (!juggler_contains(&dev->j, bi))
+			dllarr_append(&dev->b->unallocated, bi);
+	}
 
 	/* re-add blocks to unallocated (removed blocks are not in the pool,
 	 * the removal is on disk: the current block was written above, and
@@ -1032,8 +1036,11 @@ static void blockio_dev_take_index(blockio_dev_t *dev) {
 	dev->reserved_macroblocks = binio_read_uint32_be(
 			RESERVED_BLOCKS_UINT32);
 	dev->pending_removals = binio_read_uint32_be(PENDING_UINT32);
-	if (dev->pending_removals > dev->no_macroblocks)
-		FATAL("more pending removals than blocks");
+	if (dev->pending_removals > dev->no_macroblocks) {
+		dev->no_macroblocks = dev->pending_removals = 0;
+		ecch_throw(ECCH_DEFAULT, "\"%s\" is not opened: more pending "
+				"removals than blocks", dev->name);
+	}
 	dev->no_trims = binio_read_uint32_be(NO_TRIMS_UINT32);
 	assert(dev->no_trims <= BLOCKIO_MAX_TRIMS); /* checked by scan */
 	for (i = 0; i < dev->no_trims; i++) {
@@ -1047,17 +1054,25 @@ static void blockio_dev_read_index(blockio_dev_t *dev, blockio_info_t *bi) {
 	uint32_t no = bi - dev->b->blockio_infos;
 	char sha256[32];
 
+	/* this is only done while the partition is opened, if it fails, it
+	 * is not opened (see blockio_dev_init) */
 	if (dev->b->read(dev->io, BASE, ((off_t)no)<<dev->b->macroblock_log,
-			1<<dev->b->mesoblk_log))
-		FATAL("error reading index of block %u: %s", no,
+			1<<dev->b->mesoblk_log)) {
+		dev->no_macroblocks = 0;
+		ecch_throw(ECCH_DEFAULT, "\"%s\" is not opened: error reading "
+				"the index of block %u: %s", dev->name, no,
 				strerror(errno));
+	}
 	cipher_dec(dev->c, BASE, BASE, 0, 0, no);
 
 	gcry_md_hash_buffer(GCRY_MD_SHA256, sha256, BASE + sizeof(sha256),
 			(1<<dev->b->mesoblk_log) - sizeof(sha256));
 	if (memcmp(magic, MAGIC64, sizeof(magic)) ||
-			memcmp(INDEXBLOCK_SHA256, sha256, sizeof(sha256)))
-		FATAL("index of block %u changed while opening", no);
+			memcmp(INDEXBLOCK_SHA256, sha256, sizeof(sha256))) {
+		dev->no_macroblocks = 0;
+		ecch_throw(ECCH_DEFAULT, "\"%s\" is not opened: the index of "
+				"block %u changed while opening", dev->name, no);
+	}
 }
 
 static void sort_to_replay(dllarr_t *replay, blockio_info_t *bi) {
@@ -1136,7 +1151,7 @@ void blockio_dev_scan_header(dllarr_t *replay, blockio_dev_t *dev,
 	if (memcmp(zero, TRIMS + 12*no_trims, 128 - 8 - 12*no_trims))
 		FATAL("reserved space is not zeroed out");
 	if (bi->seqno == 0) 
-		FATAL("block found with seqno 0, not possibile");
+		FATAL("block found with seqno 0, not possible");
 
 	bi->no_nonobsolete = bi->no_indices = bi->no_ondisk =
 		binio_read_uint32_be(NO_INDICES_UINT32);

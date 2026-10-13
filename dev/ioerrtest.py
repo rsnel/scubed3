@@ -9,6 +9,8 @@
 #
 # usage: ioerrtest.py DAEMON (the -crash variant)
 import os, sys, time, socket, hashlib, subprocess, errno
+import shutil
+FUSERMOUNT = shutil.which("fusermount3") or "fusermount"   # libfuse 3 or 2
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import s3read
 
@@ -23,7 +25,7 @@ P = None
 
 def start(env={}, opts=()):
     global P
-    subprocess.run(["fusermount", "-u", "-z", MNT], capture_output=True)
+    subprocess.run([FUSERMOUNT, "-u", "-z", MNT], capture_output=True)
     if os.path.exists(SOCK): os.unlink(SOCK)
     P = subprocess.Popen([B + "/" + daemon, "-b", base, "-f", *opts, MNT], stdout=log,
             stderr=log, env=dict(os.environ, **env))
@@ -31,7 +33,7 @@ def start(env={}, opts=()):
     time.sleep(0.1)
 
 def stop():
-    subprocess.run(["fusermount", "-u", MNT], check=True); P.wait(timeout=30)
+    subprocess.run([FUSERMOUNT, "-u", MNT], check=True); P.wait(timeout=30)
 
 def cmd(line, ok=True):
     for _ in range(100):

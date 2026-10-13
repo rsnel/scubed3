@@ -31,7 +31,7 @@
 #include <sys/mman.h>
 #include <sys/user.h>
 #undef NDEBUG /* we need sanity checking */
-#include <fuse/fuse_opt.h>
+#include <fuse_opt.h>
 
 #include <assert.h>
 #include "config.h"
@@ -870,6 +870,9 @@ int main(int argc, char **argv) {
 		int mesoblock_log;
 		int macroblock_log;
 		int kibps;
+		int help;
+		/* libfuse 3 has no -o direct_io, it is set in fuse_io_init */
+		int direct_io;
 	} options = {
 		.base = NULL,
 		.control = NULL,
@@ -883,6 +886,9 @@ int main(int argc, char **argv) {
 		SCUBED3_OPT_KEY("-m %d", mesoblock_log, 0),
 		SCUBED3_OPT_KEY("-M %d", macroblock_log, 0),
 		SCUBED3_OPT_KEY("-r %d", kibps, 0),
+		SCUBED3_OPT_KEY("-h", help, 1),
+		SCUBED3_OPT_KEY("--help", help, 1),
+		SCUBED3_OPT_KEY("direct_io", direct_io, 1),
 		FUSE_OPT_END
 	};
 	int ret;
@@ -896,6 +902,27 @@ int main(int argc, char **argv) {
 
 	if (fuse_opt_parse(&args, &options, scubed3_opts, NULL) == -1)
 		FATAL("error parsing options");
+
+	if (options.help) {
+		printf("usage: %s -b BASE [-a CONTROL_SOCKET] [-m MESOBLOCK_LOG] "
+				"[-M MACROBLOCK_LOG]\n\t[-r KIBPS] [FUSE options] "
+				"MOUNTPOINT\n\n"
+				"-b BASE           the file or block device with the "
+				"macroblocks\n"
+				"-a CONTROL_SOCKET the control socket (%s)\n"
+				"-m MESOBLOCK_LOG  mesoblock size 2^MESOBLOCK_LOG "
+				"(12..20, 14)\n"
+				"-M MACROBLOCK_LOG macroblock size 2^MACROBLOCK_LOG "
+				"(22)\n"
+				"-r KIBPS          rate of paranoia level 3 in KiB/s "
+				"(%d)\n\n"
+				"FUSE options: -f (foreground), -d (debug), "
+				"-s (single threaded), -o OPTION,...\n"
+				"(see mount.fuse3(8)), and -o direct_io "
+				"(bypass the page cache); see the README\n", argv[0],
+				CONTROL_SOCKET, BLOCKIO_DEFAULT_RATE>>10);
+		exit(0);
+	}
 
 	if (!options.base) FATAL("argument -b FILE is required");
 
@@ -929,7 +956,8 @@ int main(int argc, char **argv) {
 			options.macroblock_log, options.mesoblock_log);
 
 	ret = fuse_io_start(args.argc, args.argv, &b,
-			options.control?options.control:CONTROL_SOCKET);
+			options.control?options.control:CONTROL_SOCKET,
+			options.direct_io);
 
 	blockio_free(&b);
 

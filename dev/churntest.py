@@ -15,6 +15,8 @@
 # (small blocks: -m 12 -M 16, 64 KiB macroblocks; level 3 with KIBPS, default
 # 6400: 100 writes per second)
 import os, sys, time, socket, random, hashlib, subprocess, errno, threading, atexit
+import shutil
+FUSERMOUNT = shutil.which("fusermount3") or "fusermount"   # libfuse 3 or 2
 
 B = os.environ.get("S3BUILD", os.getcwd())
 MNT, SOCK = "/mnt/s3", "/run/scubed3/control"
@@ -39,7 +41,7 @@ def usable(n): return (n - reserved(n)) * MMPM if n else 0
 
 def start():
     global P
-    subprocess.run(["fusermount", "-u", "-z", MNT], capture_output=True)
+    subprocess.run([FUSERMOUNT, "-u", "-z", MNT], capture_output=True)
     if os.path.exists(SOCK): os.unlink(SOCK)
     P = subprocess.Popen([B + "/" + daemon, "-b", base, "-m", str(M_LOG), "-M", str(MM_LOG),
         "-f", "-o", "direct_io", MNT], stdout=log, stderr=log)
@@ -183,7 +185,7 @@ for n in PARTS:
     bad = verify(n, usable(PARTS[n]), model[n])
     if bad: fail("%s: %d bad mesoblocks" % (n, len(bad)))
 for n in PARTS: cmd("close " + n)
-subprocess.run(["fusermount", "-u", MNT]); P.wait(timeout=120)
+subprocess.run([FUSERMOUNT, "-u", MNT]); P.wait(timeout=120)
 start()
 for n in PARTS:
     cmd("open-internal %s CBC_ESSIV(AES256) %s" % (n, key(n)))
@@ -194,6 +196,6 @@ unclaimed = int([l for l in st.split("\n") if "unclaimed" in l][0].split()[0])
 if unclaimed != TOTAL - sum(PARTS.values()):
     fail("after restart: %d blocks unclaimed, expected %d" % (unclaimed, TOTAL - sum(PARTS.values())))
 for n in PARTS: cmd("close " + n)
-subprocess.run(["fusermount", "-u", MNT]); P.wait(timeout=120)
+subprocess.run([FUSERMOUNT, "-u", MNT]); P.wait(timeout=120)
 os.unlink(base)
 print("CHURNTEST %s" % ("OK" if not errors else "FAILED: %s" % errors[:5]), flush=True)

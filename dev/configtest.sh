@@ -5,6 +5,7 @@
 # /etc/scubed3.conf is the default, errors in the file are fatal
 #
 # usage: configtest.sh DAEMON SCUBED3CTL (run as root, in the build directory)
+FUSERMOUNT=$(command -v fusermount3 || echo fusermount)
 set -e
 D=$1; C=$2; T=$(mktemp -d); MNT=/mnt/s3
 fail() { echo "CONFIGTEST FAILED: $*"; exit 1; }
@@ -20,7 +21,7 @@ ctl() { (sleep 1; printf 'pw\n'; sleep 1; printf 'pw\n'; sleep 2) | script -qc "
 [ -e /etc/scubed3.conf ] && fail "/etc/scubed3.conf exists, move it away first"
 printf '# test\n\nkdf = PBKDF2-SHA256\nsalt=  my salt 123  \niterations=1000\n' > $T/s3.conf
 head -c $((8<<22)) /dev/urandom > $T/base
-fusermount -u -z $MNT 2>/dev/null || true; rm -f /run/scubed3/control
+$FUSERMOUNT -u -z $MNT 2>/dev/null || true; rm -f /run/scubed3/control
 $D -b $T/base -f $MNT > $T/log 2>&1 & sleep 0.5
 ctl "-C $T/s3.conf" "create t"; $C -q -YYY -C $T/s3.conf -c "resize t 4"
 head -c 1048576 /dev/urandom > $T/data; dd if=$T/data of=$MNT/t bs=1M conv=notrunc 2>/dev/null
@@ -49,5 +50,5 @@ err '# ok\nsalz=x\n' "unknown key"
 err 'salt\n' "expected KEY=VALUE"
 err 'salt=\n' "empty value"
 out=$($C -C $T/none.conf -c status 2>&1 || true); echo "$out" | grep -q "unable to open" || fail "missing -C file"
-fusermount -u $MNT; sleep 1; rm -rf $T
+$FUSERMOUNT -u $MNT; sleep 1; rm -rf $T
 echo "CONFIGTEST OK"

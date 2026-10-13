@@ -15,6 +15,8 @@
 # usage: resizestat.py DAEMON-crash ROUNDS SEED
 # (small blocks are used: -m 12 -M 16, 64 KiB macroblocks)
 import os, sys, time, socket, random, hashlib, subprocess, errno, math, re
+import shutil
+FUSERMOUNT = shutil.which("fusermount3") or "fusermount"   # libfuse 3 or 2
 
 B = os.environ.get("S3BUILD", os.getcwd())
 MNT, SOCK = "/mnt/s3", "/run/scubed3/control"
@@ -82,7 +84,7 @@ def write_some(fd, nb, n=5):
     for _ in range(n):
         os.pwrite(fd, os.urandom(MESO), rng.randrange(usable(nb)) * MESO)
 
-subprocess.run(["fusermount", "-u", "-z", MNT], capture_output=True)
+subprocess.run([FUSERMOUNT, "-u", "-z", MNT], capture_output=True)
 if os.path.exists(SOCK): os.unlink(SOCK)
 with open(base, "wb") as f: f.write(os.urandom(TOTAL * MACRO))
 if os.path.exists(wlog): os.unlink(wlog)
@@ -186,7 +188,7 @@ print("oldest blocks of the partition in %d writes during a shrink: %d hits, exp
 print("all writes uniform: chi2=%.0f df=%d z=%.2f; consecutive independent: z=%.2f" %
       (c2, df, zu, zi))
 cmd("close a"); cmd("close b")
-subprocess.run(["fusermount", "-u", MNT]); P.wait(timeout=60)
+subprocess.run([FUSERMOUNT, "-u", MNT]); P.wait(timeout=60)
 os.unlink(base)
 bad = [x for x in (zg, zs, zu, zi) if abs(x) > 4]
 print("RESIZESTAT %s" % ("FAILED" if bad else "OK"), flush=True)

@@ -15,6 +15,8 @@
 #    value written since; a resize has its own window, after a crash the
 #    partition is either completely pre-resize or completely post-resize
 import os, sys, time, socket, random, hashlib, struct, subprocess, errno, ctypes
+import shutil
+FUSERMOUNT = shutil.which("fusermount3") or "fusermount"   # libfuse 3 or 2
 
 B = os.environ.get("S3BUILD", os.getcwd())
 MNT = "/mnt/s3"
@@ -57,7 +59,7 @@ class Crashed(Exception): pass
 class Daemon:
     def __init__(self): self.p = None
     def start(self, crash_after=None):
-        subprocess.run(["fusermount", "-u", "-z", MNT], stderr=subprocess.DEVNULL)
+        subprocess.run([FUSERMOUNT, "-u", "-z", MNT], stderr=subprocess.DEVNULL)
         if os.path.exists(SOCK): os.unlink(SOCK)
         env = dict(os.environ)
         env.pop("SCUBED3_CRASH_AFTER", None)
@@ -82,9 +84,9 @@ class Daemon:
         except subprocess.TimeoutExpired: return False
     def stop(self):
         if self.alive():
-            subprocess.run(["fusermount", "-u", MNT], stderr=subprocess.DEVNULL)
+            subprocess.run([FUSERMOUNT, "-u", MNT], stderr=subprocess.DEVNULL)
             self.p.wait(timeout=20)
-        subprocess.run(["fusermount", "-u", "-z", MNT], stderr=subprocess.DEVNULL)
+        subprocess.run([FUSERMOUNT, "-u", "-z", MNT], stderr=subprocess.DEVNULL)
         self.p = None
 
 D = Daemon()
@@ -347,7 +349,7 @@ def clean_restart():
     stats["restarts"] += 1
 
 # ---- setup
-subprocess.run(["fusermount", "-u", "-z", MNT], stderr=subprocess.DEVNULL)
+subprocess.run([FUSERMOUNT, "-u", "-z", MNT], stderr=subprocess.DEVNULL)
 os.makedirs(MNT, exist_ok=True)
 with open(base, "wb") as f: f.write(os.urandom(TOTAL << MM_LOG))
 D.start()

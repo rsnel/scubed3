@@ -16,6 +16,8 @@
 # usage: wipetest.py DAEMON-crash SEED
 # (small blocks: -m 12 -M 16, 64 KiB macroblocks)
 import os, sys, time, socket, random, hashlib, subprocess, errno, struct, atexit
+import shutil
+FUSERMOUNT = shutil.which("fusermount3") or "fusermount"   # libfuse 3 or 2
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 B = os.environ.get("S3BUILD", os.getcwd())
@@ -37,7 +39,7 @@ def usable(n): return (n - reserved(n)) * MMPM
 
 def start(crash_after=None):
     global P
-    subprocess.run(["fusermount", "-u", "-z", MNT], capture_output=True)
+    subprocess.run([FUSERMOUNT, "-u", "-z", MNT], capture_output=True)
     if os.path.exists(SOCK): os.unlink(SOCK)
     env = dict(os.environ)
     if crash_after: env["SCUBED3_CRASH_AFTER"] = str(crash_after)
@@ -49,7 +51,7 @@ def start(crash_after=None):
     time.sleep(0.1)
 
 def stop():
-    subprocess.run(["fusermount", "-u", MNT], capture_output=True)
+    subprocess.run([FUSERMOUNT, "-u", MNT], capture_output=True)
     try: P.wait(timeout=60)
     except subprocess.TimeoutExpired: P.kill(); P.wait()
 
@@ -177,7 +179,7 @@ for r in range(12):
         while int(info("c")["wipe_left"]) and time.monotonic() - t0 < 60: time.sleep(0.1)
     except (OSError, RuntimeError): pass
     if not dead(): P.kill(); P.wait()
-    subprocess.run(["fusermount", "-u", "-z", MNT], capture_output=True)
+    subprocess.run([FUSERMOUNT, "-u", "-z", MNT], capture_output=True)
     start()
     t = cmd("open-internal c CBC_ESSIV(AES256) %s" % k, ok=False)
     if t.startswith("OK"):

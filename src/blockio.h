@@ -49,6 +49,7 @@ typedef struct blockio_s blockio_t;
 
 struct blockio_info_s {
 	uint32_t pool_index; // position in the pool of the juggler
+	uint64_t added, removed; // draws of the juggler (see juggler.h)
 
 	/* for unallocated, replay and release */
 	dllarr_elt_t ur;

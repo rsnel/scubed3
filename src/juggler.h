@@ -28,12 +28,24 @@
  * that currently belong to the partition (the pool), so the order of the
  * writes is i.i.d. uniform over the pool, also when the pool changes;
  * the block that will be written next is drawn one write in advance, so
- * that its live data can be copied to the block that is written now */
+ * that its live data can be copied to the block that is written now;
+ *
+ * the juggler remembers from which blocks the current block and the next
+ * block were drawn (their draw sets): the draws are numbered, a block has
+ * the number of the draws when it was added and when it was removed, it is
+ * in the draw set of draw m if added < m <= removed; the scheduler of
+ * paranoia level 2 needs the draw set of the current block (the write of
+ * the partition lands uniformly in it), a block that is removed stays in it
+ * until the next block is drawn without it (see blockio_dev_release_removed)
+ * and blocks that are added are put in the draw set of the next block */
 typedef struct juggler_s {
 	blockio_info_t **pool;
 	uint32_t no_pool, size_pool;
 	blockio_info_t *next; /* the block that will be written next */
 	uint64_t seqno; /* seqno of the most recent write */
+	uint64_t draws; /* the number of draws, the last draw is next */
+	uint64_t cur_draw; /* the draw of the current block */
+	uint32_t next_pool, cur_pool; /* sizes of their draw sets */
 	random_t *r;
 } juggler_t;
 
@@ -45,9 +57,15 @@ void juggler_add_macroblock(juggler_t*, blockio_info_t*);
 
 void juggler_remove_macroblock(juggler_t*, blockio_info_t*);
 
+void juggler_take_back(juggler_t*, blockio_info_t*);
+
 blockio_info_t *juggler_nth(juggler_t*, uint32_t);
 
 void juggler_set_next(juggler_t*, blockio_info_t*);
+
+void juggler_drawn_next(juggler_t*, blockio_info_t*);
+
+int juggler_in_current(juggler_t*, blockio_info_t*);
 
 blockio_info_t *juggler_get_devblock(juggler_t*);
 

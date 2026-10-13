@@ -170,6 +170,11 @@ void copy_old_block_to_current(scubed3_t *l) {
 	 * waits in select_new_macroblock until there is room) */
 	if (!l->dev->pending_removals) return;
 
+	/* a block that is its own next block removes nothing: if its next
+	 * write is interrupted, the state falls back to the block before it
+	 * (see blockio_dev_release_removed) */
+	if (l->dev->self_tail) return;
+
 	if (!(victim = blockio_dev_find_victim(l->dev))) return;
 
 	absorb_block(l, victim);
@@ -354,8 +359,8 @@ void scubed3_free(scubed3_t *l) {
 	/* the current block will be written if it is updated (this
 	 * happens also after a resize), the tail must be absorbed first */
 	/* write out the current block; removed blocks are released after a
-	 * write of a block that is not its own next block (see
-	 * blockio_dev_write_current_macroblock), they are given away when the
+	 * write, when the next block is drawn without them (see
+	 * blockio_dev_release_removed), they are given away when the
 	 * partition is closed, so write until they are released */
 	while (l->dev && l->dev->bi && (l->dev->updated ||
 				dllarr_count(&l->dev->release)))

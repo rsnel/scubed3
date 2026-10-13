@@ -98,7 +98,8 @@ proportional to its number of blocks (it writes the block its juggler chose
 as its next block, uniform over its blocks, see "Write order"; also if it has
 no new data), or the free space (a uniformly random free block is overwritten
 with random data, which looks the same as an encrypted block). So the written
-blocks are independent and uniform over the base device. The cost: a write
+blocks are independent and uniform over the base device, also while
+partitions are resized (see "Write order"). The cost: a write
 of a partition that has a fraction f of the blocks costs 1/f block writes on
 average, and fsync waits for the turn of the partition.
 
@@ -109,10 +110,13 @@ scubed3 it is level 1.
 
 Level 2 hides where the writes go, not how many there are: if you write only
 to a hidden partition and reveal the key of another partition, the revealed
-partition is seen to be rewritten without new data; level 3 hides that. A
-block that is removed from a partition (shrinking) is not written at all
-until the removal is on disk (the next write of its partition), the last
-state on disk may still need it.
+partition is seen to be rewritten without new data; level 3 hides that.
+The same goes for the timing of the writes: a partition writes its current
+block when it is full, and the current block first takes the live data of
+the next block, so the less live data the next block has, the more new data
+fits before the next write. Someone who knows when you write data, can see
+that the writes right after a pause more often go to blocks with little
+live data (old blocks).
 
 Level 3: extremely paranoid (NOT IMPLEMENTED YET)
 
@@ -365,7 +369,30 @@ the disk are then in uniform random order.
 
 When the block that is drawn twice is the current block (it is its own
 tail), it is written out empty at the next write of the partition, it takes
-no data until then (one draw is one write, also in level 2).
+no data until then (one draw is one write, also in level 2); it removes no
+blocks (shrinking) and carries no resize.
+
+The location of a write is drawn one write in advance, from the pool as it
+was then: the draw set of that write. The weight of a partition in level 2
+is the size of the draw set of its current block (its next write lands
+uniformly in it), so a resize keeps the writes on the disk uniform:
+
+- a block that is added (grow) is put in the draw set of the next block: it
+  becomes the next block with probability 1/(size of the draw set), as if it
+  was there when the next block was drawn (this is safe: the new block is
+  empty); it is not in the draw set of the current block, so in level 2 it
+  belongs to the free space for one write of the partition (it may be
+  overwritten with random data, it holds nothing of the partition yet)
+
+- a block that is removed (shrink) stays in the draw sets it was in, it is
+  given back to the unallocated blocks only when the next block is drawn
+  without it (after the write that follows the write that records the
+  removal); until then nobody writes it, just like the other blocks in the
+  draw set that are not drawn
+
+In level 1 the same holds within the partition: a write is uniform over the
+pool as it was one write earlier (an added block can be written from the
+second write after the grow on).
 
 Integrity
 ~~~~~~~~~
@@ -475,16 +502,21 @@ Its live mesoblocks are absorbed by the current block (up to the brim);
 when the victim holds no live data anymore, it is removed from the pool.
 A removed block is FREE in the bitmap of the next written block; it is
 given back to the unallocated blocks only after that block is on disk, and
-only if that block is not its own next block (if the next write of the same
-block is interrupted, the state falls back to the block before it, in which
-the removed block still belongs to the partition); closing a partition
-writes until its removed blocks are given back. For the same reason, a
-resize first writes out a current block that is its own next block.
+only when the next block is drawn without it (see "Write order"), that is
+after the write after it. A block that is its own next block removes
+nothing: if the next write of the same block is interrupted, the state falls
+back to the block before it, in which the removed block would still belong
+to the partition. For the same reason, a resize first writes out a current
+block that is its own next block. Closing a partition writes until its
+removed blocks are given back. On startup, the blocks that the most recent
+block removed are given back after the first write. A grow takes back the removed
+blocks of the partition that are not given back yet, before it takes
+unallocated blocks.
 The last block of a partition is removed by a final write: it is written
 with itself FREE in its own bitmap.
 
-A removed block is never written to: removing blocks causes no extra
-writes and the write order stays uniform over the (smaller) pool.
+A removed block is not written to by its partition: removing blocks causes
+no extra writes and the write order stays uniform.
 
 On startup, a block with our signature is stale (not replayed) if it is
 FREE in the bitmap of the most recent block, or if its seqno < trim_floor.

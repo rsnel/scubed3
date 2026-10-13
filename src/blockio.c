@@ -606,12 +606,24 @@ void blockio_dev_remove_block(blockio_dev_t *dev, blockio_info_t *bi) {
 	dev->updated = 1; /* the removal must be written */
 }
 
-/* after the removals are on disk, the blocks can be given away */
+/* after the removals are on disk, the blocks can be given away, this is
+ * called after a write (that records the removals); a block that was removed
+ * after the next block was drawn is kept until the next block is drawn
+ * without it (until then the write that comes after the next write may
+ * land on it, see juggler.h; its live data is in the current block, so it
+ * would be needed if the next write is interrupted, with the next write it
+ * is on disk); the write that recorded the removal is not rewritten
+ * by the next write: a block that is its own next block takes no data and
+ * removes nothing (see blockio_dev_select_next_macroblock and
+ * copy_old_block_to_current), so the state never falls back to a state in
+ * which a released block is still used */
 static void blockio_dev_release_removed(blockio_dev_t *dev) {
-	blockio_info_t *bi;
+	blockio_info_t *bi, *next;
 
 	pthd_mutex_lock(&dev->b->unallocated_mutex);
-	while ((bi = dllarr_last(&dev->release))) {
+	for (bi = dllarr_first(&dev->release); bi; bi = next) {
+		next = dllarr_next(&dev->release, bi);
+		if (dev->j.next && bi->removed >= dev->j.draws) continue;
 		dllarr_remove(&dev->release, bi);
 		/* its index will not be replayed anymore */
 		blockio_dev_count_ondisk(dev, bi, -1);
@@ -806,11 +818,12 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 	seqno = bi->seqno;
 	next_block = bi->next_block;
 
-	/* if the most recent block is also written next, and that write is
-	 * interrupted, the state falls back to the block before it: blocks
-	 * that it removed may still be needed then, they are released after
-	 * a write of another block (see blockio_dev_write_current_macroblock) */
-	if (next_block == blockio_get_macroblock_index(bi) &&
+	/* the blocks that the most recent block removed are not yet
+	 * released (see blockio_dev_release_removed), they are released
+	 * after the next write; they may still be needed if the next write is
+	 * interrupted and the most recent block is also written next (in older
+	 * versions, a block that was its own next block could remove blocks) */
+	if (next_block != 0xFFFFFFFF &&
 			(prev = dllarr_prev(&dev->replay, bi))) {
 		bitmap_init(&prev_status, b->max_macroblocks);
 		blockio_dev_read_index(dev, prev);
@@ -909,7 +922,16 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 				dev->b->blockio_infos[next_block].dev != dev)
 			FATAL("next block %u is not part of the partition",
 					next_block);
-		juggler_set_next(&dev->j, &dev->b->blockio_infos[next_block]);
+		juggler_drawn_next(&dev->j, &dev->b->blockio_infos[next_block]);
+
+		/* the blocks that are removed but not released are in the
+		 * draw set of the next block */
+		for (bi = dllarr_first(&dev->release); bi;
+				bi = dllarr_next(&dev->release, bi)) {
+			bi->added = 0;
+			bi->removed = dev->j.draws;
+			dev->j.next_pool++;
+		}
 	}
 }
 
@@ -1144,23 +1166,69 @@ uint32_t blockio_check_data_hashes(blockio_info_t *bi, char *live) {
 	return mismatches;
 }
 
-/* the number of blocks of the partition for the scheduler: the blocks in the
- * pool of its juggler, and its last block if it waits for its final write */
+/* the number of blocks of the partition for the scheduler: the size of the
+ * draw set of its current block, the write lands uniformly in it (also
+ * the final write of its last block, the draw set of that block is the
+ * block itself and the blocks that are removed but not released) */
 uint32_t blockio_dev_weight(blockio_dev_t *dev) {
-	return juggler_count(&dev->j) + (dev->final_pending?1:0);
+	return dev->bi?dev->j.cur_pool:0;
 }
 
-/* the blocks that do not belong to an open partition (the unallocated
- * blocks); a block that was removed from a partition is not free until its
- * removal is on disk (see blockio_dev_release_removed): until then the
- * last state on disk may need it, it is not written at all */
+/* the blocks of an open partition that are not in the draw set of its
+ * current block: blocks that were added after it was drawn (they may
+ * already be in the draw set of the next block), the partition did not
+ * write anything to them, so they are free for the scheduler (also if they
+ * are removed again: no other partition gets them before the removal is on
+ * disk, see blockio_dev_release_removed); returns fresh block n, the number
+ * of fresh blocks is put in fresh and the number of blocks in the draw set
+ * in pool (that must be the weight of the partition) */
+static blockio_info_t *nth_fresh_block(blockio_dev_t *dev, uint32_t n,
+		uint32_t *fresh, uint32_t *pool) {
+	blockio_info_t *bi, *ret = NULL;
+	uint32_t i;
+
+	*fresh = *pool = 0;
+	if (!dev->bi) return NULL; /* not yet started, or no blocks */
+
+	for (i = 0; i < juggler_count(&dev->j); i++) {
+		bi = juggler_nth(&dev->j, i);
+		if (juggler_in_current(&dev->j, bi)) (*pool)++;
+		else if ((*fresh)++ == n) ret = bi;
+	}
+
+	for (bi = dllarr_first(&dev->release); bi;
+			bi = dllarr_next(&dev->release, bi)) {
+		if (juggler_in_current(&dev->j, bi)) (*pool)++;
+		else if ((*fresh)++ == n) ret = bi;
+	}
+
+	return ret;
+}
+
+/* the blocks that are free for the scheduler: the unallocated blocks and
+ * the fresh blocks of the open partitions (see nth_fresh_block), returns
+ * free block n and puts the number of free blocks in count; the draw sets
+ * of the current blocks of the open partitions and the free blocks are all
+ * blocks of the base device, except the blocks of partitions that are not
+ * open (the scheduler does not know about them); a block that is removed
+ * from a partition stays in a draw set until it is released, then it is
+ * unallocated */
 static blockio_info_t *nth_free_block(blockio_t *b, uint32_t n,
 		uint32_t *count) {
-	if (count) *count = dllarr_count(&b->unallocated);
-	if (n < dllarr_count(&b->unallocated))
-		return dllarr_nth(&b->unallocated, n);
+	blockio_info_t *bi, *ret = NULL;
+	uint32_t i, fresh, pool;
 
-	return NULL;
+	*count = dllarr_count(&b->unallocated);
+	if (n < *count) ret = dllarr_nth(&b->unallocated, n);
+
+	for (i = 0; i < b->no_devs; i++) {
+		bi = nth_fresh_block(b->devs[i], n - *count, &fresh, &pool);
+		if (n >= *count && !ret) ret = bi;
+		assert(pool == blockio_dev_weight(b->devs[i]));
+		*count += fresh;
+	}
+
+	return ret;
 }
 
 /* paranoia level 2: overwrite a free block with random data, it looks the
@@ -1213,7 +1281,7 @@ static void blockio_dev_wait_turn(blockio_dev_t *dev) {
 		}
 
 		if (i == b->no_devs) { /* the free space */
-			bi = nth_free_block(b, r, NULL);
+			bi = nth_free_block(b, r, &no_free);
 			assert(bi);
 			pthd_mutex_unlock(&b->unallocated_mutex);
 			blockio_dev_write_random(dev, bi);
@@ -1359,14 +1427,8 @@ void blockio_dev_write_current_macroblock(blockio_dev_t *dev) {
 	blockio_dev_count_ondisk(dev, dev->bi, 1);
 	dev->bi->readded = 0;
 
-	/* removed blocks are not part of the partition on disk anymore;
-	 * unless this block is its own next block: if its next write is
-	 * interrupted, the state falls back to the block before it, in which
-	 * they are not removed, so they are released after a later write */
-	if (dev->j.next != dev->bi) blockio_dev_release_removed(dev);
-	else if (dllarr_count(&dev->release))
-		VERBOSE("block %u is written next again, removed blocks are "
-				"released later", id);
+	/* removed blocks are not part of the partition on disk anymore */
+	blockio_dev_release_removed(dev);
 
 	dev->ram_block = dev->bi; /* its plaintext is still in RAM */
 	if (dev->bi->dev != dev) dev->ram_block = NULL; /* was removed */
@@ -1452,13 +1514,38 @@ int blockio_dev_allocate_macroblocks(blockio_dev_t *dev, uint32_t size) {
 	DEBUG("we got a request to add %d macroblocks to %s",
 			size, dev->name);
 
+	/* the new blocks may become the next block (see juggler.c), that is
+	 * not possible if the current block is its own next block (it may not
+	 * change the state of the partition, see scubed3_settle) */
+	assert(!dev->self_tail);
+
 	pthd_mutex_lock(&dev->b->unallocated_mutex);
 
-	if (dllarr_count(&dev->b->unallocated) < size) {
+	if (dllarr_count(&dev->b->unallocated) + dllarr_count(&dev->release) <
+			size) {
 		err = -1; // not enough unclaimed blocks avaiable
 		// fall through to unlock
 	} else while (size--) {
 		blockio_info_t *bi;
+
+		/* blocks that were removed, but are not yet released, are
+		 * taken back first; they are in the draw set of the current
+		 * block, see juggler_take_back; their index on disk still
+		 * counts (see blockio_dev_count_ondisk), but their indices
+		 * are not live (also of the blocks that are not replayed at
+		 * startup), they are treated like added blocks that still
+		 * have an index of ours (see blockio_dev_check_readded) */
+		if ((bi = dllarr_last(&dev->release))) {
+			dllarr_remove(&dev->release, bi);
+			VERBOSE("taking back block %u",
+					blockio_get_macroblock_index(bi));
+			bi->no_indices = bi->no_nonobsolete = 0;
+			bi->readded = 1;
+			dev->no_macroblocks++;
+			juggler_take_back(&dev->j, bi);
+			blockio_dev_change_macroblock_status(bi, USED);
+			continue;
+		}
 		uint32_t no = random_custom(&dev->r,
 				dllarr_count(&dev->b->unallocated));
 
@@ -1475,6 +1562,11 @@ int blockio_dev_allocate_macroblocks(blockio_dev_t *dev, uint32_t size) {
 		juggler_add_macroblock(&dev->j, bi);
 		blockio_dev_change_macroblock_status(bi, USED);
 	}
+
+	/* the next block may have changed, it is the tail of the current
+	 * block; if the old tail is absorbed already, the copy of its live
+	 * data in the current block is newer, so it does not matter */
+	if (dev->bi) dev->tail_macroblock = dev->j.next;
 	
 	pthd_mutex_unlock(&dev->b->unallocated_mutex);
 

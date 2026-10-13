@@ -685,8 +685,9 @@ static int control_resize(int s, control_thread_priv_t *priv, char *argv[]) {
 		return control_write_complete(s, 1, "nothing to do");
 	}
 
-	if (size > dev->no_macroblocks && dllarr_count(&dev->b->unallocated) <
-			size - dev->no_macroblocks) {
+	/* removed blocks that are not released yet can be taken back */
+	if (size > dev->no_macroblocks && dllarr_count(&dev->b->unallocated) +
+			dllarr_count(&dev->release) < size - dev->no_macroblocks) {
 		hashtbl_unlock_element_byptr(entry);
 		return control_write_complete(s, 1, "not enough unclaimed "
 				"blocks available for resize");

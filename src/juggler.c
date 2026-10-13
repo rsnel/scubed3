@@ -31,6 +31,8 @@ void juggler_init(juggler_t *j, random_t *r) {
 	j->no_pool = j->size_pool = 0;
 	j->next = NULL;
 	j->seqno = 0;
+	j->draws = j->cur_draw = 0;
+	j->next_pool = j->cur_pool = 0;
 	j->r = r;
 }
 
@@ -38,6 +40,17 @@ uint32_t juggler_count(juggler_t *j) {
 	return j->no_pool;
 }
 
+/* put block b in the draw set of the next block (see below) */
+static void juggler_into_next(juggler_t *j, blockio_info_t *b) {
+	if (!random_custom(j->r, ++j->next_pool)) j->next = b;
+}
+
+/* if the next block is already drawn, the new block is put in its draw set:
+ * it becomes the next block with probability 1/(size of the draw set), so
+ * the next block is uniform over the draw set with the new block in it
+ * (reservoir sampling); this is safe: the new block is empty, and the old
+ * next block keeps its live data (or a copy of it is in the current block,
+ * that does not matter) */
 void juggler_add_macroblock(juggler_t *j, blockio_info_t *b) {
 	assert(j && b);
 
@@ -48,15 +61,49 @@ void juggler_add_macroblock(juggler_t *j, blockio_info_t *b) {
 
 	b->pool_index = j->no_pool;
 	j->pool[j->no_pool++] = b;
+	b->removed = UINT64_MAX;
+
+	if (j->next) {
+		assert(j->draws);
+		b->added = j->draws - 1;
+		juggler_into_next(j, b);
+	} else b->added = j->draws;
 }
 
-/* the block that is drawn to be written next cannot be removed */
+/* a removed block comes back (grow), it was not released yet: it is still in
+ * the draw set of the current block, and if it is not in the draw set of
+ * the next block (it was removed before the next block was drawn), it is
+ * put in it, like a block that is added */
+void juggler_take_back(juggler_t *j, blockio_info_t *b) {
+	int in_next = j->draws <= b->removed;
+	assert(b->removed != UINT64_MAX);
+
+	if (j->no_pool == j->size_pool) {
+		j->size_pool = j->size_pool?2*j->size_pool:16;
+		j->pool = erealloc(j->pool, j->size_pool, sizeof(*j->pool));
+	}
+
+	b->pool_index = j->no_pool;
+	j->pool[j->no_pool++] = b;
+	b->removed = UINT64_MAX;
+
+	if (j->next && !in_next) juggler_into_next(j, b);
+}
+
+/* the block that is drawn to be written next cannot be removed, the
+ * block stays in the draw sets of the current and the next block */
 void juggler_remove_macroblock(juggler_t *j, blockio_info_t *b) {
 	assert(j && b && b != j->next);
 	assert(b->pool_index < j->no_pool && j->pool[b->pool_index] == b);
 
 	j->pool[b->pool_index] = j->pool[--j->no_pool];
 	j->pool[b->pool_index]->pool_index = b->pool_index;
+	b->removed = j->draws;
+}
+
+/* is the block in the draw set of the current block? */
+int juggler_in_current(juggler_t *j, blockio_info_t *b) {
+	return b->added < j->cur_draw && j->cur_draw <= b->removed;
 }
 
 blockio_info_t *juggler_nth(juggler_t *j, uint32_t n) {
@@ -64,11 +111,24 @@ blockio_info_t *juggler_nth(juggler_t *j, uint32_t n) {
 	return j->pool[n];
 }
 
-/* used when the partition is opened: the most recent block says which
- * block is written next */
+/* there is no next block (the last block is removed) */
 void juggler_set_next(juggler_t *j, blockio_info_t *b) {
-	assert(!b || j->pool[b->pool_index] == b);
+	assert(!b);
 	j->next = b;
+}
+
+/* used when the partition is opened: the most recent block says which
+ * block is written next, it was drawn from all blocks of the partition
+ * (and from the blocks that are removed but not released, they are put
+ * in its draw set by the caller) */
+void juggler_drawn_next(juggler_t *j, blockio_info_t *b) {
+	uint32_t i;
+	assert(b && j->pool[b->pool_index] == b && !j->next && !j->draws);
+
+	for (i = 0; i < j->no_pool; i++) assert(j->pool[i]->added == 0);
+	j->next = b;
+	j->draws = 1;
+	j->next_pool = j->no_pool;
 }
 
 /* returns the block that must be written now (it gets the next seqno)
@@ -79,11 +139,18 @@ blockio_info_t *juggler_get_devblock(juggler_t *j) {
 	blockio_info_t *ret;
 	assert(j->no_pool);
 
-	if (!(ret = j->next))
+	if (!(ret = j->next)) {
 		ret = j->pool[random_custom(j->r, j->no_pool)];
+		j->draws++;
+		j->next_pool = j->no_pool;
+	}
+	j->cur_draw = j->draws;
+	j->cur_pool = j->next_pool;
 
 	ret->seqno = ++j->seqno;
 	j->next = j->pool[random_custom(j->r, j->no_pool)];
+	j->draws++;
+	j->next_pool = j->no_pool;
 
 	return ret;
 }

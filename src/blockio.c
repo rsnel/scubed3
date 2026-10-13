@@ -679,19 +679,33 @@ void blockio_dev_select_next_macroblock(blockio_dev_t *dev) {
 	/* all blocks are removed */
 	if (!juggler_count(&dev->j)) return;
 
-	/* removing the last block of the partition: it gets one more
-	 * write (in its turn, it is the only block), in which it is FREE, so
-	 * that the removal is on disk; afterwards there is no current block;
-	 * in paranoia level 2 the write waits for its turn (it is done by
-	 * the scheduler, this function is called after a write, and one
-	 * turn is one write) */
-	if (dev->pending_removals && juggler_count(&dev->j) == 1 &&
-			!juggler_nth(&dev->j, 0)->no_nonobsolete) {
+	/* removing the last blocks of the partition (it shrinks to 0): the
+	 * last two blocks are always the current and the next block, they
+	 * cannot be removed one by one (see blockio_dev_find_victim), so
+	 * when none of the remaining blocks has live data they are removed
+	 * at once; the current block gets one more write (in its turn), in
+	 * which they are FREE, so that the removal is on disk (if that write
+	 * is interrupted, the state falls back to the block before it, the
+	 * removed blocks are released after the write); afterwards there is
+	 * no current block; in paranoia level 2 and 3 the write waits for
+	 * its turn (it is done by the scheduler, this function is called
+	 * after a write, and one turn is one write) */
+	if (dev->pending_removals &&
+			dev->pending_removals == juggler_count(&dev->j)) {
+		for (i = 0; i < juggler_count(&dev->j); i++)
+			if (juggler_nth(&dev->j, i)->no_nonobsolete) break;
+	} else i = 0;
+	if (dev->pending_removals && i == juggler_count(&dev->j)) {
 		blockio_dev_take_current(dev);
 		juggler_set_next(&dev->j, NULL);
 		VERBOSE("removing the last block %u",
 				blockio_get_macroblock_index(dev->bi));
 		dev->bi->no_indices = 0;
+		while (juggler_count(&dev->j) > 1) {
+			victim = juggler_nth(&dev->j, 0);
+			if (victim == dev->bi) victim = juggler_nth(&dev->j, 1);
+			blockio_dev_remove_block(dev, victim);
+		}
 		blockio_dev_remove_block(dev, dev->bi);
 		if (dev->b->paranoia >= 2) dev->final_pending = 1;
 		else blockio_dev_write_current_macroblock(dev);

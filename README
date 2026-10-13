@@ -113,9 +113,13 @@ of a partition that has a fraction f of the blocks costs 1/f block writes on
 average, and fsync waits for the turn of the partition.
 
 Switch it on with "paranoia 2" in scubed3ctl, after opening ALL partitions
-(it asks for confirmation); closing a partition switches back to level 1
-(its blocks would look free). The level is not stored, after starting
-scubed3 it is level 1.
+(it asks for confirmation, but not when switching between level 2 and 3:
+then all partitions are still open); closing a partition switches back to
+level 1 (its blocks would look free, a partition without blocks does not
+matter). The level is not stored, after starting scubed3 it is level 1.
+Creating, enlarging, shrinking and removing (shrinking to 0 blocks)
+partitions is safe in level 2 and 3: a new partition is open, and the
+blocks it gets were free.
 
 Level 2 hides where the writes go, not how many there are: if you write only
 to a hidden partition and reveal the key of another partition, the revealed
@@ -282,7 +286,8 @@ that were overwritten with random data, and the rate of level 3
 
 sets the paranoia level (0, 1, 2 or 3, see Paranoia levels), and the rate
 of level 3 in KiB/s; scubed3ctl has a command paranoia that asks for
-confirmation, because level 2 and 3 destroy partitions that are not open;
+confirmation (not between level 2 and 3), because level 2 and 3 destroy
+partitions that are not open;
 this command does not wait for a partition that waits for its turn
 
 - check-data-integrity NAME
@@ -559,8 +564,10 @@ removed blocks are given back. On startup, the blocks that the most recent
 block removed are given back after the first write. A grow takes back the removed
 blocks of the partition that are not given back yet, before it takes
 unallocated blocks.
-The last block of a partition is removed by a final write: it is written
-with itself FREE in its own bitmap.
+When a partition shrinks to 0 blocks, its last two blocks are always the
+current and the next block, so they are removed together, when none of them
+has live data: by a final write of the current block, with both FREE in its
+bitmap.
 
 A removed block is not written to by its partition: removing blocks causes
 no extra writes and the write order stays uniform.

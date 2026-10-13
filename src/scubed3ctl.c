@@ -640,10 +640,12 @@ static int ctl_chown(ctl_priv_t *priv, char *argv[]) {
 }
 
 /* paranoia level 2 and 3 (see README) overwrite every block that does not
- * belong to an open partition, so all partitions must be open; level 3
- * limits the speed of every partition, it is shown */
+ * belong to an open partition, so all partitions must be open (we ask, but
+ * not when switching between level 2 and 3: closing a partition switches
+ * back to level 1, so they are still open); level 3 limits the speed of
+ * every partition, it is shown */
 static int ctl_paranoia(ctl_priv_t *priv, char *argv[]) {
-	int i, level;
+	int i, level, current = -1;
 	unsigned long total = 0, kibps = 0, blocks;
 	char name[256];
 
@@ -662,15 +664,20 @@ static int ctl_paranoia(ctl_priv_t *priv, char *argv[]) {
 
 	if (level >= 2 && (!quiet || assume_yes < 3)) {
 		if (do_server_command(priv->s, 0, "p")) return -1;
-		warning();
-		printf("paranoia level %d writes random data to every block "
-				"that does not belong\nto an open partition: "
-				"partitions that are NOT OPEN NOW WILL BE "
-				"DESTROYED\n(and closing a partition switches back "
-				"to level 1), the open partitions are:\n", level);
 		for (i = 0; i < result.argc; i++)
-			if (strstr(result.argv[i], " blocks in "))
-				printf("%s\n", result.argv[i]);
+			sscanf(result.argv[i], "paranoia level %d", &current);
+		if (current < 2) {
+			warning();
+			printf("paranoia level %d writes random data to every "
+					"block that does not belong\nto an open "
+					"partition: partitions that are NOT OPEN NOW "
+					"WILL BE DESTROYED\n(and closing a partition "
+					"switches back to level 1), the open "
+					"partitions are:\n", level);
+			for (i = 0; i < result.argc; i++)
+				if (strstr(result.argv[i], " blocks in "))
+					printf("%s\n", result.argv[i]);
+		}
 
 		if (level == 3) {
 			for (i = 0; i < result.argc; i++) {
@@ -693,8 +700,8 @@ static int ctl_paranoia(ctl_priv_t *priv, char *argv[]) {
 					printf("%s: %.1f KiB/s\n", name,
 						(double)kibps*blocks/total);
 		}
-		if (!yesno("are ALL your scubed3 partitions open, "
-					"continue? [No] ")) return 0;
+		if (current < 2 && !yesno("are ALL your scubed3 partitions "
+					"open, continue? [No] ")) return 0;
 	}
 
 	if (argv[1]) return do_server_command(priv->s, 1, "paranoia %s %s",

@@ -186,6 +186,15 @@ sockettest.sh DAEMON SCUBED3CTL
 Paranoia levels and the write order
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
+churntest.py DAEMON ROUNDS SEED LEVEL [KIBPS]
+	Partitions are created, enlarged, shrunk to 0 blocks (removed) and
+	closed, over and over, while two other partitions are written as fast
+	as possible, in paranoia level LEVEL (0 to 3; level 3 with KIBPS,
+	default 6400 KiB/s: 100 writes per second); the new partition must
+	contain what was written to it, the level must stay the same, the block
+	counts must add up, and the other partitions must contain exactly what
+	was written to them (also after a restart).
+
 paranoiatest.py DAEMON-crash SCUBED3CTL SEED
 	Level 2 with three partitions and free space (small blocks: -m 12
 	-M 16): the written blocks are uniform over the whole base device and

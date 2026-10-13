@@ -72,10 +72,19 @@ Paranoia levels
 
 When a new macroblock needs to be selected:
 
-Level 0: not paranoid (NOT IMPLEMENTED YET)
+Level 0: not paranoid
 
 it is selected from all allocated blocks based on it's emptyness, the most
-empty block gets selected.
+empty block gets selected (the block with the least live data, at random if
+there are more of them; not the block that is written now). The garbage
+collector then copies the least data, so writing is faster, but the order
+of the writes shows which blocks hold old data. A block with a lot of live
+data is not rewritten as long as there are emptier blocks, so old versions
+of discarded data in it stay on disk (they stay dead: their tombstones are
+kept as long as they are on disk). Switch it on with
+"paranoia 0" in scubed3ctl. After switching from level 0 to level 1 or 2,
+the first two writes of every partition go to blocks that were chosen in
+level 0 (they are chosen in advance, see "Write order").
 
 Level 1: moderately paranoid
 
@@ -234,7 +243,7 @@ that were overwritten with random data
 
 - paranoia LEVEL
 
-sets the paranoia level (1 or 2, see Paranoia levels); scubed3ctl has a
+sets the paranoia level (0, 1 or 2, see Paranoia levels); scubed3ctl has a
 command paranoia that asks for confirmation, because level 2 destroys
 partitions that are not open
 

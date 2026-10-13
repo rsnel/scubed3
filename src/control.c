@@ -231,17 +231,19 @@ static int control_check_data_integrity(int s, control_thread_priv_t *priv,
 	return control_write_terminate(s);
 }
 
-/* paranoia level 2 overwrites all blocks that do not belong to an open
- * partition: it is only safe if all partitions are open (scubed3ctl asks
- * for confirmation), closing a partition switches back to level 1 */
+/* paranoia level 0 writes the emptiest block next (see juggler.h), level 1
+ * a random block of the partition; level 2 overwrites all blocks that do not
+ * belong to an open partition: it is only safe if all partitions are open
+ * (scubed3ctl asks for confirmation), closing a partition switches back to
+ * level 1 */
 static int control_paranoia(int s, control_thread_priv_t *priv,
 		char *argv[]) {
 	int level = 0;
 
 	if (parse_int(s, &level, argv[0])) return -1;
 
-	if (level != 1 && level != 2) return control_write_complete(s, 1,
-			"paranoia level %d is not implemented (only 1 and 2)",
+	if (level < 0 || level > 2) return control_write_complete(s, 1,
+			"paranoia level %d is not implemented (only 0, 1 and 2)",
 			level);
 
 	if (priv->b->paranoia != level)

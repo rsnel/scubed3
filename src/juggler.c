@@ -33,6 +33,7 @@ void juggler_init(juggler_t *j, random_t *r) {
 	j->seqno = 0;
 	j->draws = j->cur_draw = 0;
 	j->next_pool = j->cur_pool = 0;
+	j->greedy = 0;
 	j->r = r;
 }
 
@@ -42,7 +43,10 @@ uint32_t juggler_count(juggler_t *j) {
 
 /* put block b in the draw set of the next block (see below) */
 static void juggler_into_next(juggler_t *j, blockio_info_t *b) {
-	if (!random_custom(j->r, ++j->next_pool)) j->next = b;
+	if (j->greedy) {
+		j->next_pool++;
+		if (j->next->no_nonobsolete > b->no_nonobsolete) j->next = b;
+	} else if (!random_custom(j->r, ++j->next_pool)) j->next = b;
 }
 
 /* if the next block is already drawn, the new block is put in its draw set:
@@ -88,6 +92,31 @@ void juggler_take_back(juggler_t *j, blockio_info_t *b) {
 	b->removed = UINT64_MAX;
 
 	if (j->next && !in_next) juggler_into_next(j, b);
+}
+
+/* paranoia level 0: the block with the least live data, except not (if
+ * there are other blocks); if there are more, one of them at random */
+static blockio_info_t *juggler_emptiest(juggler_t *j, blockio_info_t *not) {
+	blockio_info_t *ret = NULL;
+	uint32_t i, ties = 0;
+
+	for (i = 0; i < j->no_pool; i++) {
+		blockio_info_t *b = j->pool[i];
+		if (b == not && j->no_pool > 1) continue;
+		if (!ret || b->no_nonobsolete < ret->no_nonobsolete) {
+			ret = b;
+			ties = 1;
+		} else if (b->no_nonobsolete == ret->no_nonobsolete &&
+				!random_custom(j->r, ++ties)) ret = b;
+	}
+
+	return ret;
+}
+
+/* draw a block from the pool (or choose the emptiest in level 0) */
+static blockio_info_t *juggler_draw(juggler_t *j, blockio_info_t *not) {
+	return j->greedy?juggler_emptiest(j, not):
+		j->pool[random_custom(j->r, j->no_pool)];
 }
 
 /* the block that is drawn to be written next cannot be removed, the
@@ -140,7 +169,7 @@ blockio_info_t *juggler_get_devblock(juggler_t *j) {
 	assert(j->no_pool);
 
 	if (!(ret = j->next)) {
-		ret = j->pool[random_custom(j->r, j->no_pool)];
+		ret = juggler_draw(j, NULL);
 		j->draws++;
 		j->next_pool = j->no_pool;
 	}
@@ -148,7 +177,7 @@ blockio_info_t *juggler_get_devblock(juggler_t *j) {
 	j->cur_pool = j->next_pool;
 
 	ret->seqno = ++j->seqno;
-	j->next = j->pool[random_custom(j->r, j->no_pool)];
+	j->next = juggler_draw(j, ret);
 	j->draws++;
 	j->next_pool = j->no_pool;
 

@@ -37,7 +37,11 @@
  * paranoia level 2 needs the draw set of the current block (the write of
  * the partition lands uniformly in it), a block that is removed stays in it
  * until the next block is drawn without it (see blockio_dev_release_removed)
- * and blocks that are added are put in the draw set of the next block */
+ * and blocks that are added are put in the draw set of the next block;
+ *
+ * in paranoia level 0 (greedy is set) the next block is not drawn, it is the
+ * block with the least live data (not the block that is written now, that
+ * block is empty when the next block is chosen) */
 typedef struct juggler_s {
 	blockio_info_t **pool;
 	uint32_t no_pool, size_pool;
@@ -46,6 +50,7 @@ typedef struct juggler_s {
 	uint64_t draws; /* the number of draws, the last draw is next */
 	uint64_t cur_draw; /* the draw of the current block */
 	uint32_t next_pool, cur_pool; /* sizes of their draw sets */
+	int greedy; /* paranoia level 0: the next block is the emptiest */
 	random_t *r;
 } juggler_t;
 

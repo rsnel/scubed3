@@ -642,8 +642,9 @@ static int ctl_chown(ctl_priv_t *priv, char *argv[]) {
 static int ctl_paranoia(ctl_priv_t *priv, char *argv[]) {
 	int i;
 
-	if (strcmp(argv[0], "1") && strcmp(argv[0], "2")) {
-		printf("paranoia level must be 1 or 2\n");
+	if (strcmp(argv[0], "0") && strcmp(argv[0], "1") &&
+			strcmp(argv[0], "2")) {
+		printf("paranoia level must be 0, 1 or 2\n");
 		exit_status = EXIT_FAILURE;
 		return 0;
 	}

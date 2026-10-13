@@ -638,6 +638,7 @@ static void blockio_dev_release_removed(blockio_dev_t *dev) {
 /* the next block of the juggler becomes the current block, remember its
  * indices on disk: they stay on disk (and count) until it is written */
 static void blockio_dev_take_current(blockio_dev_t *dev) {
+	dev->j.greedy = !dev->b->paranoia;
 	dev->bi = juggler_get_devblock(&dev->j);
 
 	memcpy(dev->old_ondisk, dev->bi->indices,
@@ -1518,6 +1519,7 @@ int blockio_dev_allocate_macroblocks(blockio_dev_t *dev, uint32_t size) {
 	 * not possible if the current block is its own next block (it may not
 	 * change the state of the partition, see scubed3_settle) */
 	assert(!dev->self_tail);
+	dev->j.greedy = !dev->b->paranoia;
 
 	pthd_mutex_lock(&dev->b->unallocated_mutex);
 

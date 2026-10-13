@@ -1,0 +1,241 @@
+Development tests and tools for scubed3
+=======================================
+
+This directory contains the tests and the tools that were used while
+developing scubed3: torture tests for growing, shrinking, crashes and torn
+writes, tests with real filesystems on top, statistical tests of the write
+order (paranoia levels), and offline tools that read a base file without
+the daemon.
+
+They are not needed to use scubed3.
+
+
+Requirements
+~~~~~~~~~~~~
+
+- Linux with FUSE, run as root (FUSE mounts, loop devices, mount(8))
+- python3, with the "cryptography" module for s3read.py and s3diff.py (and
+  the tests that use s3read.py: corrupttest.py, ioerrtest.py, fsrepair.py)
+- e2fsprogs (mkfs.ext2/3/4, e2fsck, resize2fs), util-linux (losetup, fstrim,
+  mount, runuser, script), coreutils (timeout)
+- for sockettest.sh: the user "nobody"
+- optional: xfsprogs, see discardtest.py
+- the mountpoint /mnt/s3 (torture.py creates it, the other tests expect it),
+  the tests create their own mountpoints /mnt/... for the filesystems
+- NO OTHER scubed3 daemon may be running: the tests use the default control
+  socket /run/scubed3/control and the mountpoint /mnt/s3
+
+The tests create their base files (and logs) in the current directory, or in
+$S3BUILD if it is set; most of them are 64 MiB to 1.6 GiB.
+
+
+Building
+~~~~~~~~
+
+	sh dev/build.sh [OUTDIR]
+
+builds, from ../src, in OUTDIR (default: the current directory):
+
+  scubed3        the daemon
+  scubed3-crash  the daemon with -DSCUBED3_CRASH_TEST, it has test hooks
+                 (see below), several tests need it
+  scubed3ctl     the control program
+  jstat          the unit test of juggler.c (jstat.c)
+
+configure must have been run in the main tree (config.h). EXTRA_CFLAGS and
+EXTRA_LDFLAGS are added to the compiler and linker flags (for example for
+libraries in a non-standard place). The tests take the NAME of the daemon
+binary, they look for it in the current directory (or $S3BUILD).
+
+Test hooks of scubed3-crash (environment variables of the daemon):
+
+  SCUBED3_CRASH_AFTER=N  exit (as if the power fails) before write N+1 of a
+                         macroblock
+  SCUBED3_TEAR=1         with SCUBED3_CRASH_AFTER: a random subset of the
+                         4 KiB pieces of that write reaches the disk (torn
+                         write)
+  SCUBED3_BAD_READ=list  reads that include one of the byte offsets in list
+                         fail with EIO (a bad sector), until it is written
+  SCUBED3_WRITE_LOG=file the offset of every macroblock write is appended
+                         to file (used for the statistical tests)
+
+
+Running everything
+~~~~~~~~~~~~~~~~~~
+
+	mkdir /mnt/s3; cd OUTDIR; sh /path/to/dev/batch.sh
+
+runs all tests below, one after the other (this takes a few hours); every
+test writes NAME.out, the last line of every test is collected in
+batch.summary (a test that passes ends with "... OK"; the torture runs end
+with "FINAL OK"). MKFS_XFS=path/to/mkfs.xfs adds XFS to discardtest.py.
+
+
+Torture tests
+~~~~~~~~~~~~~
+
+torture.py DAEMON STEPS SEED [crash|tear]
+	The main test: random steps on a small store (40 macroblocks of
+	4 MiB): writes, fsync, discards (punched holes and zeroed ranges), grow,
+	shrink (also to the minimum of 2 blocks), restarts, and (with crash or
+	tear, needs scubed3-crash) crashes and torn writes at random moments,
+	also during a resize and while removals are pending. An oracle knows
+	what every mesoblock may contain: after a clean restart exactly what was
+	written last, after a crash what was written up to the last fsync or
+	something newer, discarded data never comes back, a grown part reads
+	as zeroes. At the end it checks that the tombstones of the discards die
+	out. PARANOIA=0 or PARANOIA=2 runs it in that paranoia level (in level 2
+	the free space is overwritten too).
+	Ends with "FINAL OK: ..." and statistics of what happened.
+
+runall.sh, runall0.sh, runall2.sh
+	8 torture runs in level 1 (normal, crash and tear), 5 in level 0 and 5
+	in level 2, a summary in runall.out, runall0.out, runall2.out.
+
+
+Filesystems on top
+~~~~~~~~~~~~~~~~~~
+
+fstest.py DAEMON CYCLES SEED
+	ext2 through grow/shrink cycles: every cycle shrinks the filesystem
+	(resize2fs) and the partition, restarts the daemon while the shrink is
+	not finished, writes files, grows the partition and the filesystem;
+	after every step e2fsck -fn and the checksums of all files.
+
+killtest.py DAEMON ROUNDS SEED
+	ext4: write files, sync, write more, kill -9 the daemon; after the
+	restart the files written before the sync must be intact and e2fsck
+	must find the filesystem clean. DISCARD=1 mounts with -o discard and
+	runs fstrim before the kill.
+
+discardtest.py DAEMON SEED
+	Discard (fallocate PUNCH_HOLE and ZERO_RANGE, fstrim): a byte exact
+	model with unaligned punch/zero/write and restarts; completely full
+	partitions; tombstones die out; blocks that come back with a grow with
+	old indices of the partition on them; ext2 (with the ext4 driver),
+	ext3, ext4 with -o discard, and XFS if MKFS_XFS is set (xfs_repair is
+	taken from $XFS_REPAIR, from the xfsprogs build tree of mkfs.xfs, or
+	from $PATH): fstrim frees mesoblocks, nothing changes at a restart,
+	fsck is clean, the write cost with and without fstrim.
+	PARTS=ABCD selects parts of the test.
+
+sizetest.py DAEMON
+	Non-default mesoblock and macroblock sizes (-m 12..16, -M 20..24): ext4
+	with files, fstrim, restart, e2fsck, contents.
+
+fsrepair.py
+	ext4 on top (uses scubed3 from the current directory): corrupt a 4 KiB
+	block of a file on disk, reading the file gives EIO, rewriting the file
+	in place repairs it, e2fsck stays clean.
+
+
+Integrity, reads and writes, openers
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+corrupttest.py DAEMON ROUNDS SEED
+	Flips bits in mesoblocks on disk: reading the corrupt 4 KiB parts gives
+	EIO (and only those), check-data-integrity reports exactly them, also
+	after garbage collection and restarts; a partial write into a corrupt
+	part fails, writing a whole part repairs it.
+
+ioerrtest.py DAEMON-crash
+	The return values of reads and writes: at the end of the partition
+	(short reads and writes, 0 at the end, ENOSPC for writes at the end),
+	also with -o direct_io; read errors of the base device
+	(SCUBED3_BAD_READ): the daemon keeps running, the mesoblock gives EIO,
+	check-data-integrity reports it, rewriting repairs it; an unreadable
+	index of an unallocated block is harmless, of a block of the partition
+	fatal.
+
+openertest.py DAEMON SCUBED3CTL ROUNDS
+	Several openers of a partition and no EBUSY races: two file descriptors
+	at once, mkfs/resize2fs/e2fsck directly on the partition, close and
+	resize right after umount or close() without retries, close of a
+	partition that is really in use, close-on-release with two openers,
+	scubed3ctl refuses to mount twice.
+
+truncatetest.py DAEMON
+	Truncate behaves as on a block device: dd without conv=notrunc,
+	"> partition", truncate(1) and ftruncate() succeed, but neither the size
+	nor the contents change.
+
+
+scubed3ctl and the control socket
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+configtest.sh DAEMON SCUBED3CTL
+	KDF parameters from the configuration file: a partition created with
+	the salt from the file is found with the key PBKDF2-SHA256(passphrase,
+	salt, iterations), -C and /etc/scubed3.conf, -s/-i override the file,
+	errors in the file are fatal (uses script(1) to type the passphrase).
+
+sockettest.sh DAEMON SCUBED3CTL
+	The control socket: private directory (0700) and socket (0600), unsafe
+	directories refused, no takeover of a running daemon, takeover of a
+	stale socket, the peer check (as user nobody), the socket is removed at
+	exit.
+
+
+Paranoia levels and the write order
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+paranoiatest.py DAEMON-crash SCUBED3CTL SEED
+	Level 2 with three partitions and free space (small blocks: -m 12
+	-M 16): the written blocks are uniform over the whole base device and
+	consecutive writes independent (chi-square, writing to one partition
+	only), level 1 for comparison; data correct with writes, discards,
+	fsync, restarts and kill -9; three writers and a control prober at the
+	same time (no deadlock); scubed3ctl paranoia 2; closing a partition
+	switches back to level 1; a partition that is not open is overwritten
+	(as documented).
+
+resizestat.py DAEMON-crash ROUNDS SEED
+	Level 2 while a partition is grown and shrunk again many times: the
+	blocks added by a grow are hit as often as any other block in the
+	writes right after the grow, the oldest blocks of the partition (most
+	of them are removed) as often as any other block during the shrink,
+	all writes uniform and independent. Only things an observer could know
+	beforehand are used to choose the blocks that are counted, and the
+	first writes of a shrink are skipped (the comment in the script
+	explains why: the time between writes depends on the live data of the
+	next block). Every z must be small (|z| < 4); 1500 rounds take about
+	ten minutes.
+
+memoryless.py DAEMON-crash WRITES [FSYNC-PROBABILITY]
+	Level 1, one partition, no resizes: the block that is written does not
+	depend on how long ago it was written (age quartiles uniform, chi2 with
+	3 degrees of freedom).
+
+level0test.py DAEMON-crash SEED
+	Level 0: fewer block writes than level 1 for the same data, the next
+	block is the block with the least live data, data correct after a
+	restart.
+
+jstat STEPS (jstat.c, built by build.sh)
+	Unit test of juggler.c, without the daemon: every draw is uniform over
+	the pool at that moment, also while blocks are added and removed
+	(chi-square), self-draws and run lengths as expected for i.i.d. draws.
+
+drawstat.py LOG...
+	The rate at which a block is drawn as its own next block in daemon logs
+	(the daemon logs every draw), compared with the i.i.d. expectation.
+
+
+Offline tools
+~~~~~~~~~~~~~
+
+s3read.py [-s SALT] BASE PASSPHRASE KDF_ITERATIONS [OUT_IMAGE]
+	An independent reader of the on-disk format (SSS3v0.4, written from the
+	description in the main README, it shares no code with scubed3): lists
+	the macroblocks of the partition of the passphrase, ignores a torn most
+	recent block, and with OUT_IMAGE writes the reconstructed partition
+	(corrupt 4 KiB parts as zeroes, they are reported). Some tests use it to
+	find mesoblocks on disk. Default salt "scubed3_prod", PBKDF2-SHA256,
+	4 MiB macroblocks, 16 KiB mesoblocks.
+
+s3diff.py [-s SALT] BEFORE AFTER PASSPHRASE KDF_ITERATIONS
+	The view of an adversary who has ONE passphrase and two snapshots of
+	the base file: which macroblocks changed, and do they all belong to the
+	partition of that passphrase? In paranoia level 1 a changed block that
+	is not ours shows that another partition was written; in level 2 the
+	free space is overwritten too, so it shows nothing.

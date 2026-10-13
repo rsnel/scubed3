@@ -547,6 +547,14 @@ incomplete contents are overwritten.
 fsync() on a partition writes out the current block (if it contains new
 data), so after fsync() returns, everything written before is on disk.
 
+Tests
+~~~~~
+
+The directory dev/ contains the tests and the development tools: torture
+tests (grow, shrink, crashes, torn writes), tests with filesystems on top,
+statistical tests of the paranoia levels and an independent offline reader
+of the format; dev/README explains them.
+
 Random block selection
 ~~~~~~~~~~~~~~~~~~~~~~
 

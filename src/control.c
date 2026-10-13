@@ -365,6 +365,32 @@ static int control_status(int s, control_thread_priv_t *priv, char *argv[]) {
 	return control_write_terminate(s);
 }
 
+/* is the partition being removed (resized to 0, the removal is not on disk
+ * yet)? */
+static int being_removed(blockio_dev_t *dev) {
+	return dev->no_macroblocks &&
+		dev->pending_removals == dev->no_macroblocks;
+}
+
+/* removing a partition needs writes of it (see
+ * blockio_dev_select_next_macroblock): in paranoia level 2 and 3 the
+ * scheduler gives it its turns, in level 0 and 1 they are done now (the
+ * final write and the wipe follow, see blockio_dev_start_wipe) */
+static void finish_removal(fuse_io_entry_t *entry) {
+	blockio_dev_t *dev = &entry->d;
+	uint32_t i, max = 4*dev->no_macroblocks + 64;
+
+	if (dev->b->paranoia >= 2) return;
+
+	for (i = 0; i < max && dev->no_macroblocks; i++)
+		scubed3_cycle(&entry->l);
+
+	if (dev->no_macroblocks) WARNING("\"%s\" is not removed after %u "
+			"writes, %u blocks are left", dev->name, i,
+			dev->no_macroblocks);
+	else VERBOSE("\"%s\" is removed after %u writes", dev->name, i);
+}
+
 static int check_name(const char *ptr) {
 	while (*ptr != '\0') {
 		if (!(*ptr >= 'a' && *ptr <= 'z') &&
@@ -381,6 +407,8 @@ static int check_name(const char *ptr) {
 static int control_open_create_common(int s, control_thread_priv_t *priv, char *argv[], int add) {
 	fuse_io_entry_t *entry;
 	char *allocname;
+	uint32_t left;
+	int removing = 0;
 
 	if (check_name(argv[0])) return control_write_complete(s, 1,
 				"illegal name specified for partition, "
@@ -440,8 +468,17 @@ static int control_open_create_common(int s, control_thread_priv_t *priv, char *
 					"it already exists, use `open' instead");
 		}
 
+		/* a removed partition whose wipe was interrupted: the wipe is
+		 * resumed (see blockio_dev_resume_wipe), in paranoia level 0
+		 * and 1 it is done now, there is nothing to open */
+		if (!add && entry->d.resumed && !entry->d.dying)
+			ecch_throw(ECCH_DEFAULT, "\"%s\" was removed, the %u "
+					"blocks that were not wiped yet are "
+					"wiped now", argv[0],
+					entry->d.resumed);
+
 		/* if we used 'open' we expect to find at least one block */
-		if (!add & !entry->d.no_macroblocks)
+		if (!add & !entry->d.no_macroblocks & !entry->d.dying)
 			ecch_throw(ECCH_DEFAULT, "no blocks found: passphrase wrong?");
 
 		entry->size = 0;
@@ -455,6 +492,13 @@ static int control_open_create_common(int s, control_thread_priv_t *priv, char *
 		if (entry->d.no_macroblocks)
 			blockio_dev_select_next_macroblock(&entry->d);
 
+		/* it was being removed when scubed3 stopped (or crashed): the
+		 * removal continues */
+		if (!add && being_removed(&entry->d)) {
+			removing = 1;
+			finish_removal(entry);
+		}
+
 		// really only used for test
 		//ecch_throw(ECCH_DEFAULT, "break off, we're testing");
 	}
@@ -467,7 +511,18 @@ static int control_open_create_common(int s, control_thread_priv_t *priv, char *
 	}
 	ecch_endtry;
 
+	/* in paranoia level 2 and 3 a resumed wipe takes time, the partition
+	 * stays open until it is done */
+	left = entry->d.dying?blockio_dev_wipe_left(&entry->d):0;
 	hashtbl_unlock_element_byptr(entry);
+
+	if (removing) return control_write_complete(s, 0, "\"%s\" was being "
+			"removed, the removal %s", argv[0],
+			priv->b->paranoia >= 2?"continues":"is finished");
+
+	if (left) return control_write_complete(s, 0, "\"%s\" was removed, "
+			"the wipe of its %u remaining blocks is resumed, it "
+			"can be closed when it is done", argv[0], left);
 
 	return control_write_silent_success(s);
 	//control_write_complete(s, 0, "partition \"%s\" %s", argv[0], add?"created":"opened");
@@ -735,6 +790,11 @@ static int control_resize(int s, control_thread_priv_t *priv, char *argv[]) {
 	}
 
 	target = dev->no_macroblocks - dev->pending_removals;
+	if (!size && being_removed(dev)) {
+		finish_removal(entry);
+		hashtbl_unlock_element_byptr(entry);
+		return control_write_silent_success(s);
+	}
 	if (size == target && reserved == dev->reserved_macroblocks) {
 		hashtbl_unlock_element_byptr(entry);
 		return control_write_complete(s, 1, "nothing to do");
@@ -800,6 +860,8 @@ static int control_resize(int s, control_thread_priv_t *priv, char *argv[]) {
 	scubed3_readded(&entry->l);
 
 	dev->updated = 1;
+
+	if (!size) finish_removal(entry);
 
 	hashtbl_unlock_element_byptr(entry);
 

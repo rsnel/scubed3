@@ -2,8 +2,9 @@ rwlock: reads of a partition wait for its writes (the lock of the partition);
 in paranoia level 3 a writer that waits for its turn blocks the reads of its
 partition (and io_mutex blocks the writes of the other partitions)
 safe backup iv's
-a crash while a removed partition is wiped leaves the blocks that are not
-wiped yet, the wipe cannot be resumed
+a crash while a removed partition is wiped: the wipe is resumed when it is
+opened again, until then its last two indices are not protected (see
+Removing a partition in the README)
 opening a partition reads the index of every macroblock of the base device,
 that is slow for large base devices
 the paranoia level is not stored: what is written before it is switched

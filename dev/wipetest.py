@@ -7,11 +7,15 @@
 #     index of it, opening it says that there are no blocks
 #  2. level 3: the same, the blocks are wiped in random order while other
 #     partitions are open; it cannot be closed or resized before that is done
-#  3. crashes (kill -9 at a random write) while it is wiped in level 3: after
-#     a restart, opening it never gives data back
+#  3. crashes (kill -9 at a random write, half of them with a torn write)
+#     while it is wiped in level 3: after
+#     a restart, opening it never gives data back, and resumes the wipe (in
+#     level 1 at once, in level 3 while it is drawn): afterwards no block
+#     has an index of it
 #  4. a partition whose most recent indices are lost (overwritten), with an
 #     old index that uses blocks of another open partition: opening it is
 #     refused, the daemon keeps running, the other partition is intact
+#  5. a partition of two blocks (the minimum) is removed in level 3
 #
 # usage: wipetest.py DAEMON-crash SEED
 # (small blocks: -m 12 -M 16, 64 KiB macroblocks)
@@ -37,12 +41,13 @@ def key(name): return hashlib.pbkdf2_hmac("sha256", name.encode(), b"scubed3_pro
 def reserved(n): return max(1, n // 4)
 def usable(n): return (n - reserved(n)) * MMPM
 
-def start(crash_after=None):
+def start(crash_after=None, tear=False):
     global P
     subprocess.run([FUSERMOUNT, "-u", "-z", MNT], capture_output=True)
     if os.path.exists(SOCK): os.unlink(SOCK)
     env = dict(os.environ)
     if crash_after: env["SCUBED3_CRASH_AFTER"] = str(crash_after)
+    if tear: env["SCUBED3_TEAR"] = "1"     # the write of the crash is torn
     P = subprocess.Popen([B + "/" + daemon, "-b", base, "-m", str(M_LOG), "-M", str(MM_LOG),
         "-f", "-o", "direct_io", MNT], stdout=log, stderr=log, env=env)
     while not os.path.exists(SOCK):
@@ -124,8 +129,9 @@ create("c", 40); fill("c", 40, b"C" * MESO)
 cmd("resize-internal c 10 %d" % reserved(10))
 fill("c", 10, b"D" * MESO)
 old = len(blocks_of(key("c")))
-remove("c")
-check(int(info("c")["wipe_left"]) == 0, "wiped at once")
+cmd("resize-internal c 0 0")            # in level 1 without writes of c
+i = info("c")
+check(int(i["no_macroblocks"]) == 0 and int(i["wipe_left"]) == 0, "removed and wiped at once")
 cmd("close c")
 left = blocks_of(key("c"))
 check(old > 10 and not left, "%d blocks had an index of c, afterwards %d" % (old, len(left)))
@@ -159,7 +165,7 @@ cmd("close a"); stop()
 # ------------------------------------------------------------- 3. crashes
 print("3. kill -9 while the blocks are wiped (level 3)", flush=True)
 results = {}
-for r in range(12):
+for r in range(16):
     with open(base, "wb") as f: f.write(os.urandom(TOTAL * MACRO))
     start()
     create("a", 60)
@@ -169,7 +175,8 @@ for r in range(12):
     # the crash comes after a random number of further writes
     n = rng.randint(1, 120)
     stop()
-    start(crash_after=n)
+    log.flush(); off = os.path.getsize(logname)
+    start(crash_after=n, tear=r % 4 >= 2)
     cmd("open-internal a CBC_ESSIV(AES256) %s" % key("a"))
     cmd("open-internal c CBC_ESSIV(AES256) %s" % k)
     cmd("paranoia 3 6400")
@@ -180,16 +187,45 @@ for r in range(12):
     except (OSError, RuntimeError): pass
     if not dead(): P.kill(); P.wait()
     subprocess.run([FUSERMOUNT, "-u", "-z", MNT], capture_output=True)
+    # if the crash came before the final write, the partition is not removed
+    with open(logname, "rb") as f: f.seek(off); removed = b"removing the last block" in f.read()
+    before = len(blocks_of(k))
     start()
+    if r % 2:                           # resume in level 3
+        cmd("open-internal a CBC_ESSIV(AES256) %s" % key("a"))
+        cmd("paranoia 3 6400")
     t = cmd("open-internal c CBC_ESSIV(AES256) %s" % k, ok=False)
-    if t.startswith("OK"):
+    if t.startswith("OK") and "being removed" in t:
+        res = "the removal continued"   # the crash came during the shrink
+        t0 = time.monotonic()
+        while time.monotonic() - t0 < 120:
+            i = info("c")
+            if int(i["no_macroblocks"]) == 0 and int(i["wipe_left"]) == 0: break
+            time.sleep(0.1)
+        check(int(i["no_macroblocks"]) == 0 and int(i["wipe_left"]) == 0,
+              "round %d: the removal is finished" % r)
+        cmd("close c")
+    elif t.startswith("OK") and "resumed" in t:
+        res = "resumed in level 3"
+        t0 = time.monotonic()
+        while int(info("c")["wipe_left"]) and time.monotonic() - t0 < 120: time.sleep(0.1)
+        check(int(info("c")["wipe_left"]) == 0, "round %d: resumed wipe done" % r)
+        cmd("close c")
+    elif t.startswith("OK"):
         sz = os.stat(MNT + "/c").st_size
         fd = opent("c", os.O_RDONLY); d = os.pread(fd, sz, 0); os.close(fd)
         res = "opened, size %d" % sz
-        if b"C" * MESO in d: res = "DATA BACK"
+        if b"C" * MESO in d: res = "DATA BACK" if removed else "not removed (crash before the final write)"
+        cmd("close c")
+    elif "wiped now" in t: res = "resumed in level 1"
     else: res = "refused (%s)" % t.split("\n")[1][:40]
-    results[res] = results.get(res, 0) + 1
+    if r % 2: cmd("close a")
     stop()
+    left = len(blocks_of(k))
+    if removed and not res.startswith("not removed"):
+        check(not left, "round %d: %s, %d blocks had an index of c, afterwards %d" %
+              (r, res, before, left))
+    results[res] = results.get(res, 0) + 1
 print("   after the crash, opening c: %s" % results, flush=True)
 check(not any("DATA" in r for r in results), "the data never comes back")
 
@@ -219,5 +255,22 @@ if alive:
     fd = opent("d", os.O_RDONLY); d = os.pread(fd, usable(20) * MESO, 0); os.close(fd)
     check(d == b"E" * (usable(20) * MESO), "d is intact")
     cmd("close d"); stop()
+
+# ------------------------------------------------------------- 5. one block
+print("5. a partition of two blocks is removed in level 3", flush=True)
+with open(base, "wb") as f: f.write(os.urandom(TOTAL * MACRO))
+start()
+create("a", 60); fill("a", 60, b"A" * MESO)
+create("c", 10); fill("c", 10, b"C" * MESO)
+cmd("resize-internal c 2 1")
+for _ in range(40): cmd("cycle c 1")
+cmd("paranoia 3 6400")
+remove("c")
+t0 = time.monotonic()
+while int(info("c")["wipe_left"]) and time.monotonic() - t0 < 120: time.sleep(0.2)
+check(int(info("c")["wipe_left"]) == 0, "wiped in %.1fs" % (time.monotonic() - t0))
+cmd("close c")
+check(not blocks_of(key("c")), "no block has an index of c")
+cmd("close a"); stop()
 os.unlink(base)
 print("WIPETEST %s" % ("OK" if not errors else "FAILED: %s" % errors), flush=True)

@@ -191,6 +191,11 @@ typedef struct blockio_dev_s {
 	dllarr_t wipe;
 	blockio_info_t *last, *prelast;
 
+	/* the partition was opened, but its most recent index says that it
+	 * was removed (a crash during the wipe): the wipe is resumed, this is
+	 * the number of blocks that were left (see blockio_dev_resume_wipe) */
+	uint32_t resumed;
+
 	void *io;
 } blockio_dev_t;
 

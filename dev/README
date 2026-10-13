@@ -192,9 +192,13 @@ wipetest.py DAEMON-crash SEED
 	Removing a partition wipes every block that has an index of it: in
 	level 1 at once (also the blocks it gave away in an earlier shrink); in
 	level 3 in random order, while it cannot be closed or resized and its
-	key cannot be used; kill -9 while it is wiped never brings its data
-	back; a partition whose old index uses blocks of another open partition
-	is not opened (and the daemon keeps running).
+	key cannot be used; kill -9 (also with a torn write) while it is
+	removed or wiped never brings its data back, opening it again resumes
+	the removal or the wipe (in level 1 at once, in level 3 in random
+	order) and afterwards no block has an index of it; a partition whose
+	old index uses blocks of another open partition is not opened (and the
+	daemon keeps running); a partition of 2 blocks (the minimum) is
+	removed in level 3.
 
 churntest.py DAEMON ROUNDS SEED LEVEL [KIBPS]
 	Partitions are created, enlarged, shrunk to 0 blocks (removed) and

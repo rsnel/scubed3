@@ -567,7 +567,11 @@ only safe if ALL your scubed3 partitions are open, continue? [No] ";
 						"are left, %s cannot be closed until "
 						"they are wiped);\nDO NOT USE ITS "
 						"PASSPHRASE AGAIN UNTIL ALL ITS BLOCKS "
-						"ARE WIPED\n", argv[0], argv[0]);
+						"ARE WIPED\n(if scubed3 crashes before "
+						"that, open %s again first, before\n"
+						"the other partitions, that resumes "
+						"the wipe)\n", argv[0], argv[0],
+						argv[0]);
 				if (!yesno("continue? [No] ")) return 0;
 				return do_server_command(priv->s, 1,
 						"resize-internal %s 0 0", argv[0]);

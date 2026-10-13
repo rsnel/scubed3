@@ -649,6 +649,33 @@ stopping scubed3 too. DO NOT USE THE PASSPHRASE OF A REMOVED PARTITION AGAIN
 UNTIL IT IS COMPLETELY WIPED: a new partition with it would get lower
 sequence numbers than the indices of the old one that are left.
 
+The removal needs writes of the partition (the victims and the final
+write): in level 2 and 3 the scheduler gives it its turns, in level 0 and 1
+the resize to 0 does the writes itself.
+
+After a crash (or a power failure) the removal or the wipe is resumed when
+the partition is opened again (with its passphrase, scubed3 cannot know
+about it otherwise):
+- if the most recent index says that the partition has no blocks (the
+  final write is on disk), the wipe is resumed: last is the most recent
+  block, prelast the block before it (if its index also says that the
+  partition is empty, otherwise the first block of the wipe that is drawn
+  gets such an index and becomes last), the free blocks with an older index
+  are found by the same scan; in level 0 and 1 they are wiped at once, and
+  the open says so (there is nothing to open), in level 2 and 3 the
+  partition is open until they are wiped, as above
+- if the crash came before the final write, the partition is opened with
+  size 0 and pending removals, the removal continues (in level 0 and 1 at
+  once)
+- if the crash came before anything of the removal was written, the
+  partition is opened as it was, with its data: remove it again
+Until the partition is opened again, last and prelast are ordinary free
+blocks for the other partitions: if both are overwritten while blocks with
+an older index of it are left, the most recent of those comes back (opening
+it is refused if it uses blocks of another partition, otherwise some of its
+data may come back). So after a crash during a removal, OPEN THE REMOVED
+PARTITION FIRST, before you open and write to the other partitions.
+
 A block of a partition that is being opened, that belongs to another open
 partition (an old index of it is the most recent one that is left), means
 that the state of the partition is damaged: it is not opened (the other

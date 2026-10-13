@@ -19,7 +19,10 @@ import os, sys, time, socket, random, hashlib, struct, subprocess, errno, ctypes
 B = os.environ.get("S3BUILD", os.getcwd())
 MNT = "/mnt/s3"
 SOCK = "/run/scubed3/control"
-MESO, MMPM = 16384, 255
+# TORTURE_SIZES="M_LOG MM_LOG": other block sizes (-m and -M of scubed3),
+# small blocks make the runs in paranoia level 3 much faster
+M_LOG, MM_LOG = map(int, os.environ.get("TORTURE_SIZES", "14 22").split())
+MESO, MMPM = 1 << M_LOG, (1 << (MM_LOG - M_LOG)) - 1
 TOTAL = 40                      # macroblocks in the base file
 PW, SALT, ITER = b"tpw", b"scubed3_prod", 1000
 KEY = hashlib.pbkdf2_hmac("sha256", PW, SALT, ITER, 32).hex()
@@ -40,7 +43,7 @@ def usable(n): return max(0, n - reserved(n)) * MMPM
 _pat = {}
 def pattern(idx, gen):
     h = hashlib.sha256(b"%d,%d" % (idx, gen)).digest()
-    return struct.pack("<4sIQ", b"S3T!", idx, gen) + (h * 512)[16:]
+    return struct.pack("<4sIQ", b"S3T!", idx, gen) + (h * (MESO // 32))[16:]
 
 def decode(idx, data):
     if data == bytes(MESO): return 0
@@ -61,7 +64,8 @@ class Daemon:
         if crash_after: env["SCUBED3_CRASH_AFTER"] = str(crash_after)
         env.pop("SCUBED3_TEAR", None)
         if crash_after and tear_mode: env["SCUBED3_TEAR"] = "1"
-        self.p = subprocess.Popen([daemon_path, "-b", base, "-f", "-o",
+        self.p = subprocess.Popen([daemon_path, "-b", base, "-m", str(M_LOG),
+            "-M", str(MM_LOG), "-f", "-o",
             "direct_io,attr_timeout=0,entry_timeout=0", MNT],
             stdout=log, stderr=log, env=env)
         for _ in range(100):
@@ -162,8 +166,14 @@ def verify(allowed_fn, sz):
         bad = []
         for start in range(0, sz, 64):
             n = min(64, sz - start)
-            data = os.pread(fd, n * MESO, start * MESO)
+            # in paranoia level 3 the daemon writes while we read, so it
+            # may crash (SCUBED3_CRASH_AFTER) during the verification
+            try: data = os.pread(fd, n * MESO, start * MESO)
+            except OSError:
+                if D.dying(): raise Crashed()
+                raise
             if len(data) != n * MESO:
+                if D.dying(): raise Crashed()
                 raise RuntimeError("short read at %d" % start)
             for k in range(n):
                 idx = start + k
@@ -173,7 +183,9 @@ def verify(allowed_fn, sz):
                 else: model_set(idx, g)
         if bad:
             raise RuntimeError("%d bad mesoblocks, first: %s" % (len(bad), bad[:5]))
-    finally: os.close(fd)
+    finally:
+        try: os.close(fd)
+        except OSError: pass
     stats["verifies"] += 1
 
 def model_set(idx, g):
@@ -337,7 +349,7 @@ def clean_restart():
 # ---- setup
 subprocess.run(["fusermount", "-u", "-z", MNT], stderr=subprocess.DEVNULL)
 os.makedirs(MNT, exist_ok=True)
-with open(base, "wb") as f: f.write(os.urandom(TOTAL << 22))
+with open(base, "wb") as f: f.write(os.urandom(TOTAL << MM_LOG))
 D.start()
 cmd("create-internal t CBC_ESSIV(AES256) " + KEY)
 if PARANOIA: cmd("paranoia " + PARANOIA)

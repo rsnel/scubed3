@@ -120,18 +120,54 @@ scubed3 it is level 1.
 Level 2 hides where the writes go, not how many there are: if you write only
 to a hidden partition and reveal the key of another partition, the revealed
 partition is seen to be rewritten without new data; level 3 hides that.
-The same goes for the timing of the writes: a partition writes its current
+The same goes for the timing of the writes (level 3 hides that too): a partition writes its current
 block when it is full, and the current block first takes the live data of
 the next block, so the less live data the next block has, the more new data
 fits before the next write. Someone who knows when you write data, can see
 that the writes right after a pause more often go to blocks with little
 live data (old blocks).
 
-Level 3: extremely paranoid (NOT IMPLEMENTED YET)
+Level 3: extremely paranoid
 
-while active, the daemon writes blocks to random locations at regular intervals
-to hide any real activity, this severely hurts performance. Considerations
-of level 2 apply. It will wear out your flash very efficiently.
+as level 2, but the writes are done at random moments that do not depend
+on what is written: on average RATE bytes per second (default 800 KiB/s, a
+4 MiB block every 5.12 seconds), also if nothing is written; the time
+between two writes is exponentially distributed (a Poisson process). At
+every write, the scheduler of level 2 draws who writes: an open partition
+writes its current block (with or without new data), or a free block is
+overwritten with random data. So the number, the timing and the locations of
+the writes do not depend on what is written (while scubed3 runs: when it is
+started and stopped, and when the level changes, can be seen).
+
+The cost:
+
+- throughput: a partition with a fraction f of the blocks of the base
+  device writes at most f*RATE (the garbage collector takes a part of it),
+  so with the default rate a partition with 10% of the blocks writes at most
+  80 KiB/s: DO NOT MAKE SMALL PARTITIONS if you want to use level 3
+  (scubed3ctl shows the maximum of every partition when level 3 is switched
+  on)
+
+- waiting: a writer whose current block is full waits for the turn of its
+  partition (on average macroblock size/(f*RATE)), so does fsync; while it
+  waits, reads of that partition, writes to the other partitions and
+  control commands wait too (except the paranoia command: you can always
+  switch back)
+
+- wear: RATE all the time; SSDs are rated for a number of terabytes
+  written (TBW), typically a few hundred TB per TB of capacity:
+
+	rate		block (4 MiB) every	per day		per year
+	4096 KiB/s	1 s			362 GB		132 TB
+	800 KiB/s	5.12 s			71 GB		26 TB
+	400 KiB/s	10.24 s			35 GB		13 TB
+	128 KiB/s	32 s			11 GB		4.1 TB
+
+Switch it on with "paranoia 3 [KIBPS]" in scubed3ctl (in KiB/s, the default
+rate is set with the option -r of scubed3), after opening ALL partitions;
+closing a partition switches back to level 1. If the device cannot keep up
+with the rate, it writes as fast as it can (writes that are more than 4
+average intervals plus 1 second late are skipped).
 
 
 How to start
@@ -144,13 +180,14 @@ and provide read, write and close methods to it if it is not a file or a block
 device)
 
 	scubed3 -b BASE [-a CONTROL_SOCKET] [-m MESOBLOCK_LOG] [-M MACROBLOCK_LOG]
-		[FUSE options] MOUNTPOINT
+		[-r KIBPS] [FUSE options] MOUNTPOINT
 
 The mesoblock size is 2^MESOBLOCK_LOG bytes (12..20, default 14: 16KiB), the
 macroblock size 2^MACROBLOCK_LOG bytes (at most 2^30, default 22: 4MiB), a
 macroblock has 2 to 2^16 mesoblocks, and the index must fit in one mesoblock.
 The sizes are not stored in the macroblocks: a set of macroblocks must always
-be used with the same sizes.
+be used with the same sizes. KIBPS is the rate of paranoia level 3 in KiB/s
+(default 800), it does not switch level 3 on.
 
 
 Key derivation
@@ -238,14 +275,15 @@ tombstones_pending, mapped_mesoblocks
 
 - p
 
-shows all open partitions, the paranoia level and the number of free blocks
-that were overwritten with random data
+shows all open partitions, the paranoia level, the number of free blocks
+that were overwritten with random data, and the rate of level 3
 
-- paranoia LEVEL
+- paranoia LEVEL [KIBPS]
 
-sets the paranoia level (0, 1 or 2, see Paranoia levels); scubed3ctl has a
-command paranoia that asks for confirmation, because level 2 destroys
-partitions that are not open
+sets the paranoia level (0, 1, 2 or 3, see Paranoia levels), and the rate
+of level 3 in KiB/s; scubed3ctl has a command paranoia that asks for
+confirmation, because level 2 and 3 destroy partitions that are not open;
+this command does not wait for a partition that waits for its turn
 
 - check-data-integrity NAME
 

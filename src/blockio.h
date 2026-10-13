@@ -202,9 +202,10 @@ struct blockio_s {
 	void (*close)(void*);
 	void (*sync)(void*);
 
-	/* paranoia level (1 or 2, see README), the open partitions (devs),
+	/* paranoia level (0 to 3, see README), the open partitions (devs),
 	 * and step(dev): let partition dev write one block (it gets the
-	 * turn), it is called when the scheduler of level 2 draws dev */
+	 * turn), it is called when the scheduler of level 2 draws dev; the
+	 * level is changed with blockio_set_paranoia */
 	int paranoia;
 	blockio_dev_t **devs;
 	uint32_t no_devs;
@@ -218,7 +219,34 @@ struct blockio_s {
 
 	/* statistics: blocks of the free space written with random data */
 	uint64_t random_writes;
+
+	/* paranoia level 3: a block is written at random moments, on average
+	 * rate bytes per second (see blockio_wait_tick); the clock thread
+	 * does the writes while no partition waits for its turn */
+	uint64_t rate;
+	struct timespec next_tick;
+	pthread_mutex_t tick_mutex;
+	pthread_cond_t tick_cond;
+	pthread_t clock_thread;
+	void *clock_io;
+	int clock_running, clock_stop;
+	int tick_waiting; /* the clock thread waits for io_mutex */
+	uint64_t ticks; /* statistics */
 };
+
+/* the default rate of paranoia level 3: 800 KiB/s, a 4 MiB block every 5.12
+ * seconds on average (see README) */
+#define BLOCKIO_DEFAULT_RATE (800<<10)
+
+void blockio_set_paranoia(blockio_t*, int, uint64_t);
+
+void blockio_io_lock(blockio_t*);
+
+void blockio_io_unlock(blockio_t*);
+
+void blockio_clock_start(blockio_t*);
+
+void blockio_clock_stop(blockio_t*);
 
 uint32_t blockio_get_macroblock_index(blockio_info_t*);
 

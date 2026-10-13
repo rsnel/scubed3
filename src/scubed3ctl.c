@@ -219,6 +219,7 @@ typedef struct ctl_command_s {
 	hashtbl_elt_t head;
 	int (*command)(ctl_priv_t*, char**);
 	int argc;
+	int optargc; /* optional arguments after argc, argv ends with NULL */
 	char *usage;
 } ctl_command_t;
 
@@ -263,11 +264,12 @@ int do_local_command(ctl_priv_t *priv,
 	}
 
 	if (*argv[0] == '\0' && argc > 0) argc--;
-	if (argc != cmnd->argc ) {
+	if (argc < cmnd->argc || argc > cmnd->argc + cmnd->optargc) {
 		printf("usage: %s%s\n", cmnd->head.key, cmnd->usage);
 		free(args);
 		return 0;
 	}
+	argv[argc] = NULL;
 
 	ret = (*cmnd->command)(priv, argv);
 	free(args);
@@ -401,7 +403,7 @@ static int ctl_help(ctl_priv_t *priv, char *argv[]) {
 	printf("close NAME\n");
 	printf("mount NAME MOUNTPOINT\n");
 	printf("umount NAME\n");
-	printf("paranoia LEVEL\n");
+	printf("paranoia LEVEL [KIBPS]\n");
 	return 0;
 }
 
@@ -637,32 +639,66 @@ static int ctl_chown(ctl_priv_t *priv, char *argv[]) {
 	return 0;
 }
 
-/* paranoia level 2 (see README) overwrites every block that does not
- * belong to an open partition, so all partitions must be open */
+/* paranoia level 2 and 3 (see README) overwrite every block that does not
+ * belong to an open partition, so all partitions must be open; level 3
+ * limits the speed of every partition, it is shown */
 static int ctl_paranoia(ctl_priv_t *priv, char *argv[]) {
-	int i;
+	int i, level;
+	unsigned long total = 0, kibps = 0, blocks;
+	char name[256];
 
 	if (strcmp(argv[0], "0") && strcmp(argv[0], "1") &&
-			strcmp(argv[0], "2")) {
-		printf("paranoia level must be 0, 1 or 2\n");
+			strcmp(argv[0], "2") && strcmp(argv[0], "3")) {
+		printf("paranoia level must be 0, 1, 2 or 3\n");
+		exit_status = EXIT_FAILURE;
+		return 0;
+	}
+	level = atoi(argv[0]);
+	if (argv[1] && (sscanf(argv[1], "%lu", &kibps) != 1 || !kibps)) {
+		printf("the rate must be a positive number of KiB/s\n");
 		exit_status = EXIT_FAILURE;
 		return 0;
 	}
 
-	if (!strcmp(argv[0], "2") && (!quiet || assume_yes < 3)) {
+	if (level >= 2 && (!quiet || assume_yes < 3)) {
 		if (do_server_command(priv->s, 0, "p")) return -1;
 		warning();
-		printf("paranoia level 2 writes random data to every block that "
-				"does not belong\nto an open partition: partitions "
-				"that are NOT OPEN NOW WILL BE DESTROYED\n"
-				"(and closing a partition switches back to level "
-				"1), the open partitions are:\n");
+		printf("paranoia level %d writes random data to every block "
+				"that does not belong\nto an open partition: "
+				"partitions that are NOT OPEN NOW WILL BE "
+				"DESTROYED\n(and closing a partition switches back "
+				"to level 1), the open partitions are:\n", level);
 		for (i = 0; i < result.argc; i++)
-			printf("%s\n", result.argv[i]);
+			if (strstr(result.argv[i], " blocks in "))
+				printf("%s\n", result.argv[i]);
+
+		if (level == 3) {
+			for (i = 0; i < result.argc; i++) {
+				sscanf(result.argv[i], "%lu blocks total",
+						&total);
+				if (!argv[1]) sscanf(result.argv[i],
+						"level 3 rate %lu KiB/s",
+						&kibps);
+			}
+			printf("\nparanoia level 3 writes on average %lu KiB/s "
+					"(%.1f GB per day), also if\nnothing "
+					"is written; a partition gets a share of "
+					"that proportional to its\nsize, so it "
+					"can write at most (the garbage collector "
+					"takes a part of it):\n", kibps,
+					kibps*1024.*86400/1e9);
+			for (i = 0; total && i < result.argc; i++)
+				if (sscanf(result.argv[i], "%lu blocks in "
+						"%255s", &blocks, name) == 2)
+					printf("%s: %.1f KiB/s\n", name,
+						(double)kibps*blocks/total);
+		}
 		if (!yesno("are ALL your scubed3 partitions open, "
 					"continue? [No] ")) return 0;
 	}
 
+	if (argv[1]) return do_server_command(priv->s, 1, "paranoia %s %s",
+			argv[0], argv[1]);
 	return do_server_command(priv->s, 1, "paranoia %s", argv[0]);
 }
 
@@ -720,7 +756,8 @@ static ctl_command_t ctl_commands[] = {
 		.head.key = "paranoia",
 		.command = ctl_paranoia,
 		.argc = 1,
-		.usage = " LEVEL"
+		.optargc = 1,
+		.usage = " LEVEL [KIBPS]"
 	}, {
 		.head.key = "umount",
 		.command = ctl_umount,

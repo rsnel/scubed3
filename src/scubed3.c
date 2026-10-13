@@ -869,17 +869,20 @@ int main(int argc, char **argv) {
 		/* fuse_opt_parse stores %d in an int */
 		int mesoblock_log;
 		int macroblock_log;
+		int kibps;
 	} options = {
 		.base = NULL,
 		.control = NULL,
 		.mesoblock_log = 14,
-		.macroblock_log = 22
+		.macroblock_log = 22,
+		.kibps = BLOCKIO_DEFAULT_RATE>>10
 	};
 	struct fuse_opt scubed3_opts[] = {
 		SCUBED3_OPT_KEY("-b %s", base, 0),
 		SCUBED3_OPT_KEY("-a %s", control, 0),
 		SCUBED3_OPT_KEY("-m %d", mesoblock_log, 0),
 		SCUBED3_OPT_KEY("-M %d", macroblock_log, 0),
+		SCUBED3_OPT_KEY("-r %d", kibps, 0),
 		FUSE_OPT_END
 	};
 	int ret;
@@ -908,6 +911,12 @@ int main(int argc, char **argv) {
 		FATAL("-M %d: the macroblock size must be between 2 and 2^16 "
 				"mesoblocks, and at most 2^30 bytes",
 				options.macroblock_log);
+
+	/* the rate of paranoia level 3 (it is not switched on here) */
+	if (options.kibps < 1 || options.kibps > 1<<20)
+		FATAL("-r %d: the rate must be between 1 and %d KiB/s",
+				options.kibps, 1<<20);
+	b.rate = ((uint64_t)options.kibps)<<10;
 
 	/* lock me into memory; don't leak info to swap */
 	if (mlockall(MCL_CURRENT|MCL_FUTURE)<0)

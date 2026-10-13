@@ -119,6 +119,8 @@ typedef struct control_command {
 	hashtbl_elt_t head;
 	int (*command)(int, control_thread_priv_t*, char**);
 	int argc;
+	int optargc; /* optional arguments after argc, argv ends with NULL */
+	int nolock; /* the command is called without io_mutex */
 	char *usage;
 } control_command_t;
 
@@ -235,20 +237,32 @@ static int control_check_data_integrity(int s, control_thread_priv_t *priv,
  * a random block of the partition; level 2 overwrites all blocks that do not
  * belong to an open partition: it is only safe if all partitions are open
  * (scubed3ctl asks for confirmation), closing a partition switches back to
- * level 1 */
+ * level 1; level 3 writes at random moments, on average KIBPS KiB/s (if
+ * given, see blockio_wait_tick); this command is called without io_mutex: a
+ * partition that waits for its turn in level 3 holds it */
 static int control_paranoia(int s, control_thread_priv_t *priv,
 		char *argv[]) {
-	int level = 0;
+	int level = 0, kibps = 0;
 
 	if (parse_int(s, &level, argv[0])) return -1;
 
-	if (level < 0 || level > 2) return control_write_complete(s, 1,
-			"paranoia level %d is not implemented (only 0, 1 and 2)",
+	if (level < 0 || level > 3) return control_write_complete(s, 1,
+			"paranoia level %d does not exist (only 0, 1, 2 and 3)",
 			level);
 
-	if (priv->b->paranoia != level)
-		VERBOSE("paranoia level %d", level);
-	priv->b->paranoia = level;
+	if (argv[1]) {
+		if (parse_int(s, &kibps, argv[1])) return -1;
+		if (kibps < 1 || kibps > 1<<20) return control_write_complete(
+				s, 1, "the rate must be between 1 and %d KiB/s",
+				1<<20);
+	}
+
+	/* the clock thread needs a partition to write free blocks (the
+	 * other levels do not write without a partition anyway) */
+	if (level == 3 && !priv->b->no_devs) return control_write_complete(s,
+			1, "paranoia level 3 needs at least one open partition");
+
+	blockio_set_paranoia(priv->b, level, ((uint64_t)kibps)<<10);
 
 	return control_write_silent_success(s);
 }
@@ -330,6 +344,10 @@ static int control_status(int s, control_thread_priv_t *priv, char *argv[]) {
 	if (control_write_line(s, "paranoia level %d (%lu blocks of the free "
 				"space overwritten)\n", priv->b->paranoia,
 				priv->b->random_writes)) return -1;
+	if (control_write_line(s, "level 3 rate %lu KiB/s (one block every "
+				"%.2fs on average, %lu ticks)\n",
+				priv->b->rate>>10, (double)priv->b->macroblock_size/
+				priv->b->rate, priv->b->ticks)) return -1;
 
 	return control_write_terminate(s);
 }
@@ -763,7 +781,9 @@ static control_command_t control_commands[] = {
 		.head.key = "paranoia",
 		.command = control_paranoia,
 		.argc = 1,
-		.usage = " LEVEL"
+		.optargc = 1,
+		.nolock = 1,
+		.usage = " LEVEL [KIBPS]"
 	}, {
 		.head.key = "exit",
 		.command = control_exit,
@@ -871,13 +891,15 @@ int control_call(int s, control_thread_priv_t *priv, char *command) {
 	if (!(cmnd = hashtbl_find_element_bykey(&priv->c, argv[0])))
 		return control_write_complete(s, 1, "unknown command \"%s\"", argv[0]);
 
-	if (argc - 1 != cmnd->argc) 
+	if (argc - 1 < cmnd->argc || argc - 1 > cmnd->argc + cmnd->optargc) 
 		return control_write_complete(s, 1, "usage: %s%s", argv[0], cmnd->usage);
+	argv[argc] = NULL;
 
 	/* commands may write blocks (see blockio_t) */
-	pthd_mutex_lock(&priv->b->io_mutex);
+	if (cmnd->nolock) return (*cmnd->command)(s, priv, argv + 1);
+	blockio_io_lock(priv->b);
 	ret = (*cmnd->command)(s, priv, argv + 1);
-	pthd_mutex_unlock(&priv->b->io_mutex);
+	blockio_io_unlock(priv->b);
 
 	return ret;
 }

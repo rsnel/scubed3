@@ -27,6 +27,8 @@
 #include <assert.h>
 #include <unistd.h>
 #include <time.h>
+#include <math.h>
+#include <pthread.h>
 #include "blockio.h"
 #include "bitmap.h"
 #include "verbose.h"
@@ -130,12 +132,18 @@ static void stream_write(void *fp, const void *buf, uint64_t offset,
 	}
 	bad_sector(offset, size, 1);
 
-	/* testing only: log the offset of every write */
+	/* testing only: log the offset of every write (and the time on
+	 * CLOCK_MONOTONIC if SCUBED3_WRITE_LOG_TIME is set) */
 	static FILE *wlog = NULL;
 	if (!wlog && getenv("SCUBED3_WRITE_LOG"))
 		wlog = fopen(getenv("SCUBED3_WRITE_LOG"), "a");
 	if (wlog) {
-		fprintf(wlog, "%lu\n", (unsigned long)offset);
+		struct timespec now;
+		if (getenv("SCUBED3_WRITE_LOG_TIME")) {
+			clock_gettime(CLOCK_MONOTONIC, &now);
+			fprintf(wlog, "%lu %ld.%09ld\n", (unsigned long)offset,
+					(long)now.tv_sec, now.tv_nsec);
+		} else fprintf(wlog, "%lu\n", (unsigned long)offset);
 		fflush(wlog);
 	}
 #endif
@@ -325,6 +333,19 @@ void blockio_init_file(blockio_t *b, const char *path, uint8_t macroblock_log,
 	b->paranoia = 1;
 	random_init(&b->r);
 	pthd_mutex_init(&b->io_mutex);
+
+	/* the clock of paranoia level 3 (CLOCK_MONOTONIC, see
+	 * blockio_wait_tick) */
+	if (!b->rate) b->rate = BLOCKIO_DEFAULT_RATE;
+	pthd_mutex_init(&b->tick_mutex);
+	{
+		pthread_condattr_t attr;
+		pthread_condattr_init(&attr);
+		pthread_condattr_setclock(&attr, CLOCK_MONOTONIC);
+		if (pthread_cond_init(&b->tick_cond, &attr))
+			FATAL("unable to initialize condition variable");
+		pthread_condattr_destroy(&attr);
+	}
 }
 
 static const char magic[8] = "SSS3v0.4";
@@ -348,10 +369,11 @@ void blockio_dev_free(blockio_dev_t *dev) {
 		dev->b->devs[i] = dev->b->devs[--dev->b->no_devs];
 		break;
 	}
-	if (dev->b->paranoia >= 2) {
-		WARNING("\"%s\" is closed, paranoia level 2 is switched off "
-				"(level 1)", dev->name);
-		dev->b->paranoia = 1;
+	if (dev->b->paranoia >= 2 && (dev->no_macroblocks ||
+				dllarr_count(&dev->release))) {
+		WARNING("\"%s\" is closed, paranoia level %d is switched off "
+				"(level 1)", dev->name, dev->b->paranoia);
+		blockio_set_paranoia(dev->b, 1, 0);
 	}
 
 	blockio_info_t *bi;
@@ -1233,32 +1255,266 @@ static blockio_info_t *nth_free_block(blockio_t *b, uint32_t n,
 }
 
 /* paranoia level 2: overwrite a free block with random data, it looks the
- * same as a block of a partition (the io of dev is used) */
-static void blockio_dev_write_random(blockio_dev_t *dev, blockio_info_t *bi) {
-	uint32_t id = bi - dev->b->blockio_infos;
-	char *buf = ecalloc(1, 1<<dev->b->macroblock_log);
+ * same as a block of a partition (with io: the io of the partition that
+ * waits for its turn, or of the clock thread) */
+static void blockio_write_random(blockio_t *b, void *io, blockio_info_t *bi) {
+	uint32_t id = bi - b->blockio_infos;
+	char *buf = ecalloc(1, 1<<b->macroblock_log);
 
 	DEBUG("write random data to free block %u", id);
-	if (fread(buf, 1<<dev->b->macroblock_log, 1, dev->b->r.fp) != 1)
+	if (fread(buf, 1<<b->macroblock_log, 1, b->r.fp) != 1)
 		FATAL("reading from /dev/urandom: %s", strerror(errno));
-	dev->b->write(dev->io, buf, ((off_t)id)<<dev->b->macroblock_log,
-			1<<dev->b->macroblock_log);
-	dev->b->sync(dev->io);
-	dev->b->random_writes++;
+	b->write(io, buf, ((off_t)id)<<b->macroblock_log,
+			1<<b->macroblock_log);
+	b->sync(io);
+	b->random_writes++;
 	free(buf);
 }
 
-/* paranoia level 2: every write goes to a uniformly random block of the
- * whole base device; dev wants to write, so the scheduler draws who writes
- * until dev is drawn: with probability proportional to its number of blocks
- * an open partition (it writes its next block, which is uniform over its
- * blocks, see juggler.c), or the free space (a uniformly random free block
- * is overwritten with random data); everything that may write holds
- * io_mutex, so the scheduler can let the other partitions write */
-static void blockio_dev_wait_turn(blockio_dev_t *dev) {
-	blockio_t *b = dev->b;
+/* paranoia level 2: one draw of the scheduler, a write goes to a uniformly
+ * random block of the whole base device: with probability proportional to
+ * its weight an open partition (it writes its current block, which is
+ * uniform over its draw set, see blockio_dev_weight), or the free space (a
+ * uniformly random free block is overwritten with random data, with io);
+ * returns the partition that must write, or NULL if the free space was
+ * written; the caller holds io_mutex */
+static blockio_dev_t *blockio_draw(blockio_t *b, void *io) {
 	uint32_t i, total, no_free, r;
 	blockio_info_t *bi;
+
+	pthd_mutex_lock(&b->unallocated_mutex);
+	nth_free_block(b, UINT32_MAX, &no_free);
+	total = no_free;
+	for (i = 0; i < b->no_devs; i++)
+		total += blockio_dev_weight(b->devs[i]);
+	if (!total) { /* only possible for the clock thread */
+		pthd_mutex_unlock(&b->unallocated_mutex);
+		return NULL;
+	}
+	r = random_custom(&b->r, total);
+
+	for (i = 0; i < b->no_devs; i++) {
+		if (r < blockio_dev_weight(b->devs[i])) break;
+		r -= blockio_dev_weight(b->devs[i]);
+	}
+
+	if (i == b->no_devs) { /* the free space */
+		bi = nth_free_block(b, r, &no_free);
+		assert(bi);
+		pthd_mutex_unlock(&b->unallocated_mutex);
+		blockio_write_random(b, io, bi);
+		return NULL;
+	}
+	pthd_mutex_unlock(&b->unallocated_mutex);
+
+	return b->devs[i];
+}
+
+/* let partition dev write one block (it is drawn, and it is not the
+ * partition that is waiting for its turn) */
+static void blockio_give_turn(blockio_t *b, blockio_dev_t *dev) {
+	dev->turn = 1;
+	b->step(dev);
+	if (dev->turn) {
+		WARNING("partition \"%s\" did not write in its turn", dev->name);
+		dev->turn = 0;
+	}
+}
+
+/* paranoia level 3: the writes are done at random moments, independent of
+ * what is written: a Poisson process with on average b->rate bytes per
+ * second (one block write per tick), so the time to the next tick is
+ * exponentially distributed; the ticks are counted on CLOCK_MONOTONIC (it
+ * does not run while the computer sleeps); next_tick is protected by
+ * tick_mutex, it is the innermost lock */
+static double blockio_tick_interval(blockio_t *b) {
+	return (double)b->macroblock_size/b->rate;
+}
+
+static void blockio_next_tick(blockio_t *b) {
+	double u = (random_uint32(&b->r) + 1.)/4294967296.; /* (0, 1] */
+	double d = -log(u)*blockio_tick_interval(b);
+
+	b->next_tick.tv_sec += (time_t)d;
+	b->next_tick.tv_nsec += (long)((d - (time_t)d)*1e9);
+	if (b->next_tick.tv_nsec >= 1000000000) {
+		b->next_tick.tv_nsec -= 1000000000;
+		b->next_tick.tv_sec++;
+	}
+}
+
+/* is a tick due? if so, it is taken (and the next tick is drawn); if the
+ * ticks are far behind (writes that took long, or a long control command),
+ * they are not done all at once, the clock starts again now; the caller
+ * holds tick_mutex */
+static int blockio_take_tick(blockio_t *b) {
+	struct timespec now;
+	double late;
+
+	clock_gettime(CLOCK_MONOTONIC, &now);
+	late = (now.tv_sec - b->next_tick.tv_sec) +
+		(now.tv_nsec - b->next_tick.tv_nsec)/1e9;
+	if (late < 0) return 0;
+
+	if (late > 4*blockio_tick_interval(b) + 1) {
+		VERBOSE("paranoia level 3: %.1fs behind, starting again",
+				late);
+		b->next_tick = now;
+	}
+	blockio_next_tick(b);
+	b->ticks++;
+
+	return 1;
+}
+
+/* wait for the next tick and take it, returns 0 (without a tick) if the
+ * paranoia level is not 3 anymore; the caller holds io_mutex (nobody else
+ * can take the tick), and has to do one draw */
+static int blockio_wait_tick(blockio_t *b) {
+	int ret;
+
+	pthd_mutex_lock(&b->tick_mutex);
+	while (b->paranoia == 3 && !b->clock_stop &&
+			!blockio_take_tick(b))
+		pthread_cond_timedwait(&b->tick_cond, &b->tick_mutex,
+				&b->next_tick);
+	ret = b->paranoia == 3 && !b->clock_stop;
+	pthd_mutex_unlock(&b->tick_mutex);
+
+	return ret;
+}
+
+/* is a tick due? (it is not taken) */
+static int blockio_tick_due(blockio_t *b) {
+	struct timespec now;
+
+	clock_gettime(CLOCK_MONOTONIC, &now);
+	return now.tv_sec > b->next_tick.tv_sec ||
+		(now.tv_sec == b->next_tick.tv_sec &&
+		 now.tv_nsec >= b->next_tick.tv_nsec);
+}
+
+/* the clock thread: it does the ticks while no partition is waiting for its
+ * turn; a partition that waits holds io_mutex and takes the ticks itself, so
+ * a tick is only taken by the one that holds io_mutex (if the clock thread
+ * would take it first, and wait for io_mutex, the write would come too
+ * late: when the waiting partition is done) */
+static void *blockio_clock(void *arg) {
+	blockio_t *b = arg;
+	blockio_dev_t *dev;
+
+	pthd_mutex_lock(&b->tick_mutex);
+	while (!b->clock_stop) {
+		if (b->paranoia != 3) {
+			pthd_cond_wait(&b->tick_cond, &b->tick_mutex);
+			continue;
+		}
+		if (!blockio_tick_due(b)) {
+			pthread_cond_timedwait(&b->tick_cond, &b->tick_mutex,
+					&b->next_tick);
+			continue;
+		}
+
+		/* a tick is due, get io_mutex first, the others wait
+		 * until we have it (see blockio_io_lock) */
+		b->tick_waiting = 1;
+		pthd_mutex_unlock(&b->tick_mutex);
+		pthd_mutex_lock(&b->io_mutex);
+		pthd_mutex_lock(&b->tick_mutex);
+		b->tick_waiting = 0;
+		pthread_cond_broadcast(&b->tick_cond);
+
+		/* do the ticks that are due (unless a waiting partition did
+		 * them while we waited for io_mutex) */
+		while (b->paranoia == 3 && !b->clock_stop && b->no_devs &&
+				blockio_take_tick(b)) {
+			pthd_mutex_unlock(&b->tick_mutex);
+			if ((dev = blockio_draw(b, b->clock_io)))
+				blockio_give_turn(b, dev);
+			pthd_mutex_lock(&b->tick_mutex);
+		}
+		pthd_mutex_unlock(&b->tick_mutex);
+		pthd_mutex_unlock(&b->io_mutex);
+		pthd_mutex_lock(&b->tick_mutex);
+	}
+	pthd_mutex_unlock(&b->tick_mutex);
+
+	return NULL;
+}
+
+/* io_mutex for everything that may write (see blockio_t); the clock thread
+ * goes first: when a tick is due, it waits for io_mutex, and nobody else
+ * may take it before the clock thread had it (the mutex is not fair, a
+ * busy writer would take it again and again, and the writes of the ticks
+ * would come late, when the writer is done: then the times of the writes
+ * would show that something is written) */
+void blockio_io_lock(blockio_t *b) {
+	pthd_mutex_lock(&b->tick_mutex);
+	while (b->tick_waiting)
+		pthd_cond_wait(&b->tick_cond, &b->tick_mutex);
+	pthd_mutex_unlock(&b->tick_mutex);
+	pthd_mutex_lock(&b->io_mutex);
+}
+
+void blockio_io_unlock(blockio_t *b) {
+	pthd_mutex_unlock(&b->io_mutex);
+}
+
+void blockio_clock_start(blockio_t *b) {
+	int err;
+
+	/* the clock thread writes free blocks with its own io */
+	b->clock_io = (b->open)(b->open_priv);
+	if ((err = pthread_create(&b->clock_thread, NULL, blockio_clock, b)))
+		FATAL("unable to start the clock thread: %s", strerror(err));
+	b->clock_running = 1;
+}
+
+/* stop the clock thread (it may be writing, so this is done before the
+ * partitions are closed) */
+void blockio_clock_stop(blockio_t *b) {
+	if (!b->clock_running) return;
+
+	/* without the clock there is no level 3 (and the partitions are
+	 * closed next, see freer in fuse_io.c) */
+	pthd_mutex_lock(&b->tick_mutex);
+	b->clock_stop = 1;
+	if (b->paranoia == 3) b->paranoia = 1;
+	pthread_cond_broadcast(&b->tick_cond);
+	pthd_mutex_unlock(&b->tick_mutex);
+
+	pthread_join(b->clock_thread, NULL);
+	b->clock_running = 0;
+	if (b->close) (b->close)(b->clock_io);
+}
+
+/* set the paranoia level (and the rate of level 3, if rate is not 0); this
+ * is done without io_mutex: a partition that waits for its turn in level 3
+ * holds it, and must be woken up if the level changes */
+void blockio_set_paranoia(blockio_t *b, int level, uint64_t rate) {
+	pthd_mutex_lock(&b->tick_mutex);
+	if (rate) b->rate = rate;
+	if (level == 3 && (b->paranoia != 3 || rate)) {
+		clock_gettime(CLOCK_MONOTONIC, &b->next_tick);
+		blockio_next_tick(b);
+	}
+	if (b->paranoia != level) VERBOSE("paranoia level %d", level);
+	b->paranoia = level;
+	pthread_cond_broadcast(&b->tick_cond);
+	pthd_mutex_unlock(&b->tick_mutex);
+}
+
+/* paranoia level 2 and 3: every write goes to a uniformly random block of
+ * the whole base device; dev wants to write, so the scheduler draws who
+ * writes until dev is drawn (see blockio_draw); everything that may write
+ * holds io_mutex, so the scheduler can let the other partitions write; in
+ * level 3 there is one draw per tick (see blockio_wait_tick), and dev
+ * waits for the ticks (with io_mutex: nothing else can write anyway, but
+ * also the other partitions and control commands that wait for io_mutex,
+ * and reads of dev, wait) */
+static void blockio_dev_wait_turn(blockio_dev_t *dev) {
+	blockio_t *b = dev->b;
+	blockio_dev_t *drawn;
 
 	/* the scheduler gave this partition the turn */
 	if (dev->turn) {
@@ -1266,40 +1522,16 @@ static void blockio_dev_wait_turn(blockio_dev_t *dev) {
 		return;
 	}
 
-	if (b->paranoia < 2) return;
-
 	for (;;) {
-		pthd_mutex_lock(&b->unallocated_mutex);
-		nth_free_block(b, UINT32_MAX, &no_free);
-		total = no_free;
-		for (i = 0; i < b->no_devs; i++)
-			total += blockio_dev_weight(b->devs[i]);
-		r = random_custom(&b->r, total);
+		if (b->paranoia < 2) return;
+		if (b->paranoia == 3 && !blockio_wait_tick(b)) continue;
 
-		for (i = 0; i < b->no_devs; i++) {
-			if (r < blockio_dev_weight(b->devs[i])) break;
-			r -= blockio_dev_weight(b->devs[i]);
-		}
+		if (!(drawn = blockio_draw(b, dev->io))) continue;
 
-		if (i == b->no_devs) { /* the free space */
-			bi = nth_free_block(b, r, &no_free);
-			assert(bi);
-			pthd_mutex_unlock(&b->unallocated_mutex);
-			blockio_dev_write_random(dev, bi);
-			continue;
-		}
-		pthd_mutex_unlock(&b->unallocated_mutex);
-
-		if (b->devs[i] == dev) return;
+		if (drawn == dev) return;
 
 		/* another partition writes one block */
-		b->devs[i]->turn = 1;
-		b->step(b->devs[i]);
-		if (b->devs[i]->turn) {
-			WARNING("partition \"%s\" did not write in its turn",
-					b->devs[i]->name);
-			b->devs[i]->turn = 0;
-		}
+		blockio_give_turn(b, drawn);
 	}
 }
 

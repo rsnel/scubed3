@@ -58,6 +58,8 @@ Test hooks of scubed3-crash (environment variables of the daemon):
                          fail with EIO (a bad sector), until it is written
   SCUBED3_WRITE_LOG=file the offset of every macroblock write is appended
                          to file (used for the statistical tests)
+  SCUBED3_WRITE_LOG_TIME=1  with SCUBED3_WRITE_LOG: the time of the write
+                         (CLOCK_MONOTONIC) is logged too
 
 
 Running everything
@@ -84,13 +86,18 @@ torture.py DAEMON STEPS SEED [crash|tear]
 	written last, after a crash what was written up to the last fsync or
 	something newer, discarded data never comes back, a grown part reads
 	as zeroes. At the end it checks that the tombstones of the discards die
-	out. PARANOIA=0 or PARANOIA=2 runs it in that paranoia level (in level 2
-	the free space is overwritten too).
+	out (not in level 0, see the main README). PARANOIA=0, 2 or "3 KIBPS"
+	runs it in that paranoia level (in level 2 and 3 the free space is
+	overwritten too; in level 3 the daemon also writes while nothing is
+	written, so it can crash at any moment). CRASH_MAX (default 12) is the
+	maximum number of writes before a crash.
 	Ends with "FINAL OK: ..." and statistics of what happened.
 
-runall.sh, runall0.sh, runall2.sh
-	8 torture runs in level 1 (normal, crash and tear), 5 in level 0 and 5
-	in level 2, a summary in runall.out, runall0.out, runall2.out.
+runall.sh, runall0.sh, runall2.sh, runall3.sh
+	8 torture runs in level 1 (normal, crash and tear), 5 in level 0, 5 in
+	level 2 and 5 shorter ones in level 3 (with a rate of 400 MiB/s: as
+	fast as the disk can), a summary in runall.out, runall0.out,
+	runall2.out, runall3.out.
 
 
 Filesystems on top
@@ -210,6 +217,17 @@ level0test.py DAEMON-crash SEED
 	Level 0: fewer block writes than level 1 for the same data, the next
 	block is the block with the least live data, data correct after a
 	restart.
+
+level3test.py DAEMON-crash SCUBED3CTL SEED
+	Level 3 (10 writes per second, 64 KiB blocks): idle, the writes come at
+	the rate and the times between them are exponentially distributed;
+	while a partition is written as fast as possible, the same rate and
+	distribution and the written blocks uniform over the base device, the
+	throughput of the partition at most its share of the rate; data correct
+	with fsync, a clean restart and kill -9; the paranoia command answers
+	at once while a writer waits for its turn, and switching to level 1
+	lets the writer finish; scubed3ctl paranoia 3 KIBPS; closing a
+	partition switches back to level 1 and the writes stop.
 
 jstat STEPS (jstat.c, built by build.sh)
 	Unit test of juggler.c, without the daemon: every draw is uniform over

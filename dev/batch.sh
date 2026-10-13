@@ -8,8 +8,8 @@ export S3BUILD=$(pwd)
 run() { name=$1; shift; "$@" > $name.out 2>&1; echo "$name: $(tail -n 1 $name.out | cut -c1-150)" >> batch.summary; }
 
 : > batch.summary
-sh $T/runall.sh; sh $T/runall2.sh; sh $T/runall0.sh
-cat runall.out runall2.out runall0.out | cut -c1-150 >> batch.summary
+sh $T/runall.sh; sh $T/runall2.sh; sh $T/runall0.sh; sh $T/runall3.sh
+cat runall.out runall2.out runall0.out runall3.out | cut -c1-150 >> batch.summary
 : > extra.out
 for sd in 911 912 913 914; do
 	timeout 1500 python3 -I -u $T/torture.py scubed3-crash 250 $sd tear > t.out 2>&1
@@ -33,6 +33,7 @@ run socket sh $T/sockettest.sh ./scubed3 ./scubed3ctl
 run size python3 -u $T/sizetest.py scubed3
 run resizestat python3 -u $T/resizestat.py scubed3-crash 1500 11
 run level0 python3 -u $T/level0test.py scubed3-crash 3
+run level3 python3 -u $T/level3test.py scubed3-crash ./scubed3ctl 5
 run memoryless python3 -u $T/memoryless.py scubed3-crash 6000
 run jstat ./jstat 200000
 echo ALLDONE >> batch.summary

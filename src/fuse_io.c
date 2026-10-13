@@ -41,13 +41,13 @@ typedef struct fuse_io_priv_s {
 /* everything that may write blocks takes the io lock of the base device
  * before the lock of the partition (see blockio_t) */
 static void io_lock(void) {
-	pthd_mutex_lock(&((fuse_io_priv_t*)fuse_get_context()->private_data)->
-			control_thread_priv.b->io_mutex);
+	blockio_io_lock(((fuse_io_priv_t*)fuse_get_context()->private_data)->
+			control_thread_priv.b);
 }
 
 static void io_unlock(void) {
-	pthd_mutex_unlock(&((fuse_io_priv_t*)fuse_get_context()->private_data)->
-			control_thread_priv.b->io_mutex);
+	blockio_io_unlock(((fuse_io_priv_t*)fuse_get_context()->private_data)->
+			control_thread_priv.b);
 }
 
 /* paranoia level 2: the scheduler lets partition dev write one block (the
@@ -219,6 +219,9 @@ void *fuse_io_init(struct fuse_conn_info *conn) {
 	pthread_create(&priv->control_thread, NULL, control_thread,
 			&priv->control_thread_priv);
 
+	/* start the clock of paranoia level 3 (it is idle in other levels) */
+	blockio_clock_start(priv->control_thread_priv.b);
+
 	return fuse_get_context()->private_data;
 }
 
@@ -309,6 +312,7 @@ static int fuse_io_flush(const char *path, struct fuse_file_info *fi) {
 void fuse_io_destroy(void *arg) {
 	fuse_io_priv_t *priv = fuse_get_context()->private_data;
 	VERBOSE("destroy called");
+	blockio_clock_stop(priv->control_thread_priv.b);
 	pthread_cancel(priv->control_thread);
 	pthread_join(priv->control_thread, NULL);
 	hashtbl_free(&priv->control_thread_priv.c);
@@ -332,6 +336,17 @@ static struct fuse_operations fuse_io_operations = {
 };
 
 static void freer(fuse_io_entry_t *entry) {
+	/* the partition is closed, its blocks would look free (see
+	 * blockio_dev_free), the level is lowered first, so that its last
+	 * writes do not wait for their turn (a partition without blocks,
+	 * for example after an open with the wrong passphrase, does not
+	 * matter) */
+	if (entry->d.b && entry->d.b->paranoia >= 2 &&
+			entry->d.no_macroblocks) {
+		WARNING("\"%s\" is closed, paranoia level %d is switched off "
+				"(level 1)", entry->head.key, entry->d.b->paranoia);
+		blockio_set_paranoia(entry->d.b, 1, 0);
+	}
 	free(entry->head.key);
 	free(entry->mountpoint);
 	scubed3_free(&entry->l);

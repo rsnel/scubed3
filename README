@@ -154,9 +154,11 @@ The cost:
 
 - waiting: a writer whose current block is full waits for the turn of its
   partition (on average macroblock size/(f*RATE)), so does fsync; while it
-  waits, reads of that partition, writes to the other partitions and
-  control commands wait too (except the paranoia command: you can always
-  switch back)
+  waits, writes to the other partitions and control commands wait too
+  (except the paranoia command: you can always switch back), reads go on,
+  also of that partition: its lock is released while it waits (nothing
+  changes it in the meantime, everything that changes a partition waits
+  for the io lock that the writer holds)
 
 - wear: RATE all the time; SSDs are rated for a number of terabytes
   written (TBW), typically a few hundred TB per TB of capacity:

@@ -53,6 +53,17 @@ static void io_unlock(void) {
 			control_thread_priv.b);
 }
 
+/* a writer holds the lock of the partition, it is released while the
+ * writer waits for its turn in paranoia level 2 and 3, so reads of the
+ * partition go on (see blockio_dev_wait_turn) */
+static void wait_unlock_set(fuse_io_entry_t *entry) {
+	entry->d.wait_unlock = &entry->head.data_mutex;
+}
+
+static void wait_unlock_clear(fuse_io_entry_t *entry) {
+	entry->d.wait_unlock = NULL;
+}
+
 /* paranoia level 2: the scheduler lets partition dev write one block (the
  * caller holds the io lock, and the lock of another partition) */
 static void fuse_io_step(blockio_dev_t *dev) {
@@ -207,7 +218,9 @@ static int fuse_io_write(const char *path, const char *buf, size_t size,
 		return -ENOENT;
 	}
 
+	wait_unlock_set(entry);
 	ret = do_req(&entry->l, SCUBED3_WRITE, offset, size, (char*)buf);
+	wait_unlock_clear(entry);
 
 	hashtbl_unlock_element_byptr(entry);
 	io_unlock();
@@ -246,7 +259,9 @@ static int fuse_io_fsync(const char *path, int datasync,
 		return -ENOENT;
 	}
 
+	wait_unlock_set(entry);
 	scubed3_fsync(&entry->l);
+	wait_unlock_clear(entry);
 
 	hashtbl_unlock_element_byptr(entry);
 	io_unlock();
@@ -292,12 +307,14 @@ static int fuse_io_fallocate(const char *path, int mode, off_t offset,
 		return -ENOENT;
 	}
 
+	wait_unlock_set(entry);
 	if (offset < 0 || len <= 0) ret = -EINVAL;
 	else if (mode&~(FALLOC_FL_KEEP_SIZE|FALLOC_FL_PUNCH_HOLE|
 				FALLOC_FL_ZERO_RANGE)) ret = -EOPNOTSUPP;
 	else if (mode&(FALLOC_FL_PUNCH_HOLE|FALLOC_FL_ZERO_RANGE))
 		ret = scubed3_discard(&entry->l, offset, len);
 	else if (offset + len > entry->size) ret = -ENOSPC;
+	wait_unlock_clear(entry);
 
 	hashtbl_unlock_element_byptr(entry);
 	io_unlock();

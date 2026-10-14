@@ -1804,6 +1804,7 @@ void blockio_clock_stop(blockio_t *b) {
 	pthread_join(b->clock_thread, NULL);
 	b->clock_running = 0;
 	if (b->close) (b->close)(b->clock_io);
+	b->clock_io = NULL;
 }
 
 /* set the paranoia level (and the rate of level 3, if rate is not 0); this
@@ -1827,12 +1828,20 @@ void blockio_set_paranoia(blockio_t *b, int level, uint64_t rate) {
  * writes until dev is drawn (see blockio_draw); everything that may write
  * holds io_mutex, so the scheduler can let the other partitions write; in
  * level 3 there is one draw per tick (see blockio_wait_tick), and dev
- * waits for the ticks (with io_mutex: nothing else can write anyway, but
- * also the other partitions and control commands that wait for io_mutex,
- * and reads of dev, wait) */
+ * waits for the ticks (with io_mutex: nothing else can write anyway, the
+ * other partitions and control commands that wait for io_mutex wait);
+ *
+ * the lock of dev (wait_unlock, if the writer set it) is released while
+ * it waits, so dev can be read: dev does not change in the meantime
+ * (everything that changes a partition holds io_mutex), its current block
+ * is complete in RAM and is not written yet; the draws use the io of the
+ * clock thread (only the holder of io_mutex uses it), not the io of dev,
+ * that the reads use */
 static void blockio_dev_wait_turn(blockio_dev_t *dev) {
 	blockio_t *b = dev->b;
 	blockio_dev_t *drawn;
+	pthread_mutex_t *unlock = NULL;
+	void *io = dev->io;
 
 	/* the scheduler gave this partition the turn */
 	if (dev->turn) {
@@ -1840,17 +1849,27 @@ static void blockio_dev_wait_turn(blockio_dev_t *dev) {
 		return;
 	}
 
+	if (b->paranoia < 2) return;
+
+	if (dev->wait_unlock && b->clock_io) {
+		unlock = dev->wait_unlock;
+		io = b->clock_io;
+		pthd_mutex_unlock(unlock);
+	}
+
 	for (;;) {
-		if (b->paranoia < 2) return;
+		if (b->paranoia < 2) break;
 		if (b->paranoia == 3 && !blockio_wait_tick(b)) continue;
 
-		if (!(drawn = blockio_draw(b, dev->io))) continue;
+		if (!(drawn = blockio_draw(b, io))) continue;
 
-		if (drawn == dev) return;
+		if (drawn == dev) break;
 
 		/* another partition writes one block */
 		blockio_give_turn(b, drawn);
 	}
+
+	if (unlock) pthd_mutex_lock(unlock);
 }
 
 void blockio_dev_write_current_macroblock(blockio_dev_t *dev) {

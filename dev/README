@@ -200,6 +200,17 @@ wipetest.py DAEMON-crash SEED
 	daemon keeps running); a partition of 2 blocks (the minimum) is
 	removed in level 3.
 
+waitreadtest.py DAEMON SECONDS SEED LEVEL [KIBPS] [MAXREAD]
+	A writer that waits for its turn (paranoia level 2 or 3; level 3 with
+	KIBPS, default 640 KiB/s: 10 writes per second) does not block the
+	reads of its partition: one thread writes partition a as fast as
+	possible, other threads read a and b and measure how long a read
+	takes (median, 99%, max; with MAXREAD in seconds the test fails if a
+	read of a takes longer); every mesoblock contains its index and a
+	version, a read must return a complete version that is not older than
+	the last one written; at the end and after a restart a and b contain
+	exactly what was written.
+
 churntest.py DAEMON ROUNDS SEED LEVEL [KIBPS]
 	Partitions are created, enlarged, shrunk to 0 blocks (removed) and
 	closed, over and over, while two other partitions are written as fast

@@ -1,6 +1,3 @@
-rwlock: reads of a partition wait for its writes (the lock of the partition);
-in paranoia level 3 a writer that waits for its turn blocks the reads of its
-partition (and io_mutex blocks the writes of the other partitions)
 safe backup iv's
 a crash while a removed partition is wiped: the wipe is resumed when it is
 opened again, until then its last two indices are not protected (see

@@ -38,6 +38,8 @@ run churn1 python3 -u $T/churntest.py scubed3 60 11 1
 run churn2 python3 -u $T/churntest.py scubed3 60 12 2
 run churn3 python3 -u $T/churntest.py scubed3 10 13 3
 run wipe python3 -u $T/wipetest.py scubed3-crash 14
+run waitread2 python3 -u $T/waitreadtest.py scubed3 20 15 2
+run waitread3 python3 -u $T/waitreadtest.py scubed3 30 16 3 640 0.5
 run memoryless python3 -u $T/memoryless.py scubed3-crash 6000
 run jstat ./jstat 200000
 echo ALLDONE >> batch.summary

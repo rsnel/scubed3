@@ -196,6 +196,12 @@ typedef struct blockio_dev_s {
 	 * the number of blocks that were left (see blockio_dev_resume_wipe) */
 	uint32_t resumed;
 
+	/* the lock of the partition, set while it is held by a writer (see
+	 * fuse_io.c): it is released while the writer waits for its turn in
+	 * paranoia level 2 and 3, so the partition can be read in the
+	 * meantime (see blockio_dev_wait_turn) */
+	pthread_mutex_t *wait_unlock;
+
 	void *io;
 } blockio_dev_t;
 
@@ -236,7 +242,7 @@ struct blockio_s {
 	void (*step)(blockio_dev_t*);
 	random_t r;
 
-	/* in paranoia level 2 the writes of all partitions are done one by
+	/* in paranoia level 2 and 3 the writes of all partitions are done one by
 	 * one (one partition may write blocks of another one): this lock is
 	 * taken before the lock of a partition by everything that may write */
 	pthread_mutex_t io_mutex;

@@ -54,6 +54,7 @@ struct blockio_info_s {
 	/* for unallocated, replay and release */
 	dllarr_elt_t ur;
 	uint64_t seqno;
+	uint64_t nonce; /* random, new for every write (see blockio_iv0) */
 	uint32_t next_block; /* from the index: the block written after it */
 	int unreadable; /* the index could not be read when scanning */
 

@@ -110,7 +110,7 @@ def blocks_of(k):
             f.seek(mid * MACRO); c = f.read(MESO)
             iv = ess.update(struct.pack(">QII", 0, 0, mid))
             p = Cipher(algorithms.AES(k), modes.CBC(iv)).decryptor().update(c)
-            if p[0x70:0x78] == b"SSS3v0.4" and hashlib.sha256(p[32:]).digest() == p[:32]:
+            if p[0x70:0x78] in (b"SSS3v0.5", b"SSS3v0.4") and hashlib.sha256(p[32:]).digest() == p[:32]:
                 nmb, res, pend = struct.unpack(">III", p[0x78:0x84])
                 out.append((mid, struct.unpack(">Q", p[0x60:0x68])[0], nmb - pend - res))
     return out

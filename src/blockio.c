@@ -175,7 +175,8 @@ static void *stream_open(const char *path) {
 
 #define BASE			(dev->tmp_macroblock)
 #define INDEXBLOCK_SHA256	(BASE + 0x000)
-#define RESERVED32		(BASE + 0x020) /* MUST be 0 */
+#define NONCE_UINT64		(BASE + 0x020) /* followed by 24 zero bytes */
+#define RESERVED24		(BASE + 0x028) /* MUST be 0 */
 #define TRIM_FLOOR_UINT64	(BASE + 0x040) /* followed by 24 zero bytes */
 #define SEQNO_UINT64		(BASE + 0x060)
 #define NEXT_BLOCK_UINT32	(BASE + 0x068) /* followed by 4 zero bytes */
@@ -348,7 +349,29 @@ void blockio_init_file(blockio_t *b, const char *path, uint8_t macroblock_log,
 	}
 }
 
-static const char magic[8] = "SSS3v0.4";
+static const char magic[8] = "SSS3v0.5";
+
+/* blocks of version 0.4 have no nonce (it is 0, the IV is the same as
+ * before), they are still read; they become version 0.5 when they are
+ * written again */
+static const char magic_v04[8] = "SSS3v0.4";
+
+static int magic_ok(const void *p) {
+	return !memcmp(p, magic, sizeof(magic)) ||
+		!memcmp(p, magic_v04, sizeof(magic_v04));
+}
+
+/* the IV of the data mesoblocks of a block is ESSIV(seqno^nonce, slot,
+ * block): the seqno alone repeats with other data if the base device is
+ * restored from a backup and used again, or if a torn write is redone (the
+ * torn block is ignored, the write is redone in the same block with the
+ * same seqno), and someone who has both versions would see the repeated
+ * IVs; the nonce is random and new for every write, so the IVs do not
+ * repeat (unless two random 64 bit nonces of one block happen to collide
+ * with their seqnos) */
+static uint64_t blockio_iv0(blockio_info_t *bi) {
+	return bi->seqno^bi->nonce;
+}
 
 static void blockio_dev_take_index(blockio_dev_t*);
 
@@ -1078,7 +1101,7 @@ static void blockio_dev_read_index(blockio_dev_t *dev, blockio_info_t *bi) {
 
 	gcry_md_hash_buffer(GCRY_MD_SHA256, sha256, BASE + sizeof(sha256),
 			(1<<dev->b->mesoblk_log) - sizeof(sha256));
-	if (memcmp(magic, MAGIC64, sizeof(magic)) ||
+	if (!magic_ok(MAGIC64) ||
 			memcmp(INDEXBLOCK_SHA256, sha256, sizeof(sha256))) {
 		dev->no_macroblocks = 0;
 		ecch_throw(ECCH_DEFAULT, "\"%s\" is not opened: the index of "
@@ -1135,7 +1158,7 @@ void blockio_dev_scan_header(dllarr_t *replay, blockio_dev_t *dev,
 	cipher_dec(dev->c, BASE, BASE, 0, 0, no);
 
 	/* check magic */
-	if (memcmp(magic, MAGIC64, sizeof(magic))) {
+	if (!magic_ok(MAGIC64)) {
 //		DEBUG("magic \"%.*s\" not found in macroblock %u",
 //				(int)sizeof(magic), magic, no);
 		return;
@@ -1154,6 +1177,8 @@ void blockio_dev_scan_header(dllarr_t *replay, blockio_dev_t *dev,
 	/* block seems to belong to us */
 	/* store the seqno and next block */
 	bi->seqno = binio_read_uint64_be(SEQNO_UINT64);
+	bi->nonce = memcmp(MAGIC64, magic_v04, sizeof(magic_v04))?
+		binio_read_uint64_be(NONCE_UINT64):0;
 	bi->next_block = binio_read_uint32_be(NEXT_BLOCK_UINT32);
 
 	no_trims = binio_read_uint32_be(NO_TRIMS_UINT32);
@@ -1234,7 +1259,7 @@ int blockio_dev_read_mesoblk(blockio_dev_t *dev,
 				"corrupt", no, id, bi->seqno, dev->name);
 		corrupt = BLOCKIO_CORRUPT_MASK;
 	}
-	cipher_dec(dev->c, buf, buf, bi->seqno, no + 1, id);
+	cipher_dec(dev->c, buf, buf, blockio_iv0(bi), no + 1, id);
 
 	return corrupt;
 }
@@ -1395,7 +1420,7 @@ static int blockio_dev_has_index(blockio_dev_t *dev, blockio_info_t *bi) {
 	if (dev->b->read(dev->io, buf, ((off_t)no)<<dev->b->macroblock_log,
 				1<<dev->b->mesoblk_log)) goto out;
 	cipher_dec(dev->c, (char*)buf, (char*)buf, 0, 0, no);
-	if (memcmp(magic, buf + 0x070, sizeof(magic))) goto out;
+	if (!magic_ok(buf + 0x070)) goto out;
 	gcry_md_hash_buffer(GCRY_MD_SHA256, sha256, buf + sizeof(sha256),
 			(1<<dev->b->mesoblk_log) - sizeof(sha256));
 	ret = !memcmp(buf, sha256, sizeof(sha256));
@@ -1911,6 +1936,10 @@ void blockio_dev_write_current_macroblock(blockio_dev_t *dev) {
 				0, 1<<dev->b->mesoblk_log);
 	}
 
+	/* a new nonce for every write (see blockio_iv0) */
+	dev->bi->nonce = ((uint64_t)random_uint32(&dev->r)<<32)|
+		random_uint32(&dev->r);
+
 	/* encrypt datablocks (also the unused ones), the plaintext
 	 * stays in tmp_macroblock, store the hash of each ciphertext
 	 * in the index, together with the corrupt parts of the mesoblocks
@@ -1920,7 +1949,7 @@ void blockio_dev_write_current_macroblock(blockio_dev_t *dev) {
 		cipher_enc(dev->c, dev->out_macroblock +
 				(i<<dev->b->mesoblk_log),
 			BASE + (i<<dev->b->mesoblk_log),
-			dev->bi->seqno, i, id);
+			blockio_iv0(dev->bi), i, id);
 		dev->bi->hashes[i-1] = mesoblk_hash(dev->out_macroblock +
 				(i<<dev->b->mesoblk_log),
 				1<<dev->b->mesoblk_log)|
@@ -1929,7 +1958,8 @@ void blockio_dev_write_current_macroblock(blockio_dev_t *dev) {
 		binio_write_uint64_be(HASH_UINT64(i-1), dev->bi->hashes[i-1]);
 	}
 	memset(HASH_UINT64(dev->b->mmpm), 0, 8); /* unused */
-	memset(RESERVED32, 0, 32);
+	binio_write_uint64_be(NONCE_UINT64, dev->bi->nonce);
+	memset(RESERVED24, 0, 24);
 
 	/* write static data, also which block is written next (its live
 	 * data is absorbed by this block) */
@@ -2075,7 +2105,7 @@ static void blockio_dev_check_readded(blockio_dev_t *dev, blockio_info_t *bi) {
 	if (dev->b->read(dev->io, buf, ((off_t)no)<<dev->b->macroblock_log,
 				1<<dev->b->mesoblk_log)) goto out;
 	cipher_dec(dev->c, (char*)buf, (char*)buf, 0, 0, no);
-	if (memcmp(magic, buf + 0x070, sizeof(magic))) goto out;
+	if (!magic_ok(buf + 0x070)) goto out;
 	gcry_md_hash_buffer(GCRY_MD_SHA256, sha256, buf + sizeof(sha256),
 			(1<<dev->b->mesoblk_log) - sizeof(sha256));
 	if (memcmp(buf, sha256, sizeof(sha256))) goto out;

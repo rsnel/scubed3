@@ -2,7 +2,8 @@
 # batch.sh: all tests, one after the other; run as root in the directory with
 # the binaries (see build.sh), every test writes NAME.out there, a summary
 # (the last line of every test) goes to batch.summary
-# (MKFS_XFS=path/to/mkfs.xfs adds XFS to discardtest.py)
+# (MKFS_XFS=path/to/mkfs.xfs adds XFS to discardtest.py, OLD_DAEMON=path/to/scubed3
+# of version 0.4 adds the compatibility part of ivtest.py)
 T=$(cd "$(dirname "$0")" && pwd)
 export S3BUILD=$(pwd)
 run() { name=$1; shift; "$@" > $name.out 2>&1; echo "$name: $(tail -n 1 $name.out | cut -c1-150)" >> batch.summary; }
@@ -38,6 +39,7 @@ run churn1 python3 -u $T/churntest.py scubed3 60 11 1
 run churn2 python3 -u $T/churntest.py scubed3 60 12 2
 run churn3 python3 -u $T/churntest.py scubed3 10 13 3
 run wipe python3 -u $T/wipetest.py scubed3-crash 14
+run iv python3 -u $T/ivtest.py scubed3-crash 17 $OLD_DAEMON
 run waitread2 python3 -u $T/waitreadtest.py scubed3 20 15 2
 run waitread3 python3 -u $T/waitreadtest.py scubed3 30 16 3 640 0.5
 run memoryless python3 -u $T/memoryless.py scubed3-crash 6000

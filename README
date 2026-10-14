@@ -30,12 +30,22 @@ block for use as IV (see Encryption).
 
 indexblocks are encrypted with IV = ESSIV(0, 0, macroblock_number)
 
-mesoblocks are encrypted with IV = ESSIV(seqno, mesoblock_number,
-macroblock_number), mesoblock_number is 1..255 (with the default sizes)
+mesoblocks are encrypted with IV = ESSIV(seqno^nonce, mesoblock_number,
+macroblock_number), mesoblock_number is 1..255 (with the default sizes), the
+nonce is random and new for every write of a macroblock (it is in the
+indexblock)
 
 the indexblock IV will repeat when the same disk block is written
 
-the mesoblock IV will never repeat (as long as the seqno is not reset)
+the mesoblock IV does not repeat, also not when a seqno repeats: when the
+base device is restored from a backup and used again, or when a torn write
+is redone (the torn block is ignored, its write is redone in the same block
+with the same seqno); with the seqno alone, someone who has both versions of
+such a block (the backup and the device, or the old pages that an SSD keeps)
+would see the repeated IVs: with CBC the leading 16 byte blocks that are the
+same in both versions, and that the device was rolled back; the IV only
+repeats if the nonces of two writes of the same block happen to collide
+(with their seqnos), with probability about n^2/2^65 for n writes of a block
 
 Encryption
 ~~~~~~~~~~
@@ -49,8 +59,8 @@ An earlier design used a wide block mode (ABL) for the data, so that a
 macroblock changes completely or not at all. That is not needed: every write
 of a macroblock has a new seqno, so every data mesoblock has a new IV and
 changes completely; the indexblock has a fixed IV, but its first 32 bytes are
-a hash of the rest of it, which contains the seqno, so with CBC the whole
-indexblock changes as well. To someone without the key, a macroblock changes
+a hash of the rest of it, which contains the seqno and the nonce, so with CBC
+the whole indexblock changes as well. To someone without the key, a macroblock changes
 completely or not at all.
 
 The cipher is given as MODE(BLOCKCIPHER) when a partition is opened or
@@ -388,14 +398,20 @@ the mesoblocks.
 Layout of macroblock:
 
 0x000000 SHA256_HASH_INDEXBLOCK hash of 0x000020 - 0x003FFF
-0x000020 32 bytes, MUST be 0
+0x000020 uint64_t nonce (random, new for every write; 0 in SSS3v0.4)
+0x000028 24 bytes, MUST be 0
 0x000040 uint64_t trim_floor (blocks with seqno < trim_floor are stale)
 0x000048 24 bytes, MUST be 0
 0x000060 uint64_t seqno
 0x000068 uint32_t next_block (the block that will be written after this one,
          0xFFFFFFFF if none)
 0x00006C 4 bytes, MUST be 0
-0x000070 8byte literal "SSS3v0.4"
+0x000070 8byte literal "SSS3v0.5" (blocks of "SSS3v0.4" are still read, their
+         nonce is 0, they become SSS3v0.5 when they are written again; an
+         older scubed3 does not know SSS3v0.5 blocks, it would see them as
+         free blocks: DO NOT USE AN OLDER SCUBED3 on a base device that this
+         version wrote to, it may open a partition in an old state, or add
+         its blocks as empty ones)
 0x000078 uint32_t no_macroblocks
 0x00007C uint32_t reserved_blocks
 0x000080 uint32_t pending_removals (shrinking: blocks still to be removed)

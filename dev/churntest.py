@@ -176,7 +176,7 @@ def has_index(f, mid, k):
     iv = Cipher(algorithms.AES(hashlib.sha256(k).digest()), modes.ECB()).encryptor().update(
             struct.pack(">QII", 0, 0, mid))
     p = Cipher(algorithms.AES(k), modes.CBC(iv)).decryptor().update(c)
-    return p[0x70:0x78] == b"SSS3v0.4" and hashlib.sha256(p[32:]).digest() == p[:32]
+    return p[0x70:0x78] in (b"SSS3v0.5", b"SSS3v0.4") and hashlib.sha256(p[32:]).digest() == p[:32]
 with open(base, "rb") as f:
     left = sum(has_index(f, mid, k) for k in wiped for mid in range(TOTAL))
 if left: fail("%d blocks still have an index of a removed partition" % left)

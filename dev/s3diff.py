@@ -5,7 +5,7 @@
 # show that another partition was written; in level 2 the free space is
 # overwritten too, so this tells nothing)
 # usage: s3diff.py [-s SALT] BEFORE AFTER PASSPHRASE KDF_ITERATIONS
-# (4 MiB macroblocks, 16 KiB mesoblocks, PBKDF2-SHA256, format SSS3v0.4)
+# (4 MiB macroblocks, 16 KiB mesoblocks, PBKDF2-SHA256, format SSS3v0.5 or v0.4)
 import sys, hashlib, struct
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 MACRO, MESO = 1 << 22, 1 << 14
@@ -18,7 +18,7 @@ def owned(f, mid):
     f.seek(mid * MACRO); c = f.read(MESO)
     iv = ess.update(struct.pack('>QII', 0, 0, mid))
     p = Cipher(algorithms.AES(key), modes.CBC(iv)).decryptor().update(c)
-    return p[0x70:0x78] == b'SSS3v0.4' and hashlib.sha256(p[32:]).digest() == p[:32]
+    return p[0x70:0x78] in (b'SSS3v0.5', b'SSS3v0.4') and hashlib.sha256(p[32:]).digest() == p[:32]
 fa, fb = open(a, 'rb'), open(b, 'rb'); fa.seek(0, 2); n = fa.tell() // MACRO
 mine = other = 0
 for mid in range(n):

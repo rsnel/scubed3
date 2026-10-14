@@ -38,9 +38,15 @@ sh("mkfs.ext4","-q","-F","-b","4096",MNT+"/t"); sh("mount","-o","loop",MNT+"/t",
 data=os.urandom(1<<20); open(FS+"/f","wb").write(data); os.sync()
 fr=sh("filefrag","-v",FS+"/f"); print(fr.strip().split("\n")[3])
 pblk=int(re.search(r"^\s*0:\s+\d+\.\.\s*\d+:\s+(\d+)",fr,re.M).group(1))
-target=pblk+5  # 6th 4KiB block of the file
 sh("umount",FS); time.sleep(.3); cmd("close t"); stop()
-st=s3read.Store(base,b"fr",1000); m=target*4096//16384; part=target%4
+# a block of the file (from the 6th 4KiB block on), not in the most recent
+# macroblock: a corrupt mesoblock there looks like a torn write, the
+# macroblock is ignored when the partition is opened (the data falls back
+# to its previous version, there is no EIO)
+st=s3read.Store(base,b"fr",1000); last=st.blocks[-1][1]
+for target in range(pblk+5,pblk+256):
+    m=target*4096//16384; part=target%4
+    if m in st.loc and st.loc[m][0]!=last: break
 blk,k,sq,h=st.loc[m]
 with open(base,"r+b") as f:
     f.seek(blk*(1<<22)+(k+1)*16384+part*4096+100); b=f.read(1); f.seek(-1,1); f.write(bytes([b[0]^1]))

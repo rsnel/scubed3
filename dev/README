@@ -188,6 +188,17 @@ sockettest.sh DAEMON SCUBED3CTL
 Paranoia levels and the write order
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
+ivtest.py DAEMON-crash SEED [OLD-DAEMON]
+	The IVs of the data mesoblocks (ESSIV(seqno^nonce, slot, block)) do
+	not repeat when the seqnos repeat: a backup of the base device is
+	restored and used again, and torn writes (kill -9) are redone; after
+	every fsync the indices are read with the key, the test fails if one
+	(block, seqno^nonce) belongs to two different writes (it also checks
+	that the seqnos did repeat, a build of the version before the nonce
+	fails it); with OLD-DAEMON (a scubed3 of version 0.4) a base device
+	written by it is opened, read and written, both versions of blocks
+	are read.
+
 wipetest.py DAEMON-crash SEED
 	Removing a partition wipes every block that has an index of it: in
 	level 1 at once (also the blocks it gave away in an earlier shrink); in
@@ -279,8 +290,9 @@ Offline tools
 ~~~~~~~~~~~~~
 
 s3read.py [-s SALT] BASE PASSPHRASE KDF_ITERATIONS [OUT_IMAGE]
-	An independent reader of the on-disk format (SSS3v0.4, written from the
-	description in the main README, it shares no code with scubed3): lists
+	An independent reader of the on-disk format (SSS3v0.5 and v0.4,
+	written from the description in the main README, it shares no code
+	with scubed3): lists
 	the macroblocks of the partition of the passphrase, ignores a torn most
 	recent block, and with OUT_IMAGE writes the reconstructed partition
 	(corrupt 4 KiB parts as zeroes, they are reported). Some tests use it to

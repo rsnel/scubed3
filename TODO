@@ -1,4 +1,3 @@
-safe backup iv's
 a crash while a removed partition is wiped: the wipe is resumed when it is
 opened again, until then its last two indices are not protected (see
 Removing a partition in the README)

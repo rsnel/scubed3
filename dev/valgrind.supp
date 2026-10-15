@@ -1,13 +1,59 @@
-# valgrind suppressions for valgrindtest.sh (TOOL=helgrind or drd): races
-# inside libfuse 3 itself (its session and worker bookkeeping uses plain
-# variables between its threads), not in scubed3
+# valgrind suppressions for valgrindtest.sh (TOOL=helgrind or drd): the
+# known races inside libfuse 3 itself (checked with libfuse 3.14 built with
+# debug information), they are not in scubed3 and do not touch its data:
+#
+# - se->exited: set by fuse_session_exit() in the worker that sees ENODEV
+#   (unmount), read by fuse_session_exited() in the other workers and the
+#   main loop; a flag that goes from 0 to 1 once, at shutdown (libfuse marks
+#   these functions no_sanitize_thread: "we don't care about races for this
+#   flag")
+# - se->conn.proto_minor and se->bufsize: written by do_init() (the INIT
+#   request) in one worker, read by fuse_session_receive_buf_int() in
+#   another; the kernel sends no other request before INIT is answered (the
+#   order goes through /dev/fuse, which helgrind cannot see), and bufsize
+#   only becomes smaller (a stale value gives a larger buffer)
+#
+# these need debug information of libfuse (the function names); without it
+# valgrindtest.sh uses valgrind-nodebug.supp
 {
-   libfuse3-internal-race
+   libfuse3-exit-flag-write
    Helgrind:Race
-   obj:*/libfuse3.so*
+   fun:fuse_session_exit
 }
 {
-   libfuse3-internal-conflict
+   libfuse3-exit-flag-read
+   Helgrind:Race
+   fun:fuse_session_exited
+}
+{
+   libfuse3-init-write
+   Helgrind:Race
+   fun:do_init
+   fun:fuse_session_process_buf_int
+}
+{
+   libfuse3-receive-read
+   Helgrind:Race
+   fun:fuse_session_receive_buf_int
+}
+{
+   drd-libfuse3-exit-flag-write
    drd:ConflictingAccess
-   obj:*/libfuse3.so*
+   fun:fuse_session_exit
+}
+{
+   drd-libfuse3-exit-flag-read
+   drd:ConflictingAccess
+   fun:fuse_session_exited
+}
+{
+   drd-libfuse3-init-write
+   drd:ConflictingAccess
+   fun:do_init
+   fun:fuse_session_process_buf_int
+}
+{
+   drd-libfuse3-receive-read
+   drd:ConflictingAccess
+   fun:fuse_session_receive_buf_int
 }

@@ -29,8 +29,18 @@ memcheck)
 		--num-callers=30"
 	VGCTL=$VG;;
 helgrind|drd)
-	VG="valgrind --tool=$TOOL --num-callers=30
-		--suppressions=$(cd "$(dirname "$0")" && pwd)/valgrind.supp"
+	# the known races inside libfuse are suppressed by function name
+	# (valgrind.supp); that needs the debug information of libfuse,
+	# without it every race reported inside libfuse is suppressed
+	SUPP=$(cd "$(dirname "$0")" && pwd)/valgrind.supp
+	lib=$(ldd $D | awk '/libfuse3/ { print $3 }')
+	id=$(readelf -n "$lib" 2> /dev/null | sed -n 's/.*Build ID: *//p')
+	if ! readelf -S "$lib" 2> /dev/null | grep -q debug_info &&
+	   [ ! -f /usr/lib/debug/.build-id/$(echo $id | cut -c1-2)/$(echo $id | cut -c3-).debug ]; then
+		echo "   (no debug information in $lib: races inside libfuse are suppressed broadly)"
+		SUPP=${SUPP%.supp}-nodebug.supp
+	fi
+	VG="valgrind --tool=$TOOL --num-callers=30 --suppressions=$SUPP"
 	VGCTL=;;
 *)	echo "unknown TOOL $TOOL"; exit 1;;
 esac

@@ -1,0 +1,16 @@
+# valgrind suppressions for valgrindtest.sh (TOOL=helgrind or drd) when
+# libfuse 3 has no debug information: every race whose reported access is
+# inside libfuse3.so is suppressed (broad: it would also hide a race between
+# libfuse and scubed3 that is reported in libfuse); see valgrind.supp for
+# the known ones, install the debug symbols of libfuse (Debian:
+# libfuse3-*-dbgsym) to check precisely
+{
+   libfuse3-internal-race
+   Helgrind:Race
+   obj:*/libfuse3.so*
+}
+{
+   libfuse3-internal-conflict
+   drd:ConflictingAccess
+   obj:*/libfuse3.so*
+}

@@ -253,7 +253,12 @@ valgrindtest.sh DAEMON SCUBED3CTL
 	order, misuse of pthreads), scubed3ctl without valgrind; in level 3 a
 	writer that waits for its turn, reads of another partition and
 	control commands run at the same time. valgrind.supp suppresses the
-	races inside libfuse 3 itself.
+	known races inside libfuse 3 itself, by function name (se->exited at
+	unmount, se->conn.proto_minor and se->bufsize at INIT; checked with
+	libfuse 3.14 built with debug information: nothing else races). That
+	needs the debug information of libfuse (Debian: libfuse3-*-dbgsym, or
+	LD_LIBRARY_PATH to a debug build); without it valgrind-nodebug.supp
+	suppresses every race reported inside libfuse (the test says so).
 
 lukstest.sh DAEMON SCUBED3CTL
 	LUKS on top of a partition with scubed3ctl, and the warning below the

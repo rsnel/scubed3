@@ -1,0 +1,596 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>scubed3, the Simple Steganographic Store</title>
+<meta name="description" content="scubed3 hides any number of encrypted partitions in one device full of random data. Without its passphrase, a partition cannot be told apart from unused space.">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="wrap top">
+	<a class="brand" href="#" aria-label="scubed3 home">
+		<svg viewBox="0 0 64 64" aria-hidden="true"><style>.l1{fill:var(--noise-1)}.l2{fill:var(--ink-3)}.l3{fill:var(--ink-2)}.la{fill:var(--a)}</style><path class="l1" d="M8.25 18.00 L15.33 13.89 L22.42 18.00 L15.33 22.11Z"/>
+<path class="l1" d="M16.58 22.83 L23.67 18.73 L30.75 22.83 L23.67 26.94Z"/>
+<path class="l1" d="M24.92 27.67 L32.00 23.56 L39.08 27.67 L32.00 31.78Z"/>
+<path class="l1" d="M16.58 13.17 L23.67 9.06 L30.75 13.17 L23.67 17.27Z"/>
+<path class="l1" d="M24.92 18.00 L32.00 13.89 L39.08 18.00 L32.00 22.11Z"/>
+<path class="l2" d="M33.25 22.83 L40.33 18.73 L47.42 22.83 L40.33 26.94Z"/>
+<path class="l1" d="M24.92 8.33 L32.00 4.23 L39.08 8.33 L32.00 12.44Z"/>
+<path class="l2" d="M33.25 13.17 L40.33 9.06 L47.42 13.17 L40.33 17.27Z"/>
+<path class="l1" d="M41.58 18.00 L48.67 13.89 L55.75 18.00 L48.67 22.11Z"/>
+<path class="l3" d="M7.62 19.09 L14.71 23.20 L14.71 31.41 L7.62 27.30Z"/>
+<path class="l2" d="M7.62 28.75 L14.71 32.86 L14.71 41.08 L7.62 36.97Z"/>
+<path class="l2" d="M7.62 38.42 L14.71 42.53 L14.71 50.75 L7.62 46.64Z"/>
+<path class="l2" d="M15.96 23.92 L23.04 28.03 L23.04 36.25 L15.96 32.14Z"/>
+<path class="l2" d="M15.96 33.59 L23.04 37.70 L23.04 45.91 L15.96 41.80Z"/>
+<path class="l2" d="M15.96 43.25 L23.04 47.36 L23.04 55.58 L15.96 51.47Z"/>
+<path class="l2" d="M24.29 28.75 L31.38 32.86 L31.38 41.08 L24.29 36.97Z"/>
+<path class="l2" d="M24.29 38.42 L31.38 42.53 L31.38 50.75 L24.29 46.64Z"/>
+<path class="l3" d="M24.29 48.09 L31.38 52.20 L31.38 60.41 L24.29 56.30Z"/>
+<path class="l3" d="M32.62 32.86 L39.71 28.75 L39.71 36.97 L32.62 41.08Z"/>
+<path class="l2" d="M32.62 42.53 L39.71 38.42 L39.71 46.64 L32.62 50.75Z"/>
+<path class="l3" d="M32.62 52.20 L39.71 48.09 L39.71 56.30 L32.62 60.41Z"/>
+<path class="l2" d="M40.96 28.03 L48.04 23.92 L48.04 32.14 L40.96 36.25Z"/>
+<path class="la" d="M40.96 37.70 L48.04 33.59 L48.04 41.80 L40.96 45.91Z"/>
+<path class="l3" d="M40.96 47.36 L48.04 43.25 L48.04 51.47 L40.96 55.58Z"/>
+<path class="l3" d="M49.29 23.20 L56.38 19.09 L56.38 27.30 L49.29 31.41Z"/>
+<path class="l3" d="M49.29 32.86 L56.38 28.75 L56.38 36.97 L49.29 41.08Z"/>
+<path class="l3" d="M49.29 42.53 L56.38 38.42 L56.38 46.64 L49.29 50.75Z"/></svg>
+		<span>scubed<sup>3</sup></span>
+	</a>
+	<nav aria-label="Sections">
+		<a href="#idea">The idea</a>
+		<a href="#how">How it works</a>
+		<a href="#paranoia">Paranoia</a>
+		<a href="#performance">Performance</a>
+		<a href="#start">Get it</a>
+		<a href="#history">History</a>
+		<a href="#license">License</a>
+	</nav>
+</header>
+
+<main>
+<section class="wrap hero" aria-labelledby="hero-title">
+	<h1 id="hero-title">Encrypted partitions that can deny they exist.</h1>
+	<p class="lede">scubed3 hides any number of encrypted partitions in one disk full of random data. Without its passphrase, a partition looks exactly like unused space, so you can hand over one passphrase and keep quiet about the rest.</p>
+
+	<div class="store">
+		<canvas id="store" width="1024" height="320" aria-label="A grid of random-looking blocks; give a passphrase below to see which of them belong to a partition" role="img"></canvas>
+	</div>
+	<form class="unlock" id="unlock" autocomplete="off">
+		<label for="pass">Try a passphrase</label>
+		<input id="pass" type="text" spellcheck="false" placeholder="type, then press Enter">
+		<button type="button" class="chip" data-pass="holiday photos"><i class="pa-bg"></i>holiday photos</button>
+		<button type="button" class="chip" data-pass="tax papers"><i class="pb-bg"></i>tax papers</button>
+		<button type="button" class="chip" data-pass="diary"><i class="pc-bg"></i>diary</button>
+	</form>
+	<p class="verdict" id="verdict" aria-live="polite">This is a simulated device of 1&#8239;024 blocks. Three of the passphrases above open a partition. Any other passphrase opens nothing, and nobody can see how many partitions there are.</p>
+</section>
+
+<section class="wrap part" id="idea" aria-labelledby="idea-title">
+	<div class="prose">
+		<h2 id="idea-title">The idea</h2>
+		<p>Ordinary disk encryption protects what is in your files, but not the fact that you have them. Someone who can force you to open an encrypted disk can see that it is encrypted, and can keep insisting until you give up the passphrase.</p>
+		<p>scubed3 takes a different approach. You start with a device, or a big file, filled with random data. Encrypted data looks like random data too. So when scubed3 stores a partition on the device, the blocks it uses look the same as the blocks it does not use. Nothing on the device lists the partitions: each passphrase finds only its own blocks.</p>
+		<p>That allows <em>plausible deniability</em>. You can keep a partition with things you can admit to, and give up its passphrase when you have to. Other partitions on the same device stay invisible, and there is no way to prove that they are there. Unused space and hidden partitions look the same.</p>
+		<p>The name comes from <strong>S</strong>imple <strong>S</strong>teganographic <strong>S</strong>tore: three S's, s cubed. Steganography is the art of hiding that a message exists at all, not only what it says.</p>
+	</div>
+</section>
+
+<section class="wrap part" id="how" aria-labelledby="how-title">
+	<div class="prose">
+		<h2 id="how-title">How it works</h2>
+		<p>The device is divided into <strong>macroblocks</strong>, 4&#8239;MiB each by default. A macroblock is the unit scubed3 writes: always a whole macroblock at once, always encrypted with AES-256. Each one starts with a small <strong>index</strong> that says what is in the rest of it.</p>
+	</div>
+	<figure class="figure"><svg viewBox="0 0 960 350" role="img" aria-label="A base device made of macroblocks; one macroblock is an index mesoblock followed by data mesoblocks">
+<text x="0" y="14" class="svgtext small muted" text-anchor="start">the base device: macroblocks of 4 MiB, all of them random-looking</text>
+<rect x="0" y="26" width="36" height="36" rx="2" class="n2"/>
+<rect x="40" y="26" width="36" height="36" rx="2" class="n1"/>
+<rect x="80" y="26" width="36" height="36" rx="2" class="n2"/>
+<rect x="120" y="26" width="36" height="36" rx="2" class="n3"/>
+<rect x="160" y="26" width="36" height="36" rx="2" class="n1"/>
+<rect x="200" y="26" width="36" height="36" rx="2" class="n1"/>
+<rect x="240" y="26" width="36" height="36" rx="2" class="n3"/>
+<rect x="280" y="26" width="36" height="36" rx="2" class="n1"/>
+<rect x="320" y="26" width="36" height="36" rx="2" class="n2"/>
+<rect x="360" y="26" width="36" height="36" rx="2" class="n3"/>
+<rect x="400" y="26" width="36" height="36" rx="2" class="n1"/>
+<rect x="440" y="26" width="36" height="36" rx="2" class="n3"/>
+<rect x="480" y="26" width="36" height="36" rx="2" class="n1"/>
+<rect x="520" y="26" width="36" height="36" rx="2" class="n1"/>
+<rect x="560" y="26" width="36" height="36" rx="2" class="n1"/>
+<rect x="600" y="26" width="36" height="36" rx="2" class="n2"/>
+<rect x="640" y="26" width="36" height="36" rx="2" class="n2"/>
+<rect x="680" y="26" width="36" height="36" rx="2" class="n1"/>
+<rect x="720" y="26" width="36" height="36" rx="2" class="n1"/>
+<rect x="760" y="26" width="36" height="36" rx="2" class="n1"/>
+<rect x="800" y="26" width="36" height="36" rx="2" class="n3"/>
+<rect x="840" y="26" width="36" height="36" rx="2" class="n2"/>
+<rect x="880" y="26" width="36" height="36" rx="2" class="n1"/>
+<rect x="920" y="26" width="36" height="36" rx="2" class="n3"/>
+<rect x="358" y="24" width="40" height="40" rx="3" class="" fill="none" stroke="currentColor" stroke-width="2" style="color:var(--ink)"/>
+<path class="line" d="M360 64 L0 128 M396 64 L956 128" stroke-dasharray="3 3"/>
+<rect x="0" y="128" width="150" height="64" rx="3" class="panel" stroke="var(--ink)" stroke-width="1.5"/>
+<text x="12" y="155" class="svgtext" text-anchor="start" font-weight="700">index</text>
+<text x="12" y="175" class="svgtext small muted" text-anchor="start">1 mesoblock</text>
+<rect x="156" y="128" width="25.6786" height="64" rx="2" class="n1"/>
+<rect x="184.679" y="128" width="25.6786" height="64" rx="2" class="n1"/>
+<rect x="213.357" y="128" width="25.6786" height="64" rx="2" class="n3"/>
+<rect x="242.036" y="128" width="25.6786" height="64" rx="2" class="n3"/>
+<rect x="270.714" y="128" width="25.6786" height="64" rx="2" class="n3"/>
+<rect x="299.393" y="128" width="25.6786" height="64" rx="2" class="n1"/>
+<rect x="328.071" y="128" width="25.6786" height="64" rx="2" class="n3"/>
+<rect x="356.75" y="128" width="25.6786" height="64" rx="2" class="n3"/>
+<rect x="385.429" y="128" width="25.6786" height="64" rx="2" class="n2"/>
+<rect x="414.107" y="128" width="25.6786" height="64" rx="2" class="n1"/>
+<rect x="442.786" y="128" width="25.6786" height="64" rx="2" class="n1"/>
+<rect x="471.464" y="128" width="25.6786" height="64" rx="2" class="n1"/>
+<rect x="500.143" y="128" width="25.6786" height="64" rx="2" class="n3"/>
+<rect x="528.821" y="128" width="25.6786" height="64" rx="2" class="n1"/>
+<rect x="557.5" y="128" width="25.6786" height="64" rx="2" class="n2"/>
+<rect x="586.179" y="128" width="25.6786" height="64" rx="2" class="n2"/>
+<rect x="614.857" y="128" width="25.6786" height="64" rx="2" class="n1"/>
+<rect x="643.536" y="128" width="25.6786" height="64" rx="2" class="n3"/>
+<rect x="672.214" y="128" width="25.6786" height="64" rx="2" class="n1"/>
+<rect x="700.893" y="128" width="25.6786" height="64" rx="2" class="n3"/>
+<rect x="729.571" y="128" width="25.6786" height="64" rx="2" class="n2"/>
+<rect x="758.25" y="128" width="25.6786" height="64" rx="2" class="n3"/>
+<rect x="786.929" y="128" width="25.6786" height="64" rx="2" class="n3"/>
+<rect x="815.607" y="128" width="25.6786" height="64" rx="2" class="n1"/>
+<rect x="844.286" y="128" width="25.6786" height="64" rx="2" class="n1"/>
+<rect x="872.964" y="128" width="25.6786" height="64" rx="2" class="n3"/>
+<rect x="901.643" y="128" width="25.6786" height="64" rx="2" class="n3"/>
+<rect x="930.321" y="128" width="25.6786" height="64" rx="2" class="n3"/>
+<text x="156" y="214" class="svgtext small muted" text-anchor="start">data: 255 mesoblocks of 16 KiB, pieces of one partition</text>
+<text x="0" y="250" class="svgtext small" text-anchor="start" font-weight="700">After decryption with the right key, the index says:</text>
+<text x="0" y="276" class="svgtext small mono" text-anchor="start">magic</text>
+<text x="150" y="276" class="svgtext small muted" text-anchor="start">this block is mine (any other key gives noise)</text>
+<text x="0" y="298" class="svgtext small mono" text-anchor="start">sequence number</text>
+<text x="150" y="298" class="svgtext small muted" text-anchor="start">how new this block is; the newest copy of a piece wins</text>
+<text x="0" y="320" class="svgtext small mono" text-anchor="start">piece numbers</text>
+<text x="150" y="320" class="svgtext small muted" text-anchor="start">which pieces of the partition the data mesoblocks are</text>
+<text x="0" y="342" class="svgtext small mono" text-anchor="start">checksum</text>
+<text x="150" y="342" class="svgtext small muted" text-anchor="start">a torn or damaged block is ignored</text>
+</svg>
+		<figcaption>Without the right key, the index decrypts to noise and the block is skipped. Only the blocks of the partitions you open are recognised.</figcaption>
+	</figure>
+
+	<div class="prose">
+		<h3>Scattered blocks, one straight file</h3>
+		<p>A partition's blocks lie anywhere on the device, in no particular order. When you open a partition, scubed3 reads every block, keeps the ones its key can decrypt, and uses their indexes to put the pieces back in order. You get a plain file that behaves like a disk: you can format it, mount it, or put LUKS on it.</p>
+	</div>
+	<figure class="figure"><svg viewBox="0 0 960 262" role="img" aria-label="Seven scattered blocks of one partition are put in order to form the partition file">
+<text x="0" y="14" class="svgtext small muted" text-anchor="start">on disk, in the order the writes happened to land</text>
+<rect x="0" y="26" width="36" height="36" rx="2" class="n1"/>
+<rect x="40" y="26" width="36" height="36" rx="2" class="n2"/>
+<rect x="80" y="26" width="36" height="36" rx="2" class="n1"/>
+<rect x="120" y="26" width="36" height="36" rx="2" class="pa"/>
+<text x="138" y="49" class="svgtext small" text-anchor="middle" style="fill:#fff" font-weight="700">4</text>
+<rect x="160" y="26" width="36" height="36" rx="2" class="n3"/>
+<rect x="200" y="26" width="36" height="36" rx="2" class="n3"/>
+<rect x="240" y="26" width="36" height="36" rx="2" class="n1"/>
+<rect x="280" y="26" width="36" height="36" rx="2" class="pa"/>
+<text x="298" y="49" class="svgtext small" text-anchor="middle" style="fill:#fff" font-weight="700">1</text>
+<rect x="320" y="26" width="36" height="36" rx="2" class="n3"/>
+<rect x="360" y="26" width="36" height="36" rx="2" class="n1"/>
+<rect x="400" y="26" width="36" height="36" rx="2" class="n3"/>
+<rect x="440" y="26" width="36" height="36" rx="2" class="pa"/>
+<text x="458" y="49" class="svgtext small" text-anchor="middle" style="fill:#fff" font-weight="700">6</text>
+<rect x="480" y="26" width="36" height="36" rx="2" class="pa"/>
+<text x="498" y="49" class="svgtext small" text-anchor="middle" style="fill:#fff" font-weight="700">2</text>
+<rect x="520" y="26" width="36" height="36" rx="2" class="n1"/>
+<rect x="560" y="26" width="36" height="36" rx="2" class="n2"/>
+<rect x="600" y="26" width="36" height="36" rx="2" class="n3"/>
+<rect x="640" y="26" width="36" height="36" rx="2" class="pa"/>
+<text x="658" y="49" class="svgtext small" text-anchor="middle" style="fill:#fff" font-weight="700">5</text>
+<rect x="680" y="26" width="36" height="36" rx="2" class="n3"/>
+<rect x="720" y="26" width="36" height="36" rx="2" class="n2"/>
+<rect x="760" y="26" width="36" height="36" rx="2" class="pa"/>
+<text x="778" y="49" class="svgtext small" text-anchor="middle" style="fill:#fff" font-weight="700">3</text>
+<rect x="800" y="26" width="36" height="36" rx="2" class="n2"/>
+<rect x="840" y="26" width="36" height="36" rx="2" class="n2"/>
+<rect x="880" y="26" width="36" height="36" rx="2" class="pa"/>
+<text x="898" y="49" class="svgtext small" text-anchor="middle" style="fill:#fff" font-weight="700">7</text>
+<rect x="920" y="26" width="36" height="36" rx="2" class="n3"/>
+<path class="line a" d="M138 64 C138 125 478 125 478 186" opacity="0.75"/>
+<path class="line a" d="M298 64 C298 125 68.2857 125 68.2857 186" opacity="0.75"/>
+<path class="line a" d="M458 64 C458 125 751.143 125 751.143 186" opacity="0.75"/>
+<path class="line a" d="M498 64 C498 125 204.857 125 204.857 186" opacity="0.75"/>
+<path class="line a" d="M658 64 C658 125 614.571 125 614.571 186" opacity="0.75"/>
+<path class="line a" d="M778 64 C778 125 341.429 125 341.429 186" opacity="0.75"/>
+<path class="line a" d="M898 64 C898 125 887.714 125 887.714 186" opacity="0.75"/>
+<rect x="0" y="190" width="134.571" height="40" rx="2" class="pa"/>
+<text x="68.2857" y="216" class="svgtext small" text-anchor="middle" style="fill:#fff" font-weight="700">1</text>
+<rect x="138.571" y="190" width="134.571" height="40" rx="0" class="pa"/>
+<text x="204.857" y="216" class="svgtext small" text-anchor="middle" style="fill:#fff" font-weight="700">2</text>
+<rect x="275.143" y="190" width="134.571" height="40" rx="0" class="pa"/>
+<text x="341.429" y="216" class="svgtext small" text-anchor="middle" style="fill:#fff" font-weight="700">3</text>
+<rect x="411.714" y="190" width="134.571" height="40" rx="0" class="pa"/>
+<text x="478" y="216" class="svgtext small" text-anchor="middle" style="fill:#fff" font-weight="700">4</text>
+<rect x="548.286" y="190" width="134.571" height="40" rx="0" class="pa"/>
+<text x="614.571" y="216" class="svgtext small" text-anchor="middle" style="fill:#fff" font-weight="700">5</text>
+<rect x="684.857" y="190" width="134.571" height="40" rx="0" class="pa"/>
+<text x="751.143" y="216" class="svgtext small" text-anchor="middle" style="fill:#fff" font-weight="700">6</text>
+<rect x="821.429" y="190" width="134.571" height="40" rx="2" class="pa"/>
+<text x="887.714" y="216" class="svgtext small" text-anchor="middle" style="fill:#fff" font-weight="700">7</text>
+<text x="0" y="254" class="svgtext small muted" text-anchor="start">the partition, as one ordinary file: /mnt/scubed3/photos</text>
+</svg>
+		<figcaption>The numbers say which part of the partition each block holds. On the disk they are just noise.</figcaption>
+	</figure>
+
+	<div class="prose">
+		<h3>Never overwriting in place</h3>
+		<p>Changing data in place would give the game away: an observer who compares two snapshots of the device would see the same few blocks change, over and over. So scubed3 is <em>log-structured</em>. Changes collect in memory, and when there is a full block of them it is written to another macroblock. The old copy becomes garbage, and its space is reused later. Which macroblock is next is up to the paranoia level, explained in the next section.</p>
+	</div>
+	<figure class="figure"><svg viewBox="0 0 960 210" role="img" aria-label="Writing in three steps: changes collect in memory, the block is written to a new place, the old copy becomes garbage">
+<defs><marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" style="fill:var(--ink-3)"/></marker></defs>
+<circle cx="13" cy="14" r="13" class="pa"/>
+<text x="13" y="19" class="svgtext small" text-anchor="middle" style="fill:#fff" font-weight="700">1</text>
+<text x="36" y="19" class="svgtext" text-anchor="start" font-weight="700">Changes collect in memory</text>
+<text x="36" y="40" class="svgtext small muted" text-anchor="start">the current block fills up with new data</text>
+<circle cx="345" cy="14" r="13" class="pa"/>
+<text x="345" y="19" class="svgtext small" text-anchor="middle" style="fill:#fff" font-weight="700">2</text>
+<text x="368" y="19" class="svgtext" text-anchor="start" font-weight="700">Written to a new place</text>
+<text x="368" y="40" class="svgtext small muted" text-anchor="start">the paranoia level decides where</text>
+<circle cx="677" cy="14" r="13" class="pa"/>
+<text x="677" y="19" class="svgtext small" text-anchor="middle" style="fill:#fff" font-weight="700">3</text>
+<text x="700" y="19" class="svgtext" text-anchor="start" font-weight="700">The old copy is garbage</text>
+<text x="700" y="40" class="svgtext small muted" text-anchor="start">its space is reused later</text>
+<rect x="0" y="66" width="250" height="104" rx="4" class="panel"/>
+<rect x="12" y="80" width="24" height="34" rx="2" class="pa"/>
+<rect x="41" y="80" width="24" height="34" rx="2" class="pa"/>
+<rect x="70" y="80" width="24" height="34" rx="2" class="pa"/>
+<rect x="99" y="80" width="24" height="34" rx="2" class="pa"/>
+<rect x="128" y="80" width="24" height="34" rx="2" class="pa"/>
+<rect x="157" y="80" width="24" height="34" rx="2" class="pa"/>
+<rect x="186" y="80" width="24" height="34" rx="2" class="pa"/>
+<rect x="215" y="80" width="24" height="34" rx="2" class="pa"/>
+<rect x="12" y="120" width="24" height="34" rx="2" class="pa"/>
+<rect x="41" y="120" width="24" height="34" rx="2" class="n1" opacity="0.7"/>
+<rect x="70" y="120" width="24" height="34" rx="2" class="n1" opacity="0.7"/>
+<rect x="99" y="120" width="24" height="34" rx="2" class="n1" opacity="0.7"/>
+<rect x="128" y="120" width="24" height="34" rx="2" class="n1" opacity="0.7"/>
+<rect x="157" y="120" width="24" height="34" rx="2" class="n1" opacity="0.7"/>
+<rect x="186" y="120" width="24" height="34" rx="2" class="n1" opacity="0.7"/>
+<rect x="215" y="120" width="24" height="34" rx="2" class="n1" opacity="0.7"/>
+<text x="0" y="194" class="svgtext small muted" text-anchor="start">piece 4 changed, piece 9 is new, ...</text>
+<rect x="332" y="120" width="36" height="50" rx="2" class="n2"/>
+<rect x="374" y="120" width="36" height="50" rx="2" class="n2"/>
+<rect x="416" y="120" width="36" height="50" rx="2" class="n2"/>
+<rect x="458" y="120" width="36" height="50" rx="2" class="n1"/>
+<rect x="500" y="120" width="36" height="50" rx="2" class="pa"/>
+<rect x="542" y="120" width="36" height="50" rx="2" class="n1"/>
+<rect x="584" y="120" width="36" height="50" rx="2" class="n3"/>
+<rect x="332" y="66" width="36" height="30" rx="2" class="pa"/>
+<text x="378" y="86" class="svgtext small muted" text-anchor="start">the full current block</text>
+<path class="line" d="M350 100 C350 108 518 100 518 112" marker-end="url(#arr)"/>
+<text x="332" y="198" class="svgtext small muted" text-anchor="start">a whole macroblock is written at once</text>
+<rect x="664" y="120" width="36" height="50" rx="2" class="n1"/>
+<rect x="706" y="120" width="36" height="50" rx="2" class="n1"/>
+<rect x="748" y="120" width="36" height="50" rx="2" class="pa" opacity="0.28"/>
+<rect x="790" y="120" width="36" height="50" rx="2" class="n2"/>
+<rect x="832" y="120" width="36" height="50" rx="2" class="n3"/>
+<rect x="874" y="120" width="36" height="50" rx="2" class="pa"/>
+<rect x="916" y="120" width="36" height="50" rx="2" class="n2"/>
+<text x="766" y="108" class="svgtext small muted" text-anchor="middle">old</text>
+<text x="892" y="108" class="svgtext small muted" text-anchor="middle">new</text>
+<text x="664" y="198" class="svgtext small muted" text-anchor="start">the garbage collector moves what is still live</text>
+</svg></figure>
+
+	<div class="prose">
+		<h3>Where it sits</h3>
+		<p>scubed3 is a small daemon that runs in user space, through FUSE. It presents each open partition as a file, and you control it with <code>scubed3ctl</code>, an interactive tool that works like a partition editor: <code>create</code>, <code>open</code>, <code>resize</code>, <code>mount</code>, <code>close</code>.</p>
+	</div>
+	<figure class="figure"><svg viewBox="0 0 960 284" role="img" aria-label="The layers: base device, scubed3 daemon, partition file, LUKS, filesystem; scubed3ctl controls the daemon">
+<rect x="0" y="0" width="700" height="52" rx="4" class="paper" stroke="var(--rule)" stroke-width="1.5"/>
+<text x="20" y="22" class="svgtext" text-anchor="start" font-weight="700">Your files</text>
+<text x="20" y="40" class="svgtext small muted" text-anchor="start">ext4, or any other filesystem</text>
+<rect x="0" y="58" width="700" height="52" rx="4" class="paper" stroke="var(--rule)" stroke-width="1.5"/>
+<text x="20" y="80" class="svgtext" text-anchor="start" font-weight="700">LUKS (recommended)</text>
+<text x="20" y="98" class="svgtext small muted" text-anchor="start">/dev/mapper/scubed3-photos: protects the data while it is not mounted</text>
+<rect x="0" y="116" width="700" height="52" rx="4" class="pa"/>
+<text x="20" y="138" class="svgtext" text-anchor="start" font-weight="700" style="fill:#fff">The partition, a plain file</text>
+<text x="20" y="156" class="svgtext small" text-anchor="start" style="fill:#fff">/mnt/scubed3/photos, one file per open partition</text>
+<rect x="0" y="174" width="700" height="52" rx="4" class="panel"/>
+<text x="20" y="196" class="svgtext" text-anchor="start" font-weight="700">scubed3</text>
+<text x="20" y="214" class="svgtext small muted" text-anchor="start">the daemon: finds, decrypts, and writes the blocks of the open partitions</text>
+<rect x="0" y="232" width="18" height="52" rx="2" class="n3"/>
+<rect x="20" y="232" width="18" height="52" rx="2" class="n2"/>
+<rect x="40" y="232" width="18" height="52" rx="2" class="n2"/>
+<rect x="60" y="232" width="18" height="52" rx="2" class="n3"/>
+<rect x="80" y="232" width="18" height="52" rx="2" class="n1"/>
+<rect x="100" y="232" width="18" height="52" rx="2" class="n1"/>
+<rect x="120" y="232" width="18" height="52" rx="2" class="n3"/>
+<rect x="140" y="232" width="18" height="52" rx="2" class="n2"/>
+<rect x="160" y="232" width="18" height="52" rx="2" class="n1"/>
+<rect x="180" y="232" width="18" height="52" rx="2" class="n2"/>
+<rect x="200" y="232" width="18" height="52" rx="2" class="n1"/>
+<rect x="220" y="232" width="18" height="52" rx="2" class="n2"/>
+<rect x="240" y="232" width="18" height="52" rx="2" class="n2"/>
+<rect x="260" y="232" width="18" height="52" rx="2" class="n1"/>
+<rect x="280" y="232" width="18" height="52" rx="2" class="n3"/>
+<rect x="300" y="232" width="18" height="52" rx="2" class="n1"/>
+<rect x="320" y="232" width="18" height="52" rx="2" class="n3"/>
+<rect x="340" y="232" width="18" height="52" rx="2" class="n3"/>
+<rect x="360" y="232" width="18" height="52" rx="2" class="n2"/>
+<rect x="380" y="232" width="18" height="52" rx="2" class="n2"/>
+<rect x="400" y="232" width="18" height="52" rx="2" class="n3"/>
+<rect x="420" y="232" width="18" height="52" rx="2" class="n2"/>
+<rect x="440" y="232" width="18" height="52" rx="2" class="n3"/>
+<rect x="460" y="232" width="18" height="52" rx="2" class="n2"/>
+<rect x="480" y="232" width="18" height="52" rx="2" class="n3"/>
+<rect x="500" y="232" width="18" height="52" rx="2" class="n2"/>
+<rect x="520" y="232" width="18" height="52" rx="2" class="n1"/>
+<rect x="540" y="232" width="18" height="52" rx="2" class="n1"/>
+<rect x="560" y="232" width="18" height="52" rx="2" class="n2"/>
+<rect x="580" y="232" width="18" height="52" rx="2" class="n2"/>
+<rect x="600" y="232" width="18" height="52" rx="2" class="n3"/>
+<rect x="620" y="232" width="18" height="52" rx="2" class="n3"/>
+<rect x="640" y="232" width="18" height="52" rx="2" class="n1"/>
+<rect x="660" y="232" width="18" height="52" rx="2" class="n1"/>
+<rect x="680" y="232" width="18" height="52" rx="2" class="n3"/>
+<rect x="8" y="238" width="372" height="40" rx="3" class="paper"/>
+<text x="20" y="254" class="svgtext" text-anchor="start" font-weight="700">The base device</text>
+<text x="20" y="272" class="svgtext small muted" text-anchor="start">a disk, a partition or a file, filled with random data</text>
+<rect x="760" y="174" width="196" height="52" rx="4" class="panel" stroke="var(--ink-3)" stroke-width="1.2" stroke-dasharray="4 3"/>
+<text x="776" y="196" class="svgtext mono" text-anchor="start" font-weight="700">scubed3ctl</text>
+<text x="776" y="214" class="svgtext small muted" text-anchor="start">you, over a socket</text>
+<path class="line" d="M704 200 L756 200"/>
+</svg>
+		<figcaption>Putting LUKS on a partition is recommended: if someone takes the computer while it is running, a LUKS volume that is not mounted still keeps its data safe.</figcaption>
+	</figure>
+
+	<div class="prose">
+		<h3>A key store, for fewer passphrases</h3>
+		<p>One passphrase per partition, plus one per LUKS volume, adds up. The optional key store holds those keys for you. It is a file of 64 equal slots. A passphrase unlocks one slot, its <em>view</em>: a list of partitions with their keys. Unused slots are random data, so the file does not show how many passphrases it has, or whether it is used at all. Every change rewrites the whole file, so two copies of it are no help to an observer either.</p>
+	</div>
+	<figure class="figure"><svg viewBox="0 0 960 234" role="img" aria-label="A key store of 64 slots; two passphrases each unlock one slot, a view with partition and LUKS keys">
+<text x="0" y="14" class="svgtext small muted" text-anchor="start">/etc/scubed3.keys: 64 slots, every one the same size, every one random-looking</text>
+<rect x="0" y="28" width="13" height="34" rx="2" class="n3"/>
+<rect x="15" y="28" width="13" height="34" rx="2" class="n2"/>
+<rect x="30" y="28" width="13" height="34" rx="2" class="n3"/>
+<rect x="45" y="28" width="13" height="34" rx="2" class="n3"/>
+<rect x="60" y="28" width="13" height="34" rx="2" class="n3"/>
+<rect x="75" y="28" width="13" height="34" rx="2" class="n2"/>
+<rect x="90" y="28" width="13" height="34" rx="2" class="n2"/>
+<rect x="105" y="28" width="13" height="34" rx="2" class="n3"/>
+<rect x="120" y="28" width="13" height="34" rx="2" class="n2"/>
+<rect x="135" y="28" width="13" height="34" rx="2" class="n3"/>
+<rect x="150" y="28" width="13" height="34" rx="2" class="n2"/>
+<rect x="165" y="28" width="13" height="34" rx="2" class="n1"/>
+<rect x="180" y="28" width="13" height="34" rx="2" class="n2"/>
+<rect x="195" y="28" width="13" height="34" rx="2" class="n2"/>
+<rect x="210" y="28" width="13" height="34" rx="2" class="n1"/>
+<rect x="225" y="28" width="13" height="34" rx="2" class="n3"/>
+<rect x="240" y="28" width="13" height="34" rx="2" class="n1"/>
+<rect x="255" y="28" width="13" height="34" rx="2" class="pa"/>
+<rect x="270" y="28" width="13" height="34" rx="2" class="n2"/>
+<rect x="285" y="28" width="13" height="34" rx="2" class="n1"/>
+<rect x="300" y="28" width="13" height="34" rx="2" class="n1"/>
+<rect x="315" y="28" width="13" height="34" rx="2" class="n2"/>
+<rect x="330" y="28" width="13" height="34" rx="2" class="n1"/>
+<rect x="345" y="28" width="13" height="34" rx="2" class="n3"/>
+<rect x="360" y="28" width="13" height="34" rx="2" class="n1"/>
+<rect x="375" y="28" width="13" height="34" rx="2" class="n2"/>
+<rect x="390" y="28" width="13" height="34" rx="2" class="n2"/>
+<rect x="405" y="28" width="13" height="34" rx="2" class="n2"/>
+<rect x="420" y="28" width="13" height="34" rx="2" class="n1"/>
+<rect x="435" y="28" width="13" height="34" rx="2" class="n1"/>
+<rect x="450" y="28" width="13" height="34" rx="2" class="n2"/>
+<rect x="465" y="28" width="13" height="34" rx="2" class="n2"/>
+<rect x="480" y="28" width="13" height="34" rx="2" class="n3"/>
+<rect x="495" y="28" width="13" height="34" rx="2" class="n2"/>
+<rect x="510" y="28" width="13" height="34" rx="2" class="n1"/>
+<rect x="525" y="28" width="13" height="34" rx="2" class="n2"/>
+<rect x="540" y="28" width="13" height="34" rx="2" class="n3"/>
+<rect x="555" y="28" width="13" height="34" rx="2" class="n2"/>
+<rect x="570" y="28" width="13" height="34" rx="2" class="n3"/>
+<rect x="585" y="28" width="13" height="34" rx="2" class="n2"/>
+<rect x="600" y="28" width="13" height="34" rx="2" class="n2"/>
+<rect x="615" y="28" width="13" height="34" rx="2" class="n3"/>
+<rect x="630" y="28" width="13" height="34" rx="2" class="n2"/>
+<rect x="645" y="28" width="13" height="34" rx="2" class="n1"/>
+<rect x="660" y="28" width="13" height="34" rx="2" class="pb"/>
+<rect x="675" y="28" width="13" height="34" rx="2" class="n1"/>
+<rect x="690" y="28" width="13" height="34" rx="2" class="n1"/>
+<rect x="705" y="28" width="13" height="34" rx="2" class="n1"/>
+<rect x="720" y="28" width="13" height="34" rx="2" class="n1"/>
+<rect x="735" y="28" width="13" height="34" rx="2" class="n1"/>
+<rect x="750" y="28" width="13" height="34" rx="2" class="n3"/>
+<rect x="765" y="28" width="13" height="34" rx="2" class="n1"/>
+<rect x="780" y="28" width="13" height="34" rx="2" class="n1"/>
+<rect x="795" y="28" width="13" height="34" rx="2" class="n2"/>
+<rect x="810" y="28" width="13" height="34" rx="2" class="n3"/>
+<rect x="825" y="28" width="13" height="34" rx="2" class="n1"/>
+<rect x="840" y="28" width="13" height="34" rx="2" class="n2"/>
+<rect x="855" y="28" width="13" height="34" rx="2" class="n2"/>
+<rect x="870" y="28" width="13" height="34" rx="2" class="n1"/>
+<rect x="885" y="28" width="13" height="34" rx="2" class="n1"/>
+<rect x="900" y="28" width="13" height="34" rx="2" class="n2"/>
+<rect x="915" y="28" width="13" height="34" rx="2" class="n3"/>
+<rect x="930" y="28" width="13" height="34" rx="2" class="n2"/>
+<rect x="945" y="28" width="13" height="34" rx="2" class="n3"/>
+<path class="line a" d="M261.5 66 L261.5 116"/>
+<path class="line" style="stroke:var(--b)" d="M666.5 66 L666.5 116"/>
+<rect x="231.5" y="120" width="300" height="86" rx="4" class="panel" stroke="var(--a)" stroke-width="1.5"/>
+<text x="245.5" y="142" class="svgtext small" text-anchor="start" font-weight="700">view of passphrase 1</text>
+<text x="245.5" y="168" class="svgtext small mono" text-anchor="start">work</text>
+<text x="341.5" y="168" class="svgtext small muted" text-anchor="start">partition key</text>
+<text x="245.5" y="192" class="svgtext small mono" text-anchor="start">photos</text>
+<text x="341.5" y="192" class="svgtext small muted" text-anchor="start">partition key + LUKS key</text>
+<rect x="636.5" y="120" width="300" height="110" rx="4" class="panel" stroke="var(--b)" stroke-width="1.5"/>
+<text x="650.5" y="142" class="svgtext small" text-anchor="start" font-weight="700">view of passphrase 2</text>
+<text x="650.5" y="168" class="svgtext small mono" text-anchor="start">diary</text>
+<text x="746.5" y="168" class="svgtext small muted" text-anchor="start">partition key + LUKS key</text>
+<text x="650.5" y="192" class="svgtext small mono" text-anchor="start">work</text>
+<text x="746.5" y="192" class="svgtext small muted" text-anchor="start">partition key</text>
+<text x="650.5" y="216" class="svgtext small mono" text-anchor="start">archive</text>
+<text x="746.5" y="216" class="svgtext small muted" text-anchor="start">partition key</text>
+</svg>
+		<figcaption>One passphrase opens the partitions of its view and their LUKS volumes. Keep a view you can admit to and another one for the hidden partitions. A partition can be in more than one view.</figcaption>
+	</figure>
+
+	<div class="prose">
+		<p>The key store also makes it practical to put the root filesystem itself on scubed3: the scripts in <code>contrib/initramfs-tools</code> (for Debian and its derivatives) start the daemon at boot, ask for one passphrase, and open everything.</p>
+	</div>
+</section>
+
+<section class="wrap part" id="paranoia" aria-labelledby="paranoia-title">
+	<div class="prose">
+		<h2 id="paranoia-title">How paranoid are you?</h2>
+		<p>Hidden data is not the only thing that can give you away. <em>Where</em> and <em>when</em> the writes go matters too. If an observer has two snapshots of your device, and only the blocks of one partition changed, then those blocks are a partition. Flash drives make this worse: an SSD keeps its own record of the order of writes, so you have to assume many snapshots. scubed3 has four levels, from fast to completely uninformative.</p>
+		<p>Try it below. The left grid is what you know: blue is your partition, amber is another, grey is free space. The right grid is what an observer with snapshots sees: how often each block was written. Press the button and watch the right-hand grid.</p>
+	</div>
+
+	<div class="sim" id="sim">
+		<div class="controls">
+			<div class="seg" role="group" aria-label="Paranoia level">
+				<button type="button" data-level="0">Level 0</button>
+				<button type="button" data-level="1" aria-pressed="true">Level 1</button>
+				<button type="button" data-level="2">Level 2</button>
+				<button type="button" data-level="3">Level 3</button>
+			</div>
+			<button type="button" class="btn" id="simwrite">Write a block of data</button>
+			<button type="button" class="btn quiet" id="simreset">Start over</button>
+		</div>
+		<div class="views">
+			<div>
+				<h4>Your view</h4>
+				<p>Which partition owns which block. A ring marks the latest write.</p>
+				<canvas id="simown" width="416" height="264" aria-label="The blocks of the device, colored by owner"></canvas>
+				<div class="legend"><span><i class="pa-bg"></i>your partition</span><span><i class="pb-bg"></i>another partition</span><span><i class="n2-bg"></i>free</span></div>
+			</div>
+			<div>
+				<h4>The observer's view</h4>
+				<p>How often each block was written. Darker means more often.</p>
+				<canvas id="simobs" width="416" height="264" aria-label="The blocks of the device, shaded by how often they were written"></canvas>
+			</div>
+		</div>
+		<p class="simstat" id="simstat" aria-live="polite"></p>
+	</div>
+
+	<div class="levels">
+		<div><span class="num">0</span><h3>Not paranoid</h3><p>The emptiest block of the partition is reused. The fastest level, and the order of the writes shows which blocks hold old data.</p></div>
+		<div><span class="num">1</span><h3>Moderately paranoid</h3><p>A random block of the partition. Writes still land only on the partition's own blocks. This is the level after starting scubed3.</p></div>
+		<div><span class="num">2</span><h3>Just paranoid</h3><p>Every write goes to a uniformly random block of the whole device. Free blocks get fresh random data, other partitions rewrite theirs. All partitions must be open: a partition that is not open would be overwritten.</p></div>
+		<div><span class="num">3</span><h3>Extremely paranoid</h3><p>As level 2, but on a random clock that ticks whether or not you write. The number, the timing and the places of the writes reveal nothing.</p></div>
+	</div>
+	<div class="prose" style="margin-top:2rem">
+		<p>The price of levels 2 and 3 is speed and wear. In level 2, a partition with a quarter of the blocks needs four writes, on average, for each block of its own data. In level 3 the device is written all the time, and a partition can never write faster than its share of the clock. The next section has the numbers.</p>
+	</div>
+</section>
+
+<section class="wrap part" id="performance" aria-labelledby="perf-title">
+	<div class="prose">
+		<h2 id="perf-title">Performance</h2>
+		<p>Hiding comes at a cost, and most of it is a choice: you pick the paranoia level. These measurements are from the test suite in <code>dev/</code>, on a file on an ordinary Linux machine. Your numbers will depend on your disk.</p>
+	</div>
+	<div class="charts">
+		<div class="chart">
+			<h3>Opening a partition</h3>
+			<p class="sub">Seconds to open one partition on a device of 29&#8239;000 macroblocks. Every block must be tried, but only the first 128 bytes are decrypted now, and the result is cached.</p>
+			<div id="chart-open"></div>
+			<details><summary>Show the numbers</summary>
+				<table><thead><tr><th>open</th><th>before</th><th>now</th></tr></thead>
+				<tbody><tr><td>first after start</td><td>1.77&#8239;s</td><td>0.145&#8239;s</td></tr><tr><td>later</td><td>0.151&#8239;s</td><td>0.008&#8239;s</td></tr></tbody></table>
+			</details>
+		</div>
+		<div class="chart">
+			<h3>Reading while a writer waits</h3>
+			<p class="sub">In level 3, a writer waits for its turn on the clock. Reads used to wait with it; now they go on. Read latency in milliseconds, on a log scale.</p>
+			<div id="chart-read"></div>
+			<details><summary>Show the numbers</summary>
+				<table><thead><tr><th>read latency</th><th>median</th><th>maximum</th></tr></thead>
+				<tbody><tr><td>before</td><td>312&#8239;ms</td><td>3&#8239;447&#8239;ms</td></tr><tr><td>now</td><td>0.2&#8239;ms</td><td>14&#8239;ms</td></tr></tbody></table>
+			</details>
+		</div>
+		<div class="chart wide">
+			<h3>How fast can a partition write in level 3?</h3>
+			<p class="sub">At most its share of the device times the rate of the clock. The garbage collector takes part of that. Big partitions are fast, small partitions are slow.</p>
+			<div class="rate"><label for="rate">Rate of the clock</label><input id="rate" type="range" min="0" max="5" step="1" value="3"><output id="rateout" for="rate">800 KiB/s</output><span id="wear"></span></div>
+			<div id="chart-rate"></div>
+			<details><summary>Show the numbers</summary>
+				<table><thead><tr><th>rate</th><th>a 4&#8239;MiB block every</th><th>written per day</th><th>per year</th></tr></thead>
+				<tbody>
+				<tr><td>4&#8239;096&#8239;KiB/s</td><td>1&#8239;s</td><td>362&#8239;GB</td><td>132&#8239;TB</td></tr>
+				<tr><td>800&#8239;KiB/s (default)</td><td>5.12&#8239;s</td><td>71&#8239;GB</td><td>26&#8239;TB</td></tr>
+				<tr><td>400&#8239;KiB/s</td><td>10.24&#8239;s</td><td>35&#8239;GB</td><td>13&#8239;TB</td></tr>
+				<tr><td>128&#8239;KiB/s</td><td>32&#8239;s</td><td>11&#8239;GB</td><td>4.1&#8239;TB</td></tr>
+				</tbody></table>
+				<p>SSDs are rated for a number of terabytes written, typically a few hundred per terabyte of capacity.</p>
+			</details>
+		</div>
+	</div>
+</section>
+
+<section class="wrap part" id="start" aria-labelledby="start-title">
+	<div class="prose">
+		<h2 id="start-title">Get it</h2>
+		<p>scubed3 runs on Linux. Building it needs libfuse&#8239;3, libgcrypt and readline with their development files, and autoconf, automake and pkg-config.</p>
+	</div>
+<pre>svn checkout https://snel.it/svn/misc/trunk/scubed3
+cd scubed3
+./autogen.sh &amp;&amp; ./configure &amp;&amp; make</pre>
+	<div class="prose">
+		<p>A first partition, as root, on a 4&#8239;GB file. <code>scubed3ctl</code> asks for the passphrase, twice when creating.</p>
+	</div>
+<pre><span class="c"># head -c 4G /dev/urandom &gt; /var/lib/scubed3.base</span>
+# scubed3 -b /var/lib/scubed3.base /mnt/scubed3
+# scubed3ctl
+s3&gt; create secret
+s3&gt; resize secret 400          <span class="c">400 macroblocks of 4 MiB</span>
+s3&gt; luksformat secret
+s3&gt; mke2fs secret
+s3&gt; mount secret /mnt/secret
+s3&gt; umount secret</pre>
+	<div class="prose">
+		<p>For levels 2 and 3, open <em>all</em> partitions first, then switch the level with <code>paranoia 2</code>, then mount. Or set up a key store with the guided <code>keys-setup</code> and open everything at once with <code>scubed3ctl -c unlock-all -c open-all</code>. The <code>README</code> explains every command, the on-disk format and the threat model.</p>
+		<p class="warn"><strong>scubed3 is alpha software.</strong> Its design and code have not been reviewed by anyone else yet. Keep backups, and keep a copy of <code>/etc/scubed3.conf</code>, which holds the salt: without it the partitions cannot be opened. Reviews and bug reports are very welcome.</p>
+	</div>
+</section>
+
+<section class="wrap part" id="history" aria-labelledby="history-title">
+	<div class="prose">
+		<h2 id="history-title">History</h2>
+		<p>scubed3 is the third attempt at the same idea.</p>
+	</div>
+	<ol class="timeline">
+		<li><div class="when">scubed</div><div>
+			<p>The <a href="https://penta.snel.it/~rsnel/scubed/">original scubed</a> followed in the footsteps of rubberhose, stegfs and phonebook. It was built on the Linux kernel's device mapper: dm-crypt for the encryption and dm-linear to put the pieces together into partitions. It was simple, and it worked on anything, even a rewritable DVD.</p>
+			<p>It wrote data in place, so anyone with two snapshots of the device could see where the partitions were. StarWorld from Brazil ported it to C++, as scubed++.</p></div></li>
+		<li><div class="when">scubed2</div><div>
+			<p>The second version tried to solve the snapshot problem with small blocks. On spinning disks, performance was terrible, and it never became usable. Two things did come out of it: the XTS mode and the benbi IV generator, both of which made it into the Linux kernel.</p></div></li>
+		<li><div class="when">scubed3</div><div>
+			<p>Large macroblocks, written whole, a log-structured design that never overwrites in place, and paranoia levels that hide where and when the writes go. The data is exposed through FUSE as plain files, managed with <code>scubed3ctl</code>.</p></div></li>
+	</ol>
+	<div class="thanks">
+		<p>I had the design of scubed3 in my head for about fifteen years, and I was stuck. Claude, by Anthropic, was instrumental in bringing that vision to life. It wrote the code, the tests and the documentation in a couple of days, in my coding style, and talked the hard problems through with me along the way.</p>
+		<p>Rik Snel</p>
+	</div>
+</section>
+
+<section class="wrap part" id="license" aria-labelledby="license-title">
+	<div class="prose">
+		<h2 id="license-title">License</h2>
+		<p>scubed3 is free software: you can redistribute it and/or modify it under the terms of the <a href="https://www.gnu.org/licenses/gpl-3.0.html">GNU General Public License</a> as published by the Free Software Foundation, either version&#8239;3 of the License, or (at your option) any later version. The full text is in the file <code>COPYING</code>.</p>
+		<p>It is distributed in the hope that it will be useful, but without any warranty; without even the implied warranty of merchantability or fitness for a particular purpose.</p>
+		<p>This website uses TeX Gyre Adventor, TeX Gyre Schola and Latin Modern Mono, under the GUST Font License (<code>doc/fonts/GUST-FONT-LICENSE.txt</code>). It loads nothing from other sites.</p>
+		<h3>Contact</h3>
+		<p>Questions, reviews and bug reports: Rik Snel, <a href="mailto:rik@snel.it">rik@snel.it</a>.</p>
+	</div>
+</section>
+</main>
+
+<footer>
+	<div class="wrap">
+		<span>scubed3 0.5-alpha. Copyright &copy; 2019&ndash;2026 Rik Snel.</span>
+		<span>GPL version 3 or later.</span>
+	</div>
+</footer>
+<div class="tip" id="tip" role="tooltip"></div>
+<script src="site.js"></script>
+</body>
+</html>

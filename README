@@ -873,3 +873,12 @@ The directory dev/ contains the tests and the development tools: torture
 tests (grow, shrink, crashes, torn writes), tests with filesystems on top,
 statistical tests of the paranoia levels and an independent offline reader
 of the format; dev/README explains them.
+
+
+Website
+~~~~~~~
+
+The directory doc/ contains the website of scubed3 (doc/index.html, it
+loads nothing from other sites: the fonts are in doc/fonts, under the GUST
+Font License): the idea, how it works, the paranoia levels (with a small
+simulation), measurements and the history.

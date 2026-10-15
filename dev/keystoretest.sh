@@ -10,7 +10,9 @@
 # and luksopen with the key from the store; a passphrase is changed; a write
 # with only A unlocked loses the view of B (as the warning says); keys-setup
 # (guided) makes a key store with two passphrases, a new, an imported and a
-# shared partition
+# shared partition; two partitions with the same name (root) in two views:
+# the import and unlock-all warn, open and open-all refuse until one of the
+# views is locked (lock VIEW), then root opens the partition of the other
 #
 # usage: keystoretest.sh DAEMON CTL (as root; CRYPTSETUP=path: the
 # cryptsetup to use, default the stand-in dev/fake-cryptsetup, it needs no
@@ -144,6 +146,40 @@ run "-c unlock -c 'open old'" P
 cmp -s -n 100000 $T/data $MNT/old || fail "old (imported by keys-setup) is wrong"
 ctl -K $K -c "close old" > /dev/null
 ok "keys-setup: two passphrases, a new, an imported and a shared partition, one write"
+
+echo "9. two partitions with the same name in two views"
+K=$T/keys3
+for n in r1 r2; do
+	run "-c 'create $n'" pw-$n pw-$n
+	ctl -c "resize $n 20" > /dev/null
+done
+head -c 100000 /dev/urandom > $T/data2
+dd if=$T/data of=$MNT/r1 conv=notrunc 2> /dev/null
+dd if=$T/data2 of=$MNT/r2 conv=notrunc 2> /dev/null
+sync; ctl -c "close r1" > /dev/null; ctl -c "close r2" > /dev/null
+run "-c keys-create"
+run "-c unlock-all -c keys-passphrase-add" "" C C yes
+run "-c unlock-all -c keys-passphrase-add" C "" D D yes
+run "-c unlock-all -c 'keys-import root 1' -c 'keys-import root 2'" C D "" pw-r1 yes pw-r2 yes
+grep -q "NOTE: view 1 has another partition \"root\"" $T/out || fail "no note at the import: $(cat $T/out)"
+run "-c unlock-all -c keys" C D ""
+grep -q "WARNING: \"root\" is in view 2 and in view 1 with other keys" $T/out &&
+	grep -q "^  root (other keys in view 2" $T/out || fail "no warning: $(cat $T/out)"
+ok "the import and unlock-all warn, keys marks root in both views"
+run "-c unlock-all -c open-all" C D ""
+grep -q "nothing is opened" $T/out || fail "open-all: $(cat $T/out)"
+run "-c unlock-all -c 'open root'" C D ""
+grep -q "lock one of the views first" $T/out || fail "open root: $(cat $T/out)"
+grep -q "Enter passphrase" $T/out && fail "a passphrase was asked for the ambiguous root"
+[ -e $MNT/root ] && fail "root is opened"
+ok "open-all and open root refuse while both views are unlocked, nothing is opened"
+run "-c unlock-all -c 'lock 2' -c open-all" C D ""
+cmp -s -n 100000 $T/data $MNT/root || fail "view 1: root is not r1"
+ctl -c "close root" > /dev/null
+run "-c unlock-all -c 'lock 1' -c 'open root'" C D ""
+cmp -s -n 100000 $T/data2 $MNT/root || fail "view 2: root is not r2"
+ctl -c "close root" > /dev/null
+ok "after lock 2 / lock 1, root opens the partition of the view that is left"
 
 cleanup
 echo "KEYSTORETEST OK"

@@ -472,6 +472,7 @@ void blockio_dev_free(blockio_dev_t *dev) {
 
 	dllarr_free(&dev->replay);
 	dllarr_free(&dev->release);
+	dllarr_free(&dev->wipe);
 	free(dev->old_ondisk);
 	free(dev->refcount);
 	free(dev->tombs);
@@ -1071,7 +1072,7 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 
 	if (*err) {
 		dev->no_macroblocks = 0;
-		ecch_throw(ECCH_DEFAULT, "\"%s\" is not opened: %s",
+		ecch_throw(ECCH_DEFAULT, "\"%.40s\" is not opened: %.190s",
 				dev->name, err);
 	}
 

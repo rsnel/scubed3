@@ -250,6 +250,28 @@ ks_entry_t *ks_find(keystore_t *k, int view, const char *name, int *found) {
 	return NULL;
 }
 
+/* the same partition (and the same LUKS key) */
+static int ks_same(const ks_entry_t *a, const ks_entry_t *b) {
+	if (memcmp(a->key, b->key, KS_KEY)) return 0;
+	if ((a->flags&KS_HAS_LUKS) != (b->flags&KS_HAS_LUKS)) return 0;
+	if ((a->flags&KS_HAS_LUKS) && memcmp(a->luks, b->luks, KS_LUKS))
+		return 0;
+	return 1;
+}
+
+int ks_conflict(keystore_t *k, int view, const char *name) {
+	ks_entry_t *a, *b;
+	int v;
+
+	if (!(a = ks_find(k, view, name, NULL))) return -1;
+	for (v = 0; v < k->no_views; v++) {
+		if (v == view || !(b = ks_find(k, v, name, NULL))) continue;
+		if (!ks_same(a, b)) return v;
+	}
+
+	return -1;
+}
+
 ks_entry_t *ks_new_entry(keystore_t *k, int view, const char *name) {
 	int i;
 

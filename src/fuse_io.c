@@ -468,6 +468,7 @@ int fuse_io_start(int argc, char **argv, blockio_t *b,
 	unlink(control_socket);
 
 	hashtbl_free(&priv.entries);
+	hashtbl_free(&priv.ids);
 
 	return ret;
 }

@@ -326,6 +326,21 @@ One passphrase that opens everything is convenient, but if you have to give
 it away, everything is revealed: as with the partitions, keep a passphrase
 with a view you can admit, and others for the hidden partitions.
 
+Two views can have different partitions with the same name (keys-import
+does not stop that), for example a root partition you can admit and a
+hidden one, both "root". The same name with the same keys in more views is
+the same partition, that is fine; with other keys it is ambiguous while
+both views are unlocked: unlock warns, keys marks the name, and open,
+create, luksopen, luksformat, mke2fs, mount and open-all refuse it (open-all
+opens nothing then), keys-add does not copy it. Lock one of the views first:
+
+	s3> lock VIEW		forgets an unlocked view (in memory; the views
+				after it get a lower number, keys shows them)
+
+Both views can be unlocked at the same time to change the key store (a
+change needs all views unlocked, see above), only the ambiguous name cannot
+be used then.
+
 
 Root on scubed3
 ~~~~~~~~~~~~~~~

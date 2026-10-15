@@ -84,6 +84,12 @@ void ks_remove_view(keystore_t*, int);
  * -1 the first unlocked view that has it (its number in *found) */
 ks_entry_t *ks_find(keystore_t*, int view, const char*, int *found);
 
+/* NAME is in view and in another unlocked view with other keys (two
+ * partitions with the same name, for example a root partition you can
+ * admit and a hidden one): the first such other view, -1 if there is none
+ * (the same keys in more views are the same partition, no conflict) */
+int ks_conflict(keystore_t*, int view, const char*);
+
 /* a new entry in a view, NULL if the view is full */
 ks_entry_t *ks_new_entry(keystore_t*, int view, const char*);
 

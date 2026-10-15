@@ -448,6 +448,30 @@ static int send_key(ctl_priv_t *priv, const char *name,
 	return ret;
 }
 
+/* the entry of partition name in the unlocked views of the key store,
+ * NULL if it is in none; if two views have other keys for it (two
+ * partitions with the same name, for example a root partition you can
+ * admit and a hidden one), the name is ambiguous: an error, NULL and
+ * *ambiguous = 1, one of the views must be locked first */
+static ks_entry_t *ks_lookup(const char *name, int *ambiguous) {
+	ks_entry_t *e;
+	int view, other;
+
+	*ambiguous = 0;
+	if (!(e = ks_find(&ks, -1, name, &view))) return NULL;
+	if ((other = ks_conflict(&ks, view, name)) >= 0) {
+		printf("\"%s\" is in view %d and in view %d of the key store, "
+				"with other keys: two\npartitions with the same "
+				"name; lock one of the views first (lock VIEW)\n",
+				name, view + 1, other + 1);
+		exit_status = EXIT_FAILURE;
+		*ambiguous = 1;
+		return NULL;
+	}
+
+	return e;
+}
+
 /* the key of a partition comes from the key store, if it is in an unlocked
  * view, otherwise from its passphrase */
 static int ctl_open_create_common(ctl_priv_t *priv, char *argv[], int create) {
@@ -455,7 +479,7 @@ static int ctl_open_create_common(ctl_priv_t *priv, char *argv[], int create) {
 	ks_entry_t *e;
 	char *pw;
 	size_t len;
-	int ret;
+	int ret, ambiguous;
 
 	if (do_server_command(priv->s, 1, "check-available %s", argv[0]))
 		return -1;
@@ -463,7 +487,9 @@ static int ctl_open_create_common(ctl_priv_t *priv, char *argv[], int create) {
 
 	assert(!strcmp(DEFAULT_KDF_FUNCTION, "PBKDF2"));
 
-	if ((e = ks_find(&ks, -1, argv[0], NULL))) {
+	e = ks_lookup(argv[0], &ambiguous);
+	if (ambiguous) return 0;
+	if (e) {
 		VERBOSE("the key of \"%s\" is in the key store", argv[0]);
 		return send_key(priv, argv[0], e->key, create);
 	}
@@ -503,6 +529,8 @@ static int ctl_help(ctl_priv_t *priv, char *argv[]) {
 	printf("keys-create\n");
 	printf("unlock\n");
 	printf("unlock-all\n");
+	printf("lock VIEW         (forget an unlocked view, for example when two views have\n");
+	printf("                   a partition with the same name and other keys)\n");
 	printf("keys\n");
 	printf("keys-passphrase-add\n");
 	printf("keys-passphrase-change [VIEW]\n");
@@ -810,17 +838,20 @@ static int cryptsetup_with_key(ks_entry_t *e, const char *format, ...) {
 }
 
 /* the key of the LUKS volume on partition name in the key store, NULL if
- * it is not there (cryptsetup asks the passphrase then) */
-static ks_entry_t *luks_key(const char *name) {
-	ks_entry_t *e = ks_find(&ks, -1, name, NULL);
+ * it is not there (cryptsetup asks the passphrase then); *ambiguous: see
+ * ks_lookup */
+static ks_entry_t *luks_key(const char *name, int *ambiguous) {
+	ks_entry_t *e = ks_lookup(name, ambiguous);
 
 	return (e && (e->flags&KS_HAS_LUKS))?e:NULL;
 }
 
 /* open the LUKS volume on partition name as /dev/mapper/scubed3-NAME */
 static int luks_open(ctl_priv_t *priv, const char *name) {
-	ks_entry_t *e = luks_key(name);
+	int ambiguous;
+	ks_entry_t *e = luks_key(name, &ambiguous);
 
+	if (ambiguous) return 1;
 	if (e) return cryptsetup_with_key(e, "cryptsetup open --key-file=- "
 			"%s/%s " LUKS_NAME, priv->mountpoint, name, name);
 
@@ -829,9 +860,11 @@ static int luks_open(ctl_priv_t *priv, const char *name) {
 }
 
 static int ctl_luksformat(ctl_priv_t *priv, char *argv[]) {
-	ks_entry_t *e = luks_key(argv[0]);
+	int ret, ambiguous;
+	ks_entry_t *e = luks_key(argv[0], &ambiguous);
 	char prompt[128];
-	int ret;
+
+	if (ambiguous) return 0;
 
 	if ((ret = check_unmounted(priv, argv[0])) != 1) return ret;
 	if ((ret = check_paranoia(priv, "format it")) != 1) return ret;
@@ -1170,6 +1203,24 @@ static int ctl_keys_create(ctl_priv_t *priv, char *argv[]) {
 	return 0;
 }
 
+/* the partitions of view that are in another unlocked view with other
+ * keys (the same name, another partition): they cannot be used while both
+ * views are unlocked */
+static void ks_warn_conflicts(int view) {
+	int i, other;
+
+	for (i = 0; i < KS_ENTRIES; i++) {
+		ks_entry_t *e = &ks.views[view]->e[i];
+		if (!(e->flags&KS_USED)) continue;
+		if ((other = ks_conflict(&ks, view, e->name)) < 0) continue;
+		printf("WARNING: \"%s\" is in view %d and in view %d with other "
+				"keys (two partitions\nwith the same name), it "
+				"cannot be used while both views are unlocked:\n"
+				"lock one of them (lock VIEW)\n", e->name, view + 1,
+				other + 1);
+	}
+}
+
 static int ks_unlock_one(const char *prompt) {
 	unsigned char key[32];
 	int ret, view;
@@ -1180,7 +1231,10 @@ static int ks_unlock_one(const char *prompt) {
 	if (view < 0) {
 		printf("no view for this passphrase\n");
 		exit_status = EXIT_FAILURE;
-	} else printf("view %d: %d entries\n", view + 1, ks_count(view));
+	} else {
+		printf("view %d: %d entries\n", view + 1, ks_count(view));
+		ks_warn_conflicts(view);
+	}
 
 	return 1;
 }
@@ -1202,15 +1256,33 @@ static int ctl_unlock_all(ctl_priv_t *priv, char *argv[]) {
 }
 
 static void ks_list(int v) {
-	int i;
+	int i, other;
 
 	printf("view %d:%s\n", v + 1, ks_count(v)?"":" (empty)");
 	for (i = 0; i < KS_ENTRIES; i++) {
 		ks_entry_t *e = &ks.views[v]->e[i];
 		if (!(e->flags&KS_USED)) continue;
-		printf("  %s%s\n", e->name,
+		printf("  %s%s", e->name,
 				(e->flags&KS_HAS_LUKS)?" [LUKS]":"");
+		if ((other = ks_conflict(&ks, v, e->name)) >= 0)
+			printf(" (other keys in view %d: lock one of them to "
+					"use it)", other + 1);
+		printf("\n");
 	}
+}
+
+/* forget an unlocked view (in memory, the key store is not changed); the
+ * views after it get a lower number; a write of the key store loses it,
+ * as every view that is not unlocked */
+static int ctl_lock(ctl_priv_t *priv, char *argv[]) {
+	int view;
+
+	if ((view = ks_view_arg(argv[0])) < 0) return 0;
+	ks_remove_view(&ks, view);
+	printf("view %d is locked%s\n", view + 1, (view < ks.no_views)?
+			" (keys shows the new numbers of the other views)":"");
+
+	return 0;
 }
 
 static int ctl_keys(ctl_priv_t *priv, char *argv[]) {
@@ -1292,6 +1364,14 @@ static int ks_add(int view, const char *name) {
 		return 0;
 	}
 	from = ks_find(&ks, -1, name, &other);
+	if (from && ks_conflict(&ks, other, name) >= 0) {
+		printf("\"%s\" has other keys in view %d and view %d: two "
+				"partitions with the same\nname, it is not clear "
+				"which one to copy; lock one of the views first "
+				"(lock VIEW)\n", name, other + 1,
+				ks_conflict(&ks, other, name) + 1);
+		return 0;
+	}
 	if (!(e = ks_new_entry(&ks, view, name))) {
 		printf("view %d is full (%d entries)\n", view + 1, KS_ENTRIES);
 		return 0;
@@ -1327,7 +1407,7 @@ static int ks_import(ctl_priv_t *priv, int view, const char *name) {
 	ks_entry_t *e;
 	char *pw, tmp[] = "/run/scubed3ctl-key-XXXXXX";
 	size_t len;
-	int fd;
+	int fd, other;
 	char *argv[] = { (char*)name };
 
 	if (!ks_valid_name(argv[0])) return 0;
@@ -1373,6 +1453,11 @@ static int ks_import(ctl_priv_t *priv, int view, const char *name) {
 	}
 	printf("the key of \"%s\" is in view %d (it is not checked: close and "
 			"open it to see\nthat it is right)\n", argv[0], view + 1);
+	if ((other = ks_conflict(&ks, view, argv[0])) >= 0)
+		printf("NOTE: view %d has another partition \"%s\" (other "
+				"keys); while both views\nare unlocked, \"%s\" "
+				"cannot be used: lock one of them first (lock "
+				"VIEW)\n", other + 1, argv[0], argv[0]);
 
 	return 1;
 }
@@ -1513,7 +1598,25 @@ static int ctl_keys_setup(ctl_priv_t *priv, char *argv[]) {
 
 /* open every partition of the unlocked views that is not open */
 static int ctl_open_all(ctl_priv_t *priv, char *argv[]) {
-	int v, i, n = 0;
+	int v, i, n = 0, other, conflicts = 0;
+
+	/* a name with other keys in two views: it is not clear which one to
+	 * open, nothing is opened */
+	for (v = 0; v < ks.no_views; v++) for (i = 0; i < KS_ENTRIES; i++) {
+		ks_entry_t *e = &ks.views[v]->e[i];
+		if (!(e->flags&KS_USED)) continue;
+		if ((other = ks_conflict(&ks, v, e->name)) <= v) continue;
+		printf("\"%s\" is in view %d and in view %d with other keys "
+				"(two partitions with\nthe same name)\n",
+				e->name, v + 1, other + 1);
+		conflicts++;
+	}
+	if (conflicts) {
+		printf("nothing is opened: lock one of the conflicting views "
+				"first (lock VIEW)\n");
+		exit_status = EXIT_FAILURE;
+		return 0;
+	}
 
 	for (v = 0; v < ks.no_views; v++) for (i = 0; i < KS_ENTRIES; i++) {
 		ks_entry_t *e = &ks.views[v]->e[i];
@@ -1576,6 +1679,11 @@ static ctl_command_t ctl_commands[] = {
 		.command = ctl_unlock_all,
 		.argc = 0,
 		.usage = ""
+	}, {
+		.head.key = "lock",
+		.command = ctl_lock,
+		.argc = 1,
+		.usage = " VIEW"
 	}, {
 		.head.key = "keys",
 		.command = ctl_keys,

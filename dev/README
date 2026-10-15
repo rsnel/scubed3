@@ -237,6 +237,19 @@ installertest.sh DAEMON SCUBED3CTL
 	initramfs boots it, the root file system is there, home opens from
 	the /etc/crypttab entry, writes drain the pending removals. Uses /dev/scubed3fs and /run/scubed3/control.
 
+valgrindtest.sh DAEMON SCUBED3CTL
+	The daemon and scubed3ctl under valgrind (memcheck): no memory errors
+	and no leaks (definitely, indirectly or possibly lost). The workload:
+	create, resize, write and read; ext4 on a partition with discard
+	(fstrim); paranoia level 2 and 3; more reserved blocks and back
+	(resize-internal), a shrink, a removal (wipe) in level 1; close, open,
+	a wrong passphrase; the key store (create, passphrases, add, import,
+	unlock-all, open-all, lock, remove, change); then the daemon again on
+	the same base device (replay), a removal with wipe in level 2,
+	check-data-integrity. Slow (the cipher runs under valgrind); the
+	binaries have -g, EXTRA_CFLAGS=-O1 gives better stack traces.
+	SKIPPED without valgrind.
+
 lukstest.sh DAEMON SCUBED3CTL
 	LUKS on top of a partition with scubed3ctl, and the warning below the
 	recommended paranoia level: in level 1 mount and luksformat warn, an

@@ -107,7 +107,8 @@ print("close on release with two openers OK", flush=True)
 
 # scubed3ctl: mount, a second mount is refused, umount
 ok("open-internal t CBC_ESSIV(AES256) " + KEY)
-out1 = subprocess.run([ctl, "-c", "mount t " + FS], capture_output=True, text=True)
+# (in level 1 scubed3ctl warns, below the recommended level 2: yes)
+out1 = subprocess.run([ctl, "-c", "mount t " + FS], input="yes\n", capture_output=True, text=True)
 out2 = subprocess.run([ctl, "-c", "mount t " + FS2], capture_output=True, text=True)
 assert "already mounted on " + FS in out2.stdout, (out1.stdout, out1.stderr, out2.stdout, out2.stderr)
 assert os.path.ismount(FS) and not os.path.ismount(FS2)

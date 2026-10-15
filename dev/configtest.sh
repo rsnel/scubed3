@@ -49,6 +49,10 @@ err 'iterations=12x\n' "invalid number"
 err '# ok\nsalz=x\n' "unknown key"
 err 'salt\n' "expected KEY=VALUE"
 err 'salt=\n' "empty value"
+err 'paranoia=4\n' "invalid paranoia level"
+err 'paranoia=2\nparanoia=3\n' "paranoia specified twice"
+printf 'paranoia=0\n' > $T/p.conf; out=$($C -C $T/p.conf -c status 2>&1 || true)
+echo "$out" | grep -q "paranoia" && fail "paranoia=0 not accepted: $out"
 out=$($C -C $T/none.conf -c status 2>&1 || true); echo "$out" | grep -q "unable to open" || fail "missing -C file"
 $FUSERMOUNT -u $MNT; sleep 1; rm -rf $T
 echo "CONFIGTEST OK"

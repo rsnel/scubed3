@@ -59,6 +59,11 @@ const char *command_option = NULL;
 const char *kdf_salt = DEFAULT_KDF_SALT;
 const char *control_socket = CONTROL_SOCKET;
 unsigned long kdf_iterations = DEFAULT_KDF_ITERATIONS;
+
+/* the paranoia level that is required before a partition is written to by
+ * mount, mke2fs or luksformat (paranoia=LEVEL in the configuration file) */
+#define DEFAULT_PARANOIA		2
+int recommended_paranoia = DEFAULT_PARANOIA;
 const char *config_file = NULL; /* NULL: DEFAULT_CONFIG_FILE, if it exists */
 int assume_yes = 0;
 
@@ -402,6 +407,7 @@ static int ctl_help(ctl_priv_t *priv, char *argv[]) {
 	printf("open NAME\n");
 	printf("close NAME\n");
 	printf("resize NAME MACROBLOCKS\n");
+	printf("luksformat NAME\n");
 	printf("mke2fs NAME\n");
 	printf("mount NAME MOUNTPOINT\n");
 	printf("umount NAME|MOUNTPOINT\n");
@@ -610,30 +616,113 @@ or 3 and before you write to the other partitions, until \"p\" shows\n\
 			argv[0], new, reserved_macroblocks);
 }
 
-static int ctl_mke2fs(ctl_priv_t *priv, char *argv[]) {
-	if (do_server_command(priv->s, 0, "info %s", argv[0])) return -1;
+/* writing to a partition (mount, mke2fs, luksformat) below the recommended
+ * paranoia level shows which blocks belong to which partition (see
+ * Paranoia levels in the README), the user must type yes; returns 1 if it
+ * may go on, 0 if not, -1 if the connection failed */
+static int check_paranoia(ctl_priv_t *priv, const char *what) {
+	int i, current = -1;
+	char prompt[128];
+
+	if (do_server_command(priv->s, 0, "p")) return -1;
+	for (i = 0; i < result.argc; i++)
+		sscanf(result.argv[i], "paranoia level %d", &current);
+	if (current >= recommended_paranoia) return 1;
+
+	warning();
+	printf("the paranoia level is %d, the recommended level is %d (see "
+			"the configuration\nfile): what is written to a "
+			"partition now shows which blocks belong to\nwhich "
+			"partition. Open ALL your partitions first, then "
+			"switch with\n\"paranoia %d\", then %s.\n\n", current,
+			recommended_paranoia, recommended_paranoia, what);
+	snprintf(prompt, sizeof(prompt), "type yes to %s anyway: ", what);
+	if (typed_yes(prompt)) return 1;
+	printf("cancelled\n");
+
+	return 0;
+}
+
+/* the name of the device mapper device of a partition with LUKS on it */
+#define LUKS_NAME	"scubed3-%s"
+
+/* does the partition have a LUKS header? (it is not counted as an error if
+ * it has not) */
+static int is_luks(ctl_priv_t *priv, const char *name) {
+	char *cmd;
+	int ret;
+
+	if (asprintf(&cmd, "cryptsetup isLuks %s/%s 2>/dev/null",
+				priv->mountpoint, name) == -1)
+		FATAL("out of memory");
+	ret = system(cmd);
+	free(cmd);
+
+	return !ret;
+}
+
+/* the partition must exist and must not be mounted, returns 1 if so (a
+ * message is printed if not), -1 if the connection failed */
+static int check_unmounted(ctl_priv_t *priv, const char *name) {
+	if (do_server_command(priv->s, 0, "info %s", name)) return -1;
 	if (result.status) {
 		printf("%s\n", result.argv[0]);
 		return 0;
 	}
 	if (do_server_command(priv->s, 0, "get-aux %s mountpoint",
-					argv[0])) return -1;
+					name)) return -1;
 	if (!result.status) {
-		printf("partition \"%s\" is mounted on %s",
-				argv[0], result.argv[0]);
+		printf("partition \"%s\" is mounted on %s\n",
+				name, result.argv[0]);
 		return 0;
 	}
-	var_system("mke2fs -F %s/%s", priv->mountpoint, argv[0]);
+
+	return 1;
+}
+
+/* LUKS on top of a partition (see README): its data stays encrypted while
+ * the partition is open (in paranoia level 2 and 3 all partitions are
+ * open) but the LUKS volume is not, the LUKS volume is opened by mke2fs
+ * and mount, umount closes it */
+static int ctl_luksformat(ctl_priv_t *priv, char *argv[]) {
+	int ret;
+
+	if ((ret = check_unmounted(priv, argv[0])) != 1) return ret;
+	if ((ret = check_paranoia(priv, "format it")) != 1) return ret;
+	if (is_luks(priv, argv[0])) printf("partition \"%s\" already has a "
+			"LUKS header, it is formatted again\n", argv[0]);
+	var_system("cryptsetup luksFormat --type luks2 %s/%s",
+			priv->mountpoint, argv[0]);
+
+	return 0;
+}
+
+static int ctl_mke2fs(ctl_priv_t *priv, char *argv[]) {
+	int ret;
+
+	if ((ret = check_unmounted(priv, argv[0])) != 1) return ret;
+	if ((ret = check_paranoia(priv, "make the filesystem")) != 1)
+		return ret;
+	if (is_luks(priv, argv[0])) {
+		if (var_system("cryptsetup open %s/%s " LUKS_NAME,
+					priv->mountpoint, argv[0], argv[0]))
+			return 0;
+		var_system("mke2fs -F /dev/mapper/" LUKS_NAME, argv[0]);
+		var_system("cryptsetup close " LUKS_NAME, argv[0]);
+	} else var_system("mke2fs -F %s/%s", priv->mountpoint, argv[0]);
 	return 0;
 }
 
 static int ctl_mount(ctl_priv_t *priv, char *argv[]) {
+	int ret;
+
 	if (*argv[1] != '/') {
-		printf("mountpoint must start with a slash");
+		printf("mountpoint must start with a slash\n");
 		return 0;
 	}
 	if (do_server_command(priv->s, 0, "info %s", argv[0])) return -1;
 	if (result.status) {
+		if ((ret = check_paranoia(priv, "mount it")) != 1) return ret;
 		// we try to open the partition
 		do_local_command(priv, hashtbl_find_element_bykey(&priv->c,
 					"open"), "%s", argv[0]);
@@ -652,13 +741,23 @@ static int ctl_mount(ctl_priv_t *priv, char *argv[]) {
 					argv[0], result.argv[0]);
 			return 0;
 		}
+		if ((ret = check_paranoia(priv, "mount it")) != 1) return ret;
 	}
 
-	if (!var_system("mount -o loop %s/%s %s", priv->mountpoint,
-				argv[0], argv[1])) { // ok
-		if (do_server_command(priv->s, 0, "set-aux %s mountpoint %s",
-					argv[0], argv[1])) return -1;
-	}
+	if (is_luks(priv, argv[0])) {
+		if (var_system("cryptsetup open %s/%s " LUKS_NAME,
+					priv->mountpoint, argv[0], argv[0]))
+			return 0;
+		if (var_system("mount /dev/mapper/" LUKS_NAME " %s", argv[0],
+					argv[1])) {
+			var_system("cryptsetup close " LUKS_NAME, argv[0]);
+			return 0;
+		}
+	} else if (var_system("mount -o loop %s/%s %s", priv->mountpoint,
+				argv[0], argv[1])) return 0;
+
+	if (do_server_command(priv->s, 0, "set-aux %s mountpoint %s",
+				argv[0], argv[1])) return -1;
 
 	return 0;
 }
@@ -749,6 +848,14 @@ static int ctl_paranoia(ctl_priv_t *priv, char *argv[]) {
 	return do_server_command(priv->s, 1, "paranoia %s", argv[0]);
 }
 
+/* unmount, and close the LUKS volume if it was mounted from one */
+static void umount_close(const char *mountpoint) {
+	var_system("src=$(findmnt -n -o SOURCE %s); umount %s && "
+			"case \"$src\" in /dev/mapper/" LUKS_NAME ") "
+			"cryptsetup close \"$src\";; esac", mountpoint,
+			mountpoint, "*");
+}
+
 static int ctl_umount(ctl_priv_t *priv, char *argv[]) {
 	if (*argv[0] != '/') { // figure out mountpoint
 		if (do_server_command(priv->s, 0, "get-aux %s mountpoint",
@@ -757,9 +864,8 @@ static int ctl_umount(ctl_priv_t *priv, char *argv[]) {
 			printf("%s\n", result.argv[0]);
 			return 0;
 		}
-		var_system("umount %s", result.argv[0]);
-
-	} else var_system("umount %s", argv[0]);
+		umount_close(result.argv[0]);
+	} else umount_close(argv[0]);
 	return 0;
 }
 
@@ -784,6 +890,11 @@ static ctl_command_t ctl_commands[] = {
 		.command = ctl_resize,
 		.argc = 2,
 		.usage = " NAME MACROBLOCKS"
+	}, {
+		.head.key = "luksformat",
+		.command = ctl_luksformat,
+		.argc = 1,
+		.usage = " NAME"
 	}, {
 		.head.key = "mke2fs",
 		.command = ctl_mke2fs,
@@ -848,6 +959,7 @@ static char *strip(char *str) {
  * kdf=PBKDF2-SHA256   the key derivation function (the only one supported)
  * salt=TEXT           the salt (whitespace at both ends is ignored)
  * iterations=NUMBER   the number of iterations
+ * paranoia=LEVEL      the recommended paranoia level (0..3, default 2)
  *
  * values that are given on the command line take precedence; returns 0
  * if the file does not exist and must_exist is 0, 1 if it was read */
@@ -856,6 +968,7 @@ static int read_config(const char *path, int must_exist, int salt_set,
 	FILE *fp;
 	char line[1024], *key, *value, *endptr;
 	int lineno = 0, have_kdf = 0, have_salt = 0, have_iterations = 0;
+	int have_paranoia = 0;
 	unsigned long iterations;
 
 	if (!(fp = fopen(path, "r"))) {
@@ -905,6 +1018,14 @@ static int read_config(const char *path, int must_exist, int salt_set,
 				FATAL("%s:%d: invalid number of iterations "
 						"\"%s\"", path, lineno, value);
 			if (!iterations_set) kdf_iterations = iterations;
+		} else if (!strcmp(key, "paranoia")) {
+			if (have_paranoia++) FATAL("%s:%d: paranoia specified "
+					"twice", path, lineno);
+			if (strlen(value) != 1 || *value < '0' || *value > '3')
+				FATAL("%s:%d: invalid paranoia level \"%s\", it "
+						"must be 0, 1, 2 or 3", path,
+						lineno, value);
+			recommended_paranoia = *value - '0';
 		} else FATAL("%s:%d: unknown key \"%s\"", path, lineno, key);
 	}
 
@@ -925,7 +1046,9 @@ void show_help() {
 	printf("\nOptions (defaults shown in parentheses):\n\n");
 	printf("-C CONFIG_FILE    file with the KDF parameters (%s, if it\n", DEFAULT_CONFIG_FILE);
 	printf("                  exists), lines kdf=%s-%s, salt=TEXT and\n", DEFAULT_KDF_FUNCTION, DEFAULT_KDF_HASH);
-	printf("                  iterations=NUMBER, keep a backup of it!\n");
+	printf("                  iterations=NUMBER, keep a backup of it! (and\n");
+	printf("                  paranoia=LEVEL, the level that mount, mke2fs and\n");
+	printf("                  luksformat require, default %d)\n", DEFAULT_PARANOIA);
 	printf("-s KDF_SALT       salt used for KDF, overrides the config file (%s)\n", DEFAULT_KDF_SALT);
 	printf("-i KDF_ITERATIONS iterations done by KDF, overrides the config file (%u)\n", DEFAULT_KDF_ITERATIONS);
 	printf("-a SOCKET_ADDRESS address of scubed3 socket (%s)\n", CONTROL_SOCKET);

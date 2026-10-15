@@ -197,10 +197,15 @@ daemon, and scubed3ctl (it asks for the passphrase, twice when creating):
 	# scubed3ctl
 	s3> create secret
 	s3> resize secret 400
+	s3> luksformat secret
 	s3> mke2fs secret
 	s3> mount secret /mnt/secret
 	...
 	s3> umount secret
+
+(without luksformat the filesystem is directly on the partition, see "LUKS
+on top of a partition" for why it is recommended; in paranoia level 1,
+mount, mke2fs and luksformat warn and ask you to type yes, see below)
 
 "resize secret 400" gives the partition 400 macroblocks of 4 MiB (a quarter
 of them is reserved for the garbage collector, so it holds 1.2 GiB); help
@@ -219,7 +224,38 @@ stored, after a start of scubed3 it is level 1, and what is written before
 the level is switched (mounting a filesystem writes to it) is written in
 level 1, that shows which blocks belong to which partition. Do not close or
 umount a partition while you want to stay in level 2 or 3: closing switches
-back to level 1.
+back to level 1. scubed3ctl checks the level before mount, mke2fs and
+luksformat write to a partition: below the recommended level (paranoia= in
+the configuration file, default 2) it warns, and you have to type yes (the
+whole word) to go on.
+
+
+LUKS on top of a partition
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+In paranoia level 2 and 3 all partitions are open, also the ones you do not
+use now, and an open partition is a file in the directory of scubed3 that
+anyone with access to the running computer can read. If someone takes the
+computer while it runs, the existence of the partitions cannot be denied
+anymore, and without more protection their data is lost too. A LUKS volume
+on top of a partition protects its data in that case, as long as the LUKS
+volume is not open (it is opened only to make a filesystem on it, and while
+it is mounted):
+
+	s3> luksformat NAME	cryptsetup luksFormat on the partition (asks for
+				the LUKS passphrase; use another one than
+				the passphrase of the partition)
+	s3> mke2fs NAME		opens the LUKS volume, makes the filesystem,
+				closes it
+	s3> mount NAME DIR	opens the LUKS volume (as /dev/mapper/scubed3-NAME)
+				and mounts it
+	s3> umount NAME|DIR	unmounts it and closes the LUKS volume
+
+mke2fs and mount see from the partition whether it has LUKS on it (it needs
+cryptsetup and the device mapper). The LUKS header is inside the encrypted
+partition, it is not visible on the base device. The LUKS keys are in memory
+while the volume is open: this protects the partitions that are not mounted
+when the computer is taken, not the mounted ones.
 
 How to start
 ~~~~~~~~~~~~
@@ -268,11 +304,15 @@ to which partition). They are read from the configuration file
 	kdf=PBKDF2-SHA256
 	salt=some random text
 	iterations=16777216
+	# the paranoia level that mount, mke2fs and luksformat require
+	paranoia=2
 
 Empty lines and lines starting with # are ignored, whitespace around keys and
 values is ignored, all keys are optional. If the file does not exist, the
-defaults are used: salt "scubed3_prod" and 16777216 iterations. The options
--s and -i override the values in the file.
+defaults are used: salt "scubed3_prod", 16777216 iterations and paranoia
+level 2. The options -s and -i override the values in the file. Below the
+recommended paranoia level, scubed3ctl warns before mount, mke2fs and
+luksformat (they write to the partition) and asks you to type yes.
 
 The salt is not secret, but without it the partitions cannot be opened: keep
 a backup of the configuration file (on paper is fine). A random salt can be

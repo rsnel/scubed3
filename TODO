@@ -1,8 +1,2 @@
-a crash while a removed partition is wiped: the wipe is resumed when it is
-opened again, until then its last two indices are not protected (see
-Removing a partition in the README)
 opening a partition reads the index of every macroblock of the base device,
 that is slow for large base devices
-the paranoia level is not stored: what is written before it is switched
-(after a start) is written in level 1, scubed3ctl could warn when a partition
-is mounted in level 0 or 1

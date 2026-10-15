@@ -176,7 +176,18 @@ configtest.sh DAEMON SCUBED3CTL
 	KDF parameters from the configuration file: a partition created with
 	the salt from the file is found with the key PBKDF2-SHA256(passphrase,
 	salt, iterations), -C and /etc/scubed3.conf, -s/-i override the file,
-	errors in the file are fatal (uses script(1) to type the passphrase).
+	errors in the file are fatal, also an invalid paranoia= (uses
+	script(1) to type the passphrase).
+
+lukstest.sh DAEMON SCUBED3CTL
+	LUKS on top of a partition with scubed3ctl, and the warning below the
+	recommended paranoia level: in level 1 mount and luksformat warn, an
+	answer other than yes cancels; in level 2 luksformat, mke2fs and mount
+	work on the LUKS volume, umount closes it, a file survives umount and
+	mount, its plaintext is not in the partition. Needs cryptsetup and the
+	device mapper (it says SKIPPED without cryptsetup); with
+	LUKSTEST_FAKE=1 the cryptsetup in PATH may be a stand-in without
+	encryption (the plaintext check is skipped).
 
 sockettest.sh DAEMON SCUBED3CTL
 	The control socket: private directory (0700) and socket (0600), unsafe

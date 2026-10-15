@@ -37,6 +37,7 @@ run rootswitch python3 -u $T/rootswitchtest.py scubed3 18
 run initramfs sh $T/initramfstest.sh ./scubed3 ./scubed3ctl
 run installer sh $T/installertest.sh ./scubed3 ./scubed3ctl
 run valgrind sh $T/valgrindtest.sh ./scubed3 ./scubed3ctl
+run helgrind env TOOL=helgrind sh $T/valgrindtest.sh ./scubed3 ./scubed3ctl
 run size python3 -u $T/sizetest.py scubed3
 run resizestat python3 -u $T/resizestat.py scubed3-crash 1500 11
 run level0 python3 -u $T/level0test.py scubed3-crash 3

@@ -1815,6 +1815,15 @@ static int blockio_take_tick(blockio_t *b) {
 	return 1;
 }
 
+/* wait on tick_cond until the next tick (the caller holds tick_mutex);
+ * with a copy of next_tick: pthread_cond_timedwait reads it after it has
+ * released tick_mutex, while another thread may change it */
+static void blockio_timedwait(blockio_t *b) {
+	struct timespec until = b->next_tick;
+
+	pthread_cond_timedwait(&b->tick_cond, &b->tick_mutex, &until);
+}
+
 /* wait for the next tick and take it, returns 0 (without a tick) if the
  * paranoia level is not 3 anymore; the caller holds io_mutex (nobody else
  * can take the tick), and has to do one draw */
@@ -1824,8 +1833,7 @@ static int blockio_wait_tick(blockio_t *b) {
 	pthd_mutex_lock(&b->tick_mutex);
 	while (b->paranoia == 3 && !b->clock_stop &&
 			!blockio_take_tick(b))
-		pthread_cond_timedwait(&b->tick_cond, &b->tick_mutex,
-				&b->next_tick);
+		blockio_timedwait(b);
 	ret = b->paranoia == 3 && !b->clock_stop;
 	pthd_mutex_unlock(&b->tick_mutex);
 
@@ -1858,8 +1866,7 @@ static void *blockio_clock(void *arg) {
 			continue;
 		}
 		if (!blockio_tick_due(b)) {
-			pthread_cond_timedwait(&b->tick_cond, &b->tick_mutex,
-					&b->next_tick);
+			blockio_timedwait(b);
 			continue;
 		}
 

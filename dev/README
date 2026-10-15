@@ -248,7 +248,12 @@ valgrindtest.sh DAEMON SCUBED3CTL
 	the same base device (replay), a removal with wipe in level 2,
 	check-data-integrity. Slow (the cipher runs under valgrind); the
 	binaries have -g, EXTRA_CFLAGS=-O1 gives better stack traces.
-	SKIPPED without valgrind.
+	SKIPPED without valgrind. With TOOL=helgrind (or TOOL=drd) the
+	daemon runs under that thread error detector (data races, lock
+	order, misuse of pthreads), scubed3ctl without valgrind; in level 3 a
+	writer that waits for its turn, reads of another partition and
+	control commands run at the same time. valgrind.supp suppresses the
+	races inside libfuse 3 itself.
 
 lukstest.sh DAEMON SCUBED3CTL
 	LUKS on top of a partition with scubed3ctl, and the warning below the

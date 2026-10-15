@@ -1,0 +1,13 @@
+# valgrind suppressions for valgrindtest.sh (TOOL=helgrind or drd): races
+# inside libfuse 3 itself (its session and worker bookkeeping uses plain
+# variables between its threads), not in scubed3
+{
+   libfuse3-internal-race
+   Helgrind:Race
+   obj:*/libfuse3.so*
+}
+{
+   libfuse3-internal-conflict
+   drd:ConflictingAccess
+   obj:*/libfuse3.so*
+}

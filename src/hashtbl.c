@@ -59,8 +59,8 @@ void hashtbl_empty(hashtbl_t *h) {
 	assert(h && h->key_bits >= 0);
 	if (!h->buckets) return;
 
-	if (TS) pthd_mutex_lock(&h->count_mutex);
-	h->count = 0;
+	/* count_mutex is not held while a bucket is locked: a delete locks
+	 * the bucket first, then count_mutex (the lock order) */
 	for (i = 0; i < NO_BUCKETS; i++) {
 		if (TS) pthd_mutex_lock(&h->buckets[i].ptr_mutex);
 		while (h->buckets[i].first) {
@@ -70,6 +70,8 @@ void hashtbl_empty(hashtbl_t *h) {
 		}
 		if (TS) pthd_mutex_unlock(&h->buckets[i].ptr_mutex);
 	}
+	if (TS) pthd_mutex_lock(&h->count_mutex);
+	h->count = 0;
 	if (TS) pthd_mutex_unlock(&h->count_mutex);
 }
 

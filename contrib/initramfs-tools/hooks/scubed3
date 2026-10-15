@@ -56,6 +56,11 @@ copy_file config "$CONF" /conf/scubed3.conf
 if [ -f /etc/scubed3.conf ]; then
 	copy_file config /etc/scubed3.conf /etc/scubed3.conf
 fi
+# the key store (it is random data without its passphrases), the
+# local-top script destroys it after use
+if [ -f /etc/scubed3.keys ]; then
+	copy_file keys /etc/scubed3.keys /conf/scubed3.keys
+fi
 # readline of scubed3ctl (the questions it asks) works better with it
 for t in /usr/share/terminfo/l/linux /lib/terminfo/l/linux; do
 	if [ -f "$t" ]; then

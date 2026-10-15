@@ -1,0 +1,73 @@
+#!/bin/sh
+# fake-cryptsetup - a stand-in for cryptsetup, for tests where there is no
+# device mapper (a container): NO ENCRYPTION
+#
+# luksFormat writes a LUKS signature and the SHA-256 of the key (8 key
+# slots), open checks the key and maps the payload (after 1 MiB) with a
+# loop device as /dev/mapper/NAME (a device node), luksAddKey adds a key
+# (after the existing one is given), close removes the mapping, isLuks looks
+# at the signature; keys come from --key-file (- is stdin) or are typed
+# (one line); -q: luksFormat does not ask for confirmation
+#
+# usage: put it in PATH as cryptsetup (see lukstest.sh, keystoretest.sh)
+q=; keyfile=
+args=
+while [ $# -gt 0 ]; do
+	case $1 in
+	-q|--batch-mode) q=1;;
+	--type) shift;;
+	--type=*) ;;
+	--key-file) shift; keyfile=$1;;
+	--key-file=*) keyfile=${1#--key-file=};;
+	*) args="$args $1";;
+	esac
+	shift
+done
+set -- $args
+
+# the SHA-256 of a key: from the key file or typed
+keyhash() {
+	if [ -n "$keyfile" ]; then
+		if [ "$keyfile" = - ]; then sha256sum; else sha256sum < "$keyfile"; fi
+	else
+		printf '%s' "$1" > /dev/tty 2> /dev/null || printf '%s' "$1" >&2
+		read p
+		printf '%s' "$p" | sha256sum
+	fi | cut -c1-64
+}
+# the key hashes in the header of $1
+hashes() { dd if="$1" bs=1 skip=8 count=512 2> /dev/null | tr -d '\0' | fold -w 64; }
+
+case $1 in
+isLuks)
+	[ "$(head -c 6 "$2" | od -An -tx1 | tr -d ' \n')" = "4c554b53babe" ];;
+luksFormat)
+	if [ -z "$q" ] && [ -z "$keyfile" ]; then
+		printf 'Are you sure? (Type uppercase yes): '; read a
+		[ "$a" = YES ] || exit 1
+	fi
+	h=$(keyhash "Enter passphrase: ")
+	if [ -z "$keyfile" ]; then
+		h2=$(keyhash "Verify passphrase: "); [ "$h" = "$h2" ] || exit 2
+	fi
+	dd if=/dev/zero of="$2" bs=4096 count=256 conv=notrunc 2> /dev/null
+	printf 'LUKS\272\276\0\0%s' "$h" | dd of="$2" conv=notrunc 2> /dev/null;;
+luksAddKey)
+	h=$(keyhash "Enter any existing passphrase: ")
+	hashes "$2" | grep -qx "$h" || { echo "No key available with this passphrase." >&2; exit 2; }
+	n=$(hashes "$2" | wc -l)
+	new=$(sha256sum < "$3" | cut -c1-64)
+	printf '%s' "$new" | dd of="$2" bs=1 seek=$((8 + 64*n)) conv=notrunc 2> /dev/null;;
+open)
+	h=$(keyhash "Enter passphrase for $2: ")
+	hashes "$2" | grep -qx "$h" || { echo "No key available with this passphrase." >&2; exit 2; }
+	dev=$(losetup -f --show -o 1048576 "$2") || exit 1
+	mkdir -p /dev/mapper; n=$(basename $dev); mm=$(cat /sys/block/$n/dev)
+	mknod /dev/mapper/$3 b ${mm%:*} ${mm#*:}; echo $dev > /dev/mapper/.$3;;
+close)
+	n=${2#/dev/mapper/}; [ -e /dev/mapper/$n ] || exit 4
+	dev=$(cat /dev/mapper/.$n); rm -f /dev/mapper/$n /dev/mapper/.$n
+	losetup -d $dev;;
+*)
+	echo "fake-cryptsetup: $1 is not supported" >&2; exit 1;;
+esac

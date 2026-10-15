@@ -16,7 +16,7 @@ LDFLAGS="$EXTRA_LDFLAGS"
 DAEMON="scubed3.c binio.c bitmap.c blockio.c cipher.c dllarr.c fuse_io.c gcry.c
 	hashtbl.c pthd.c util.c verbose.c cipher_null.c cipher_cbc.c control.c
 	ecch.c random.c juggler.c"
-CTL="scubed3ctl.c verbose.c gcry.c ecch.c hashtbl.c pthd.c util.c"
+CTL="scubed3ctl.c keystore.c verbose.c gcry.c ecch.c hashtbl.c pthd.c util.c"
 DLIBS="-lpthread $FUSE_LIBS -lgcrypt -lm -lrt -lgpg-error"
 CLIBS="-lreadline -lgcrypt -lpthread -lgpg-error"
 

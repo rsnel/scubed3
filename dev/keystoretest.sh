@@ -1,0 +1,149 @@
+#!/bin/sh
+# keystoretest.sh - the key store of scubed3ctl (see Key store in the README)
+#
+# a key store with two passphrases (A and B) and their views: root (A), hid
+# (B), shared (A and B); the partitions are created and opened with the
+# keys from the store (no passphrases); every write changes the whole file
+# (no 16 byte block stays the same), its size is always the same; A alone
+# shows and opens only root and shared; a wrong passphrase has no view; an
+# existing partition (with its own passphrase) is imported; LUKS: luksformat
+# and luksopen with the key from the store; a passphrase is changed; a write
+# with only A unlocked loses the view of B (as the warning says); keys-setup
+# (guided) makes a key store with two passphrases, a new, an imported and a
+# shared partition
+#
+# usage: keystoretest.sh DAEMON CTL (as root; CRYPTSETUP=path: the
+# cryptsetup to use, default the stand-in dev/fake-cryptsetup, it needs no
+# device mapper)
+D=$(realpath $1); C=$(realpath $2); T=$(mktemp -d); MNT=/mnt/s3
+DEV=$(cd "$(dirname "$0")" && pwd)
+FUSERMOUNT=$(command -v fusermount3 || echo fusermount)
+mkdir -p $T/bin
+ln -s ${CRYPTSETUP:-$DEV/fake-cryptsetup} $T/bin/cryptsetup
+export PATH=$T/bin:$PATH
+K=$T/keys
+cleanup() {
+	cryptsetup close scubed3-root 2> /dev/null
+	$FUSERMOUNT -u $MNT 2> /dev/null; wait; rm -rf $T
+}
+fail() { echo "KEYSTORETEST FAILED: $1"; [ -f $T/out ] && cat $T/out; cleanup; exit 1; }
+ok() { echo "   ok: $1"; }
+
+printf 'iterations=1000\nsalt=keystoretest\n' > $T/s3.conf
+head -c $((400<<16)) /dev/urandom > $T/base
+$FUSERMOUNT -u -z $MNT 2> /dev/null; rm -f /run/scubed3/control
+$D -b $T/base -m 12 -M 16 -f $MNT > $T/log 2>&1 & sleep 0.5
+
+# scubed3ctl with the commands -c, on a terminal, the answers are typed one
+# per second
+run() {
+	cmds=$1; shift
+	(for l in "$@"; do sleep 1; printf '%s\n' "$l"; done; sleep 2) |
+		script -qc "$C -C $T/s3.conf -K $K $cmds" /dev/null | tr -d '\r' > $T/out
+}
+ctl() { $C -q -YYY -C $T/s3.conf -K $K "$@"; }
+SIZE=$((64*(12 + 64*128 + 16)))
+size() { [ "$(stat -c %s $K)" = $SIZE ] || fail "the key store has size $(stat -c %s $K)"; }
+# the number of 16 byte blocks that are the same in two versions
+same() { python3 -c "
+import sys; a, b = open(sys.argv[1], 'rb').read(), open(sys.argv[2], 'rb').read()
+print(sum(a[i:i + 16] == b[i:i + 16] for i in range(0, len(a), 16)))" $1 $2; }
+
+echo "1. a key store with two passphrases"
+run "-c keys-create"
+size
+cp $K $T/k0
+run "-c unlock-all -c keys-passphrase-add" "" A A yes
+grep -q "view 1 is added" $T/out || fail "passphrase A"
+size; [ "$(same $T/k0 $K)" = 0 ] || fail "the key store did not change completely"
+cp $K $T/k1
+run "-c unlock-all -c keys-passphrase-add" A "" B B yes
+grep -q "view 2 is added" $T/out || fail "passphrase B"
+size; [ "$(same $T/k1 $K)" = 0 ] || fail "the key store did not change completely"
+ok "the file changes completely with every write, it has always $SIZE bytes"
+
+echo "2. partitions with keys from the store"
+run "-c unlock-all -c 'keys-add root 1' -c 'keys-add hid 2' -c 'keys-add shared 1' -c 'keys-add shared 2'" \
+	A B "" yes yes yes yes
+grep -q "copied from view 1 to view 2" $T/out || fail "shared is not copied"
+run "-c unlock-all -c 'create root' -c 'create hid' -c 'create shared'" A B ""
+grep -qi "passphrase:" $T/out && grep -q "Enter passphrase" $T/out && fail "a passphrase was asked"
+for n in root:60 hid:40 shared:30; do ctl -c "resize ${n%:*} ${n#*:}" > /dev/null; done
+head -c 100000 /dev/urandom > $T/data
+for n in root hid shared; do dd if=$T/data of=$MNT/$n conv=notrunc 2> /dev/null; done
+sync; for n in root hid shared; do ctl -c "close $n" > /dev/null; done
+ok "created with the keys from the store"
+
+echo "3. one passphrase"
+run "-c unlock -c keys" A
+sed -n '/^view 1/,$p' $T/out | sed 's/^/      /'
+grep -q "^  root \[LUKS\]" $T/out && grep -q "^  shared" $T/out || fail "view of A: $(cat $T/out)"
+grep -q "hid" $T/out && fail "A shows hid"
+run "-c unlock -c open-all" A
+grep -q "2 partitions are opened" $T/out || fail "open-all"
+for n in root shared; do cmp -s -n 100000 $T/data $MNT/$n || fail "$n is wrong"; done
+[ -e $MNT/hid ] && fail "hid is open"
+ok "A shows and opens root and shared, not hid, the data is right"
+run "-c unlock" wrong
+grep -q "no view for this passphrase" $T/out || fail "a wrong passphrase"
+ok "a wrong passphrase has no view"
+run "-c unlock-all -c open-all" B ""
+cmp -s -n 100000 $T/data $MNT/hid || fail "hid is wrong"
+ok "B opens hid"
+for n in root hid shared; do ctl -c "close $n" > /dev/null; done
+
+echo "4. import a partition with its own passphrase"
+run "-c 'create old'" opw opw
+ctl -c "resize old 30" > /dev/null
+dd if=$T/data of=$MNT/old conv=notrunc 2> /dev/null; sync; ctl -c "close old" > /dev/null
+run "-c unlock-all -c 'keys-import old 1'" A B "" opw yes
+run "-c unlock -c 'open old'" A
+grep -q "Enter passphrase" $T/out && fail "a passphrase was asked for old"
+cmp -s -n 100000 $T/data $MNT/old || fail "old is wrong"
+ctl -c "close old" > /dev/null
+ok "old is imported, it opens with the key from the store"
+
+echo "5. LUKS with the key from the store"
+run "-c unlock -c 'open root' -c 'luksformat root'" A yes yes
+cryptsetup isLuks $MNT/root || fail "luksformat: $(cat $T/out)"
+run "-c unlock -c 'luksopen root'" A
+[ -b /dev/mapper/scubed3-root ] || fail "luksopen: $(cat $T/out)"
+cryptsetup close scubed3-root
+printf 'not the key' | cryptsetup open --key-file=- $MNT/root scubed3-root 2> /dev/null &&
+	fail "another key opens the LUKS volume"
+ok "luksformat and luksopen with the key from the store (another key does not open it)"
+ctl -c "close root" > /dev/null
+
+echo "6. a passphrase is changed"
+run "-c unlock-all -c 'keys-passphrase-change 1'" A B "" A2 A2 yes
+run "-c unlock" A
+grep -q "no view" $T/out || fail "the old passphrase still has a view"
+run "-c unlock -c keys" A2
+grep -q "^  root" $T/out || fail "the new passphrase: $(cat $T/out)"
+ok "the new passphrase has the view, the old one not"
+
+echo "7. a write without B unlocked"
+run "-c unlock -c 'keys-add x 1'" A2 yes
+grep -q "views of passphrases that are NOT UNLOCKED NOW ARE LOST" $T/out ||
+	fail "no warning: $(cat $T/out)"
+run "-c unlock" B
+grep -q "no view" $T/out || fail "the view of B survived"
+ok "the warning is shown, the view of B is lost (as it says)"
+
+echo "8. keys-setup (guided)"
+K=$T/keys2
+run "-c keys-setup" y P P y Q Q n s1 "" old y opw "" s1 s2 "" "" yes
+grep -q "the key store is written" $T/out || fail "keys-setup: $(cat $T/out)"
+size
+run "-c unlock -c keys" P
+grep -q "^  s1" $T/out && grep -q "^  old" $T/out || fail "view of P: $(cat $T/out)"
+grep -q "s2" $T/out && fail "P shows s2"
+run "-c unlock -c keys" Q
+grep -q "^  s1" $T/out && grep -q "^  s2" $T/out || fail "view of Q: $(cat $T/out)"
+run "-c unlock -c 'open old'" P
+cmp -s -n 100000 $T/data $MNT/old || fail "old (imported by keys-setup) is wrong"
+ctl -K $K -c "close old" > /dev/null
+ok "keys-setup: two passphrases, a new, an imported and a shared partition, one write"
+
+cleanup
+echo "KEYSTORETEST OK"

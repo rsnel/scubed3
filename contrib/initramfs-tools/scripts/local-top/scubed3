@@ -8,16 +8,22 @@
 #    switch to the real root: it opens nothing by its path after its start,
 #    its mount point is below /dev and its control socket below /run, the
 #    initramfs moves both to the real root
-# 2. the root partition is opened (ROOT_PARTITION, if it is not set its name
-#    is asked: there may be more than one root partition), its passphrase
-#    is asked
-# 3. the names of the other partitions are asked: in paranoia level 2 and 3
-#    ALL partitions must be open, their names are not stored anywhere
-# 4. the paranoia level is switched (PARANOIA, or paranoia= in
+# 2. the name of the root partition: ROOT_PARTITION, if it is not set its
+#    name is asked (there may be more than one root partition)
+# 3. with a key store (/etc/scubed3.keys, see Key store in the README): its
+#    passphrases are asked until an empty one, all partitions of the views
+#    are opened, the LUKS volume on the root partition is opened with its
+#    key from the store; then the copy of the key store is overwritten and
+#    removed
+# 4. if the root partition is not open, its passphrase is asked; the names
+#    of the other partitions are asked (those that are not in the key
+#    store): in paranoia level 2 and 3 ALL partitions must be open, their
+#    names are not stored anywhere
+# 5. the paranoia level is switched (PARANOIA, or paranoia= in
 #    /etc/scubed3.conf, default 2), before anything is written
-# 5. the root partition becomes a block device: with LUKS on it
-#    /dev/mapper/scubed3-ROOT_PARTITION (its passphrase is asked), otherwise
-#    a loop device; ROOT is set to it
+# 6. the root partition becomes a block device: with LUKS on it
+#    /dev/mapper/scubed3-ROOT_PARTITION (if it is not open yet, its
+#    passphrase is asked), otherwise a loop device; ROOT is set to it
 
 PREREQ=""
 prereqs() { echo "$PREREQ"; }
@@ -35,6 +41,7 @@ esac
 
 MNT=/dev/scubed3fs
 SOCK=/run/scubed3/control
+KEYS=/conf/scubed3.keys
 
 msg() { echo "scubed3: $*" >&2; }
 ctl() { /sbin/scubed3ctl "$@"; }
@@ -78,25 +85,41 @@ for p in /proc/[0-9]*; do
 	fi
 done
 
-# 2. the root partition (its name is asked if it is not configured)
-root=$ROOT_PARTITION
-i=0
-while [ -z "$root" ] || [ ! -e "$MNT/$root" ]; do
-	i=$((i + 1))
-	[ $i -gt 3 ] && panic "scubed3: no root partition is opened"
-	if [ -z "$ROOT_PARTITION" ]; then
+# 2. the name of the root partition
+ask_root() {
+	root=
+	while [ -z "$root" ]; do
 		printf "scubed3: name of the root partition: " >&2
 		read root || panic "scubed3: no root partition"
-		[ -z "$root" ] && continue
-	else msg "partition $root"
-	fi
+	done
+}
+root=$ROOT_PARTITION
+[ -z "$root" ] && ask_root
+
+# 3. the key store: one scubed3ctl, the views stay unlocked from one
+# command to the next; opening the LUKS volume writes nothing (the level is
+# switched later)
+if [ -f $KEYS ]; then
+	msg "the key store: its passphrases, an empty one when done"
+	ctl -K $KEYS -c unlock-all -c open-all -c "luksopen $root"
+	dd if=/dev/urandom of=$KEYS bs=$(wc -c < $KEYS) count=1 conv=notrunc 2> /dev/null
+	rm -f $KEYS
+fi
+
+# 4. the root partition (if it is not open: its passphrase), the other
+# partitions (their names are asked, not stored)
+i=0
+while [ ! -e "$MNT/$root" ]; do
+	i=$((i + 1))
+	[ $i -gt 3 ] && panic "scubed3: no root partition is opened"
+	[ $i -gt 1 ] && [ -z "$ROOT_PARTITION" ] && ask_root
+	msg "partition $root"
 	ctl -c "open $root"
 done
 ROOT_PARTITION=$root
 
-# 3. the other partitions (their names are asked, not stored)
 msg "in paranoia level 2 and 3 ALL partitions must be open:"
-msg "open the other partitions of $BASE now"
+msg "open the other partitions of $BASE now (not those in the key store)"
 while :; do
 	printf "scubed3: name of another partition (empty when done): " >&2
 	read name || break
@@ -104,7 +127,7 @@ while :; do
 	ctl -c "open $name"
 done
 
-# 4. the paranoia level (scubed3ctl asks for confirmation, it shows the open
+# 5. the paranoia level (scubed3ctl asks for confirmation, it shows the open
 # partitions)
 level=$PARANOIA
 if [ -z "$level" ] && [ -f /etc/scubed3.conf ]; then
@@ -119,8 +142,10 @@ if ! ctl -c p | grep -q "paranoia level $level "; then
 	msg "shows which blocks belong to which partition"
 fi
 
-# 5. the block device of the root partition
-if [ -x /sbin/cryptsetup ] && /sbin/cryptsetup isLuks "$MNT/$ROOT_PARTITION"; then
+# 6. the block device of the root partition
+if [ -b /dev/mapper/scubed3-$ROOT_PARTITION ]; then
+	dev=/dev/mapper/scubed3-$ROOT_PARTITION	# opened with the key store
+elif [ -x /sbin/cryptsetup ] && /sbin/cryptsetup isLuks "$MNT/$ROOT_PARTITION"; then
 	dev=/dev/mapper/scubed3-$ROOT_PARTITION
 	i=0
 	until /sbin/cryptsetup open "$MNT/$ROOT_PARTITION" scubed3-$ROOT_PARTITION; do

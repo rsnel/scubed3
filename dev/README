@@ -207,6 +207,10 @@ initramfstest.sh DAEMON SCUBED3CTL
 	2; afterwards ROOT in param.conf is a loop device with the file system
 	of the root partition, the daemon runs as @scubed3 (with oom_score_adj
 	-1000, where that can be set), both partitions are open, level 2.
+	Then a boot with a key store: root has LUKS on it (fake-cryptsetup),
+	one passphrase of the key store opens both partitions and the LUKS
+	volume, ROOT is /dev/mapper/scubed3-root, the copy of the key store
+	is gone.
 	Uses /dev/scubed3fs and /run/scubed3/control (like a boot), no other
 	daemon may run.
 
@@ -218,7 +222,28 @@ lukstest.sh DAEMON SCUBED3CTL
 	mount, its plaintext is not in the partition. Needs cryptsetup and the
 	device mapper (it says SKIPPED without cryptsetup); with
 	LUKSTEST_FAKE=1 the cryptsetup in PATH may be a stand-in without
-	encryption (the plaintext check is skipped).
+	encryption, like fake-cryptsetup (the plaintext check is skipped).
+
+keystoretest.sh DAEMON SCUBED3CTL
+	The key store of scubed3ctl: two passphrases (A and B) with views,
+	root (A), hid (B), shared (A and B); the partitions are created and
+	opened with the keys from the store (no passphrases); every write
+	changes the whole file (no 16 byte block stays the same), its size is
+	always the same; A alone shows and opens only root and shared; a wrong
+	passphrase has no view; an existing partition is imported; luksformat
+	and luksopen with the key from the store (another key does not open
+	it); a passphrase is changed; a write with only A unlocked loses the
+	view of B, as the warning says; keys-setup (guided) with two
+	passphrases, a new, an imported and a shared partition. Uses
+	fake-cryptsetup (CRYPTSETUP=path for another cryptsetup).
+
+fake-cryptsetup
+	A stand-in for cryptsetup for tests without the device mapper (a
+	container), NO ENCRYPTION: luksFormat writes a LUKS signature and the
+	SHA-256 of its keys, open checks the key and maps the payload with a
+	loop device as /dev/mapper/NAME, luksAddKey, close, isLuks; keys from
+	--key-file (- is stdin) or typed; used by keystoretest.sh and
+	initramfstest.sh.
 
 sockettest.sh DAEMON SCUBED3CTL
 	The control socket: private directory (0700) and socket (0600), unsafe

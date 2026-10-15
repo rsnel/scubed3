@@ -40,6 +40,7 @@
 #include "control.h"
 #include "gcry.h"
 #include "util.h"
+#include "keystore.h"
 
 #define BUF_SIZE 1024
 #define CONV_SIZE 512
@@ -50,12 +51,17 @@
 #define DEFAULT_KDF_FUNCTION		"PBKDF2"
 #define DEFAULT_CIPHER_STRING		"CBC_ESSIV(AES256)"
 #define DEFAULT_CONFIG_FILE		"/etc/scubed3.conf"
+#define DEFAULT_KEYSTORE_FILE		"/etc/scubed3.keys"
 #define KEY_LENGTH	32
 
 #define MAX_RESULT_LINES 128
 
 // PBKDF2 requires salt
-const char *command_option = NULL;
+/* -c COMMAND, more than one: they are done in this order (the key store
+ * stays unlocked between them) */
+#define MAX_COMMANDS 16
+const char *command_options[MAX_COMMANDS];
+int no_commands = 0;
 const char *kdf_salt = DEFAULT_KDF_SALT;
 const char *control_socket = CONTROL_SOCKET;
 unsigned long kdf_iterations = DEFAULT_KDF_ITERATIONS;
@@ -65,6 +71,9 @@ unsigned long kdf_iterations = DEFAULT_KDF_ITERATIONS;
 #define DEFAULT_PARANOIA		2
 int recommended_paranoia = DEFAULT_PARANOIA;
 const char *config_file = NULL; /* NULL: DEFAULT_CONFIG_FILE, if it exists */
+
+/* the key store (see keystore.h), read when it is used */
+keystore_t ks = { .path = DEFAULT_KEYSTORE_FILE };
 int assume_yes = 0;
 
 /* in non-interactive mode, the exit status of
@@ -303,40 +312,24 @@ int my_getpass(char **lineptr, size_t *n, FILE *stream) {
 	return 0;
 }
 
-static int ctl_open_create_common(ctl_priv_t *priv, char *argv[], int create) {
-	uint8_t hash[32];
+/* ask a passphrase (twice if verify), NULL if it could not be read or the
+ * two do not match; *len is its length (without the newline) */
+static char *ask_passphrase(const char *prompt, int verify, size_t *len) {
 	char *pw = NULL, *pw2 = NULL;
 	size_t pw_len, pw2_len;
-	int i, ret;
-	int algo, subalgo;
 
-	if (do_server_command(priv->s, 1, "check-available %s", argv[0]))
-		return -1;
-	if (result.status == -1) return 0;
-
-	if (!strcmp(DEFAULT_KDF_FUNCTION, "PBKDF2"))
-		algo = GCRY_KDF_PBKDF2;
-	else {
-		ERROR("unknown key derivation function %s",
-				DEFAULT_KDF_FUNCTION);
-		return -1;
-	}
-
-	subalgo = gcry_md_map_name(DEFAULT_KDF_HASH);
-	assert(subalgo);
-
-	printf("Enter passphrase: ");
+	printf("%s", prompt);
 	if (my_getpass(&pw, &pw_len, stdin) == -1) {
 		ERROR("unable to get password");
-		return -1;
+		return NULL;
 	}
-	if (create) {
+	if (verify) {
 		printf("Verify passphrase: ");
 		if (my_getpass(&pw2, &pw2_len, stdin) == -1) {
 			wipememory(pw, pw_len);
 			free(pw);
 			ERROR("unable to get password for verification");
-			return -1;
+			return NULL;
 		}
 		if (pw_len != pw2_len || strcmp(pw, pw2)) {
 			wipememory(pw, pw_len);
@@ -345,7 +338,7 @@ static int ctl_open_create_common(ctl_priv_t *priv, char *argv[], int create) {
 			free(pw2);
 			printf("passphrases do not match\n");
 			exit_status = EXIT_FAILURE;
-			return 0;
+			return NULL;
 		}
 
 		wipememory(pw2, pw2_len);
@@ -353,8 +346,24 @@ static int ctl_open_create_common(ctl_priv_t *priv, char *argv[], int create) {
 	}
 
 	assert(pw_len > 0);
-	if (pw_len == 1) WARNING("empty passphrase used, "
-			"this is not very secure");
+	*len = pw_len - 1; /* the newline */
+	pw[*len] = '\0';
+
+	return pw;
+}
+
+static void free_passphrase(char *pw, size_t len) {
+	if (!pw) return;
+	wipememory(pw, len);
+	free(pw);
+}
+
+/* the key of a passphrase: PBKDF2-SHA256 with the salt of the
+ * configuration file, and suffix (the key store uses another key than a
+ * partition with the same passphrase) */
+static void derive_key(const char *pw, size_t len, const char *suffix,
+		unsigned char *key) {
+	char *salt;
 
 	/* when the number of iterations is high, let
 	 * the user know that computing the key
@@ -367,32 +376,70 @@ static int ctl_open_create_common(ctl_priv_t *priv, char *argv[], int create) {
 				DEFAULT_KDF_FUNCTION,
 				DEFAULT_KDF_HASH);
 
-	gcry_call(kdf_derive, pw, pw_len - 1,
-			algo, subalgo, kdf_salt, strlen(kdf_salt),
-			kdf_iterations, 32, hash);
+	if (asprintf(&salt, "%s%s", kdf_salt, suffix) == -1)
+		FATAL("out of memory");
+	gcry_call(kdf_derive, pw, len, GCRY_KDF_PBKDF2,
+			gcry_md_map_name(DEFAULT_KDF_HASH), salt, strlen(salt),
+			kdf_iterations, KEY_LENGTH, key);
+	free(salt);
+}
 
-	wipememory(pw, pw_len);
-	free(pw);
+/* open or create partition name with key */
+static int send_key(ctl_priv_t *priv, const char *name,
+		const unsigned char *key, int create) {
+	char hash_text[2*KEY_LENGTH + 1], *ptr = hash_text;
+	int i, ret;
 
-	char hash_text[65], *ptr = hash_text;
+	for (i = 0; i < KEY_LENGTH; i++)
+		ptr += snprintf(ptr, 3, "%02x", key[i]);
 
-	for (i = 0; i < gcry_md_get_algo_dlen(subalgo); i++)
-		ptr += snprintf(ptr, 3, "%02x", hash[i]);
-
-	// WARNING: sizeof(hash) must be cast to int... see below
-	wipememory(hash, (int)sizeof(hash));
-	//gcry_md_close(hd);
-
-	// WARNING: sizeof(hash_text) must be cast to int... see below
 	ret = do_server_command(priv->s, 1, "%s-internal %s %s %.*s",
-			create?"create":"open", argv[0],
-			DEFAULT_CIPHER_STRING, 64,
+			create?"create":"open", name,
+			DEFAULT_CIPHER_STRING, 2*KEY_LENGTH,
 			hash_text);
 
 	// HERE BE DRAGONS! if sizeof(hash_text) is NOT cast to int, then
 	// the compiler 'optimizes' it to 0, that will lead to wipememory
 	// attempting to wipe all memory, which will lead to a segfault
 	wipememory(hash_text, (int)sizeof(hash_text));
+
+	return ret;
+}
+
+/* the key of a partition comes from the key store, if it is in an unlocked
+ * view, otherwise from its passphrase */
+static int ctl_open_create_common(ctl_priv_t *priv, char *argv[], int create) {
+	unsigned char key[KEY_LENGTH];
+	ks_entry_t *e;
+	char *pw;
+	size_t len;
+	int ret;
+
+	if (do_server_command(priv->s, 1, "check-available %s", argv[0]))
+		return -1;
+	if (result.status == -1) return 0;
+
+	assert(!strcmp(DEFAULT_KDF_FUNCTION, "PBKDF2"));
+
+	if ((e = ks_find(&ks, -1, argv[0], NULL))) {
+		VERBOSE("the key of \"%s\" is in the key store", argv[0]);
+		return send_key(priv, argv[0], e->key, create);
+	}
+
+	if (!(pw = ask_passphrase("Enter passphrase: ", create, &len))) {
+		exit_status = EXIT_FAILURE;
+		return 0;
+	}
+	if (!len) WARNING("empty passphrase used, "
+			"this is not very secure");
+
+	derive_key(pw, len, "", key);
+	free_passphrase(pw, len);
+
+	ret = send_key(priv, argv[0], key, create);
+
+	// WARNING: sizeof(key) must be cast to int... see below
+	wipememory(key, (int)sizeof(key));
 
 	return ret;
 }
@@ -408,6 +455,20 @@ static int ctl_help(ctl_priv_t *priv, char *argv[]) {
 	printf("close NAME\n");
 	printf("resize NAME MACROBLOCKS\n");
 	printf("luksformat NAME\n");
+	printf("luksopen NAME\n");
+	printf("\nKey store (%s):\n\n", ks.path);
+	printf("keys-setup        (guided: creates, unlocks, adds passphrases and partitions)\n");
+	printf("keys-create\n");
+	printf("unlock\n");
+	printf("unlock-all\n");
+	printf("keys\n");
+	printf("keys-passphrase-add\n");
+	printf("keys-passphrase-change [VIEW]\n");
+	printf("keys-passphrase-remove [VIEW]\n");
+	printf("keys-add NAME [VIEW]\n");
+	printf("keys-import NAME [VIEW]\n");
+	printf("keys-remove NAME [VIEW]\n");
+	printf("open-all\n\n");
 	printf("mke2fs NAME\n");
 	printf("mount NAME MOUNTPOINT\n");
 	printf("umount NAME|MOUNTPOINT\n");
@@ -684,15 +745,93 @@ static int check_unmounted(ctl_priv_t *priv, const char *name) {
  * the partition is open (in paranoia level 2 and 3 all partitions are
  * open) but the LUKS volume is not, the LUKS volume is opened by mke2fs
  * and mount, umount closes it */
+/* run a cryptsetup command with the key file of the LUKS volume of e on its
+ * standard input (--key-file=-), the key is never written to a file */
+static int cryptsetup_with_key(ks_entry_t *e, const char *format, ...) {
+	char *cmd;
+	va_list ap;
+	FILE *fp;
+	int ret;
+
+	va_start(ap, format);
+	ret = vasprintf(&cmd, format, ap);
+	va_end(ap);
+	if (ret == -1) FATAL("out of memory");
+
+	if (!(fp = popen(cmd, "w"))) FATAL("popen: %s", strerror(errno));
+	free(cmd);
+	if (fwrite(e->luks, KS_LUKS, 1, fp) != 1)
+		WARNING("writing the key to cryptsetup: %s", strerror(errno));
+	if ((ret = pclose(fp))) exit_status = EXIT_FAILURE;
+
+	return ret;
+}
+
+/* the key of the LUKS volume on partition name in the key store, NULL if
+ * it is not there (cryptsetup asks the passphrase then) */
+static ks_entry_t *luks_key(const char *name) {
+	ks_entry_t *e = ks_find(&ks, -1, name, NULL);
+
+	return (e && (e->flags&KS_HAS_LUKS))?e:NULL;
+}
+
+/* open the LUKS volume on partition name as /dev/mapper/scubed3-NAME */
+static int luks_open(ctl_priv_t *priv, const char *name) {
+	ks_entry_t *e = luks_key(name);
+
+	if (e) return cryptsetup_with_key(e, "cryptsetup open --key-file=- "
+			"%s/%s " LUKS_NAME, priv->mountpoint, name, name);
+
+	return var_system("cryptsetup open %s/%s " LUKS_NAME,
+			priv->mountpoint, name, name);
+}
+
 static int ctl_luksformat(ctl_priv_t *priv, char *argv[]) {
+	ks_entry_t *e = luks_key(argv[0]);
+	char prompt[128];
 	int ret;
 
 	if ((ret = check_unmounted(priv, argv[0])) != 1) return ret;
 	if ((ret = check_paranoia(priv, "format it")) != 1) return ret;
 	if (is_luks(priv, argv[0])) printf("partition \"%s\" already has a "
 			"LUKS header, it is formatted again\n", argv[0]);
-	var_system("cryptsetup luksFormat --type luks2 %s/%s",
-			priv->mountpoint, argv[0]);
+	if (!e) {
+		var_system("cryptsetup luksFormat --type luks2 %s/%s",
+				priv->mountpoint, argv[0]);
+		return 0;
+	}
+
+	/* the key from the key store, cryptsetup does not ask */
+	snprintf(prompt, sizeof(prompt), "the data on \"%s\" is lost, type "
+			"yes to format it (with its LUKS key from the key "
+			"store): ", argv[0]);
+	if (!typed_yes(prompt)) {
+		printf("cancelled\n");
+		return 0;
+	}
+	if (!cryptsetup_with_key(e, "cryptsetup -q luksFormat --type luks2 "
+				"--key-file=- %s/%s", priv->mountpoint, argv[0]))
+		printf("\"%s\" is formatted, its LUKS key is in the key "
+				"store\n", argv[0]);
+
+	return 0;
+}
+
+/* open the LUKS volume of a partition (for a boot: no filesystem is
+ * mounted, nothing is written) */
+static int ctl_luksopen(ctl_priv_t *priv, char *argv[]) {
+	if (do_server_command(priv->s, 0, "info %s", argv[0])) return -1;
+	if (result.status) {
+		printf("%s\n", result.argv[0]);
+		exit_status = EXIT_FAILURE;
+		return 0;
+	}
+	if (!is_luks(priv, argv[0])) {
+		printf("partition \"%s\" has no LUKS header\n", argv[0]);
+		exit_status = EXIT_FAILURE;
+		return 0;
+	}
+	luks_open(priv, argv[0]);
 
 	return 0;
 }
@@ -704,9 +843,7 @@ static int ctl_mke2fs(ctl_priv_t *priv, char *argv[]) {
 	if ((ret = check_paranoia(priv, "make the filesystem")) != 1)
 		return ret;
 	if (is_luks(priv, argv[0])) {
-		if (var_system("cryptsetup open %s/%s " LUKS_NAME,
-					priv->mountpoint, argv[0], argv[0]))
-			return 0;
+		if (luks_open(priv, argv[0])) return 0;
 		var_system("mke2fs -F /dev/mapper/" LUKS_NAME, argv[0]);
 		var_system("cryptsetup close " LUKS_NAME, argv[0]);
 	} else var_system("mke2fs -F %s/%s", priv->mountpoint, argv[0]);
@@ -745,9 +882,7 @@ static int ctl_mount(ctl_priv_t *priv, char *argv[]) {
 	}
 
 	if (is_luks(priv, argv[0])) {
-		if (var_system("cryptsetup open %s/%s " LUKS_NAME,
-					priv->mountpoint, argv[0], argv[0]))
-			return 0;
+		if (luks_open(priv, argv[0])) return 0;
 		if (var_system("mount /dev/mapper/" LUKS_NAME " %s", argv[0],
 					argv[1])) {
 			var_system("cryptsetup close " LUKS_NAME, argv[0]);
@@ -869,6 +1004,490 @@ static int ctl_umount(ctl_priv_t *priv, char *argv[]) {
 	return 0;
 }
 
+/* the key store (see keystore.h): it is read when it is first used */
+static int ks_open(void) {
+	if (!ks_read(&ks)) return 1;
+	if (errno == ENOENT) printf("there is no key store %s (keys-create "
+			"makes one, -K uses another file)\n", ks.path);
+	else printf("unable to read the key store %s: %s\n", ks.path,
+			errno == EINVAL?"it has the wrong size":strerror(errno));
+	exit_status = EXIT_FAILURE;
+
+	return 0;
+}
+
+/* the key of the key store for a passphrase (the suffix makes it another
+ * key than that of a partition with the same passphrase) */
+static int ks_ask_key(const char *prompt, int verify, unsigned char *key) {
+	char *pw;
+	size_t len;
+
+	if (!(pw = ask_passphrase(prompt, verify, &len))) return -1;
+	if (!len) {
+		free_passphrase(pw, len);
+		return 0;
+	}
+	derive_key(pw, len, "/keystore", key);
+	free_passphrase(pw, len);
+
+	return 1;
+}
+
+static int ks_count(int view) {
+	int i, n = 0;
+
+	for (i = 0; i < KS_ENTRIES; i++)
+		if (ks.views[view]->e[i].flags&KS_USED) n++;
+
+	return n;
+}
+
+/* view VIEW (1, 2, ...), or the only unlocked view if there is no
+ * argument; -1 (with a message) if there is no such view */
+static int ks_view_arg(const char *arg) {
+	int view;
+
+	if (!arg) {
+		if (ks.no_views == 1) return 0;
+		printf(ks.no_views?"%d views are unlocked, give the number of "
+				"the view\n":"no view is unlocked (unlock)\n",
+				ks.no_views);
+		return -1;
+	}
+	if (parse_int(&view, arg) || view < 1 || view > ks.no_views) {
+		printf("there is no view %s (keys shows the unlocked views)\n",
+				arg);
+		return -1;
+	}
+
+	return view - 1;
+}
+
+static int ks_valid_name(const char *name) {
+	const char *p;
+
+	if (strlen(name) >= KS_NAME) {
+		printf("the name is too long, at most %d characters\n",
+				KS_NAME - 1);
+		return 0;
+	}
+	for (p = name; *p; p++) if (!isalnum((unsigned char)*p) && *p != '_') {
+		printf("a name may only contain letters, digits and the "
+				"underscore\n");
+		return 0;
+	}
+
+	return 1;
+}
+
+/* every change writes the key store again completely, the views that are
+ * not unlocked are lost: the user must type yes */
+static int ks_commit(void) {
+	int i;
+
+	if (!quiet || assume_yes < 3) {
+		warning();
+		printf("the key store is written again, completely (new IVs, new "
+				"random data):\nthe views of passphrases that "
+				"are NOT UNLOCKED NOW ARE LOST, it\ndoes not "
+				"know them; unlocked now:");
+		if (!ks.no_views) printf(" no views");
+		for (i = 0; i < ks.no_views; i++) printf("%s view %d (%d "
+				"entries)", i?",":"", i + 1, ks_count(i));
+		printf("\n\n");
+	}
+	if (!typed_yes("type yes if ALL passphrases of the key store are "
+				"unlocked: ")) {
+		printf("cancelled, the key store is not changed (but the "
+				"change is in memory, until you quit)\n");
+		return 0;
+	}
+	if (ks_write(&ks)) {
+		printf("unable to write the key store %s: %s\n", ks.path,
+				strerror(errno));
+		exit_status = EXIT_FAILURE;
+		return 0;
+	}
+	printf("the key store is written\n");
+
+	return 1;
+}
+
+static int ctl_keys_create(ctl_priv_t *priv, char *argv[]) {
+	if (ks_create(ks.path)) {
+		printf("unable to create the key store %s: %s\n", ks.path,
+				strerror(errno));
+		exit_status = EXIT_FAILURE;
+		return 0;
+	}
+	printf("the key store %s is created (%d slots, random data, no "
+			"views): keys-passphrase-add\nadds a passphrase; keep "
+			"a backup of it (and of the configuration file)\n",
+			ks.path, KS_SLOTS);
+
+	return 0;
+}
+
+static int ks_unlock_one(const char *prompt) {
+	unsigned char key[32];
+	int ret, view;
+
+	if ((ret = ks_ask_key(prompt, 0, key)) != 1) return ret;
+	view = ks_unlock(&ks, key);
+	wipememory(key, 32);
+	if (view < 0) {
+		printf("no view for this passphrase\n");
+		exit_status = EXIT_FAILURE;
+	} else printf("view %d: %d entries\n", view + 1, ks_count(view));
+
+	return 1;
+}
+
+static int ctl_unlock(ctl_priv_t *priv, char *argv[]) {
+	if (!ks_open()) return 0;
+	if (ks_unlock_one("Key store passphrase: ") == 0)
+		printf("no passphrase\n");
+
+	return 0;
+}
+
+/* passphrases are asked until an empty one */
+static int ctl_unlock_all(ctl_priv_t *priv, char *argv[]) {
+	if (!ks_open()) return 0;
+	while (ks_unlock_one("Key store passphrase (empty when done): ") == 1);
+
+	return 0;
+}
+
+static void ks_list(int v) {
+	int i;
+
+	printf("view %d:%s\n", v + 1, ks_count(v)?"":" (empty)");
+	for (i = 0; i < KS_ENTRIES; i++) {
+		ks_entry_t *e = &ks.views[v]->e[i];
+		if (!(e->flags&KS_USED)) continue;
+		printf("  %s%s\n", e->name,
+				(e->flags&KS_HAS_LUKS)?" [LUKS]":"");
+	}
+}
+
+static int ctl_keys(ctl_priv_t *priv, char *argv[]) {
+	int v;
+
+	if (!ks.no_views) printf("no view is unlocked\n");
+	for (v = 0; v < ks.no_views; v++) ks_list(v);
+
+	return 0;
+}
+
+static int ctl_keys_passphrase_add(ctl_priv_t *priv, char *argv[]) {
+	unsigned char key[32];
+	int view;
+
+	if (!ks_open()) return 0;
+	if (ks_ask_key("New key store passphrase: ", 1, key) != 1) {
+		printf("no passphrase\n");
+		return 0;
+	}
+	if (ks_unlock(&ks, key) >= 0) {
+		printf("this passphrase has a view already\n");
+	} else if ((view = ks_add_view(&ks, key)) < 0) {
+		printf("all %d slots are used by unlocked views\n", KS_SLOTS);
+	} else {
+		printf("view %d is added (empty)\n", view + 1);
+		ks_commit();
+	}
+	wipememory(key, 32);
+
+	return 0;
+}
+
+static int ctl_keys_passphrase_change(ctl_priv_t *priv, char *argv[]) {
+	unsigned char key[32];
+	int view, other;
+
+	if ((view = ks_view_arg(argv[0])) < 0) return 0;
+	if (ks_ask_key("New key store passphrase: ", 1, key) != 1) {
+		printf("no passphrase\n");
+		return 0;
+	}
+	if ((other = ks_unlock(&ks, key)) >= 0) {
+		printf("this passphrase has a view already (view %d)\n",
+				other + 1);
+	} else {
+		memcpy(ks.views[view]->key, key, 32);
+		printf("view %d has the new passphrase\n", view + 1);
+		ks_commit();
+	}
+	wipememory(key, 32);
+
+	return 0;
+}
+
+static int ctl_keys_passphrase_remove(ctl_priv_t *priv, char *argv[]) {
+	int view;
+
+	if ((view = ks_view_arg(argv[0])) < 0) return 0;
+	printf("view %d (%d entries) is removed: the keys in it are lost, "
+			"unless they are in\nanother view too\n", view + 1,
+			ks_count(view));
+	ks_remove_view(&ks, view);
+	ks_commit();
+
+	return 0;
+}
+
+/* NAME gets new random keys (of the partition and of its LUKS volume), or
+ * the keys of NAME in another unlocked view (the same partition); 1 if the
+ * view is changed (in memory) */
+static int ks_add(int view, const char *name) {
+	ks_entry_t *e, *from;
+	int other;
+
+	if (!ks_valid_name(name)) return 0;
+	if (ks_find(&ks, view, name, NULL)) {
+		printf("\"%s\" is in view %d already\n", name, view + 1);
+		return 0;
+	}
+	from = ks_find(&ks, -1, name, &other);
+	if (!(e = ks_new_entry(&ks, view, name))) {
+		printf("view %d is full (%d entries)\n", view + 1, KS_ENTRIES);
+		return 0;
+	}
+	if (from) {
+		memcpy(e, from, sizeof(*e));
+		printf("the keys of \"%s\" are copied from view %d to view %d\n",
+				name, other + 1, view + 1);
+	} else {
+		ks_random(e->key, KS_KEY);
+		ks_random(e->luks, KS_LUKS);
+		e->flags |= KS_HAS_LUKS;
+		printf("\"%s\" has new random keys in view %d: create it, and "
+				"luksformat it\n", name, view + 1);
+	}
+
+	return 1;
+}
+
+static int ctl_keys_add(ctl_priv_t *priv, char *argv[]) {
+	int view;
+
+	if ((view = ks_view_arg(argv[1])) < 0) return 0;
+	if (ks_add(view, argv[0])) ks_commit();
+
+	return 0;
+}
+
+/* an existing partition: its key from its passphrase; if it is open and
+ * has LUKS on it, a new key of the LUKS volume is added to it (cryptsetup
+ * asks a passphrase of the LUKS volume) */
+static int ks_import(ctl_priv_t *priv, int view, const char *name) {
+	ks_entry_t *e;
+	char *pw, tmp[] = "/run/scubed3ctl-key-XXXXXX";
+	size_t len;
+	int fd;
+	char *argv[] = { (char*)name };
+
+	if (!ks_valid_name(argv[0])) return 0;
+	if (ks_find(&ks, view, argv[0], NULL)) {
+		printf("\"%s\" is in view %d already\n", argv[0], view + 1);
+		return 0;
+	}
+	if (!(e = ks_new_entry(&ks, view, argv[0]))) {
+		printf("view %d is full (%d entries)\n", view + 1, KS_ENTRIES);
+		return 0;
+	}
+	if (!(pw = ask_passphrase("Passphrase of the partition: ", 0, &len))) {
+		memset(e, 0, sizeof(*e));
+		return 0;
+	}
+	derive_key(pw, len, "", e->key);
+	free_passphrase(pw, len);
+
+	/* the LUKS volume gets a new key (in a file on a tmpfs, it is wiped
+	 * afterwards: cryptsetup reads the existing passphrase on stdin) */
+	if (!do_server_command(priv->s, 0, "info %s", argv[0]) &&
+			!result.status && is_luks(priv, argv[0])) {
+		ks_random(e->luks, KS_LUKS);
+		if ((fd = mkstemp(tmp)) == -1 ||
+				write(fd, e->luks, KS_LUKS) != KS_LUKS) {
+			WARNING("unable to write %s: %s", tmp,
+					strerror(errno));
+		} else if (!var_system("cryptsetup luksAddKey %s/%s %s",
+					priv->mountpoint, argv[0], tmp)) {
+			e->flags |= KS_HAS_LUKS;
+			printf("the LUKS volume on \"%s\" has a new key, it is in "
+					"the key store\n", argv[0]);
+		}
+		if (fd != -1) {
+			unsigned char zero[KS_LUKS] = { };
+			if (lseek(fd, 0, SEEK_SET) == 0 &&
+					write(fd, zero, KS_LUKS) == KS_LUKS)
+				fsync(fd);
+			close(fd);
+			unlink(tmp);
+		}
+		if (!(e->flags&KS_HAS_LUKS)) memset(e->luks, 0, KS_LUKS);
+	}
+	printf("the key of \"%s\" is in view %d (it is not checked: close and "
+			"open it to see\nthat it is right)\n", argv[0], view + 1);
+
+	return 1;
+}
+
+static int ctl_keys_import(ctl_priv_t *priv, char *argv[]) {
+	int view;
+
+	if ((view = ks_view_arg(argv[1])) < 0) return 0;
+	if (ks_import(priv, view, argv[0])) ks_commit();
+
+	return 0;
+}
+
+static int ctl_keys_remove(ctl_priv_t *priv, char *argv[]) {
+	ks_entry_t *e;
+	int view;
+
+	if ((view = ks_view_arg(argv[1])) < 0) return 0;
+	if (!(e = ks_find(&ks, view, argv[0], NULL))) {
+		printf("\"%s\" is not in view %d\n", argv[0], view + 1);
+		return 0;
+	}
+	wipememory(e, sizeof(*e));
+	if (!ks_find(&ks, -1, argv[0], NULL)) printf("the keys of \"%s\" are "
+			"not in another unlocked view: without them\nit cannot "
+			"be opened (unless with its passphrase, if it has "
+			"one)\n", argv[0]);
+	ks_commit();
+
+	return 0;
+}
+
+/* a line from the user, without spaces at both ends, NULL at the end */
+static char *ask_line(const char *prompt) {
+	char *l = readline(prompt), *p, *q;
+
+	if (!l) return NULL;
+	for (p = l; isspace((unsigned char)*p); p++);
+	for (q = p + strlen(p); q > p && isspace((unsigned char)q[-1]); q--);
+	*q = '\0';
+	memmove(l, p, q - p + 1);
+
+	return l;
+}
+
+static int ask_yn(const char *prompt) {
+	char *a = ask_line(prompt);
+	int ret = a && (*a == 'y' || *a == 'Y');
+
+	free(a);
+
+	return ret;
+}
+
+/* a guided setup of the key store: it is created if it does not exist, all
+ * its passphrases are unlocked, new passphrases are added, the partitions
+ * of every view are chosen; it is written once, at the end */
+static int ctl_keys_setup(ctl_priv_t *priv, char *argv[]) {
+	unsigned char key[32];
+	char prompt[96], *name;
+	int v, changed = 0, created = 0, step = 1;
+
+	if (access(ks.path, F_OK)) {
+		if (ks_create(ks.path)) {
+			printf("unable to create the key store %s: %s\n",
+					ks.path, strerror(errno));
+			exit_status = EXIT_FAILURE;
+			return 0;
+		}
+		printf("the key store %s is created (keep a backup of it, and "
+				"of the configuration\nfile)\n", ks.path);
+		created = 1;
+	}
+	if (!ks_open()) return 0;
+
+	if (!created) {
+		printf("\n%d. unlock ALL passphrases of the key store: the views "
+				"of the passphrases\n   that are not unlocked are "
+				"lost when it is written\n", step++);
+		while (ks_unlock_one("Key store passphrase (empty when "
+					"done): ") == 1);
+	}
+
+	printf("\n%d. new passphrases: each one gets its own view (for "
+			"example one you can\n   reveal, and one for the hidden "
+			"partitions)\n", step++);
+	while (ask_yn("add a new passphrase? [y/N] ")) {
+		if (ks_ask_key("New key store passphrase: ", 1, key) != 1)
+			continue;
+		if (ks_unlock(&ks, key) >= 0)
+			printf("this passphrase has a view already\n");
+		else if ((v = ks_add_view(&ks, key)) < 0)
+			printf("all %d slots are used\n", KS_SLOTS);
+		else {
+			printf("view %d is added\n", v + 1);
+			changed = 1;
+		}
+		wipememory(key, 32);
+	}
+
+	printf("\n%d. the partitions of every view: a name that is in another "
+			"view gets the same\n   keys, an existing partition is "
+			"imported (with its passphrase), a new one\n   gets new "
+			"keys (then: create, resize, luksformat and mke2fs "
+			"it)\n", step++);
+	for (v = 0; v < ks.no_views; v++) {
+		printf("\n");
+		ks_list(v);
+		for (;;) {
+			snprintf(prompt, sizeof(prompt), "partition to add to "
+					"view %d (empty when done): ", v + 1);
+			if (!(name = ask_line(prompt)) || !*name) {
+				free(name);
+				break;
+			}
+			snprintf(prompt, sizeof(prompt), "is \"%.30s\" an "
+					"existing partition with its own "
+					"passphrase? [y/N] ", name);
+			if (!ks_find(&ks, -1, name, NULL) && ks_valid_name(name)
+					&& ask_yn(prompt))
+				changed |= ks_import(priv, v, name);
+			else changed |= ks_add(v, name);
+			free(name);
+		}
+	}
+
+	if (!changed) {
+		printf("\nnothing is changed\n");
+		return 0;
+	}
+	printf("\n");
+	if (ks_commit()) printf("\nwith the key store unlocked (unlock, or "
+			"unlock-all), open, open-all,\ncreate, luksformat, "
+			"mke2fs, mount and luksopen use its keys\n");
+
+	return 0;
+}
+
+/* open every partition of the unlocked views that is not open */
+static int ctl_open_all(ctl_priv_t *priv, char *argv[]) {
+	int v, i, n = 0;
+
+	for (v = 0; v < ks.no_views; v++) for (i = 0; i < KS_ENTRIES; i++) {
+		ks_entry_t *e = &ks.views[v]->e[i];
+		if (!(e->flags&KS_USED)) continue;
+		if (do_server_command(priv->s, 0, "info %s", e->name))
+			return -1;
+		if (!result.status) continue; /* open already */
+		printf("opening \"%s\"\n", e->name);
+		if (send_key(priv, e->name, e->key, 0)) return -1;
+		if (!result.status) n++;
+	}
+	printf("%d partitions are opened\n", n);
+
+	return 0;
+}
+
 static ctl_command_t ctl_commands[] = {
 	{
 		.head.key = "help",
@@ -895,6 +1514,76 @@ static ctl_command_t ctl_commands[] = {
 		.command = ctl_luksformat,
 		.argc = 1,
 		.usage = " NAME"
+	}, {
+		.head.key = "luksopen",
+		.command = ctl_luksopen,
+		.argc = 1,
+		.usage = " NAME"
+	}, {
+		.head.key = "keys-create",
+		.command = ctl_keys_create,
+		.argc = 0,
+		.usage = ""
+	}, {
+		.head.key = "unlock",
+		.command = ctl_unlock,
+		.argc = 0,
+		.usage = ""
+	}, {
+		.head.key = "unlock-all",
+		.command = ctl_unlock_all,
+		.argc = 0,
+		.usage = ""
+	}, {
+		.head.key = "keys",
+		.command = ctl_keys,
+		.argc = 0,
+		.usage = ""
+	}, {
+		.head.key = "keys-passphrase-add",
+		.command = ctl_keys_passphrase_add,
+		.argc = 0,
+		.usage = ""
+	}, {
+		.head.key = "keys-passphrase-change",
+		.command = ctl_keys_passphrase_change,
+		.argc = 0,
+		.optargc = 1,
+		.usage = " [VIEW]"
+	}, {
+		.head.key = "keys-passphrase-remove",
+		.command = ctl_keys_passphrase_remove,
+		.argc = 0,
+		.optargc = 1,
+		.usage = " [VIEW]"
+	}, {
+		.head.key = "keys-add",
+		.command = ctl_keys_add,
+		.argc = 1,
+		.optargc = 1,
+		.usage = " NAME [VIEW]"
+	}, {
+		.head.key = "keys-import",
+		.command = ctl_keys_import,
+		.argc = 1,
+		.optargc = 1,
+		.usage = " NAME [VIEW]"
+	}, {
+		.head.key = "keys-remove",
+		.command = ctl_keys_remove,
+		.argc = 1,
+		.optargc = 1,
+		.usage = " NAME [VIEW]"
+	}, {
+		.head.key = "keys-setup",
+		.command = ctl_keys_setup,
+		.argc = 0,
+		.usage = ""
+	}, {
+		.head.key = "open-all",
+		.command = ctl_open_all,
+		.argc = 0,
+		.usage = ""
 	}, {
 		.head.key = "mke2fs",
 		.command = ctl_mke2fs,
@@ -1042,7 +1731,8 @@ void show_help() {
 	printf("manage scubed3 partitions (also known as hidden volumes)\n");
 	printf("\n");
 	printf("Usage:\n\n$ %s [-C CONFIG_FILE] [-s KDF_SALT] [-i KDF_ITERATIONS] \\\n", exec_name); //argv[0]);
-	printf("                [-a SOCKET_ADDRESS] [-YYY] [-c COMMAND] [-v] [-q] [-d]\n");
+	printf("                [-a SOCKET_ADDRESS] [-K KEY_STORE] [-YYY] [-c COMMAND]... \\\n");
+	printf("                [-v] [-q] [-d]\n");
 	printf("\nOptions (defaults shown in parentheses):\n\n");
 	printf("-C CONFIG_FILE    file with the KDF parameters (%s, if it\n", DEFAULT_CONFIG_FILE);
 	printf("                  exists), lines kdf=%s-%s, salt=TEXT and\n", DEFAULT_KDF_FUNCTION, DEFAULT_KDF_HASH);
@@ -1055,7 +1745,9 @@ void show_help() {
 	printf("-Y                assume Yes to questions, this option is DANGEROUS\n");
 	printf("                  and must be specified 3 times to take effect\n");
 	printf("-c COMMAND        non interactive mode, run COMMAND and exit,\n");
-	printf("                  if the command has spaces, it must be quoted\n");
+	printf("                  if the command has spaces, it must be quoted;\n");
+	printf("                  more -c options: the commands one after the other\n");
+	printf("-K KEY_STORE      the key store (%s)\n", DEFAULT_KEYSTORE_FILE);
 	printf("-v                show verbose output\n");
 	printf("-d                show debug output\n");
 	printf("-q                do not show warnings, if \"assume Yes\" is active\n");
@@ -1081,7 +1773,7 @@ int main(int argc, char **argv) {
 	verbose_init(argv[0]);
 
 	opterr = 0;
-	while ((opt = getopt(argc, argv, "+C:s:i:a:hYc:vdq")) != -1) {
+	while ((opt = getopt(argc, argv, "+C:s:i:a:hYc:vdqK:")) != -1) {
 		switch (opt) {
 			case 'q':
 				quiet = 1;
@@ -1096,9 +1788,13 @@ int main(int argc, char **argv) {
 				show_help();
 				exit(0);
 			case 'c':
-				if (command_option) FATAL("only one -c option may be specified");
+				if (no_commands == MAX_COMMANDS) FATAL("at most %d -c options", MAX_COMMANDS);
 				if (strlen(optarg) == 0) FATAL("command may not be empty");
-				command_option = optarg;
+				command_options[no_commands++] = optarg;
+				break;
+			case 'K':
+				if (strlen(optarg) == 0) FATAL("key store file name must not be empty");
+				ks.path = optarg;
 				break;
 			case 'a':
 				if (strlen(optarg) == 0) FATAL("socket address may not be empty");
@@ -1206,10 +1902,11 @@ int main(int argc, char **argv) {
 
 	connections++;
 
+	i = 0;
 	do {
 		if (line) free(line);
-		if (command_option) {
-			line = estrdup(command_option);
+		if (no_commands) {
+			line = estrdup(command_options[i++]);
 		} else line = readline("s3> ");
 
 		// do not store history!
@@ -1228,7 +1925,7 @@ int main(int argc, char **argv) {
 
 		ret = ctl_call(&priv, line);
 
-		if (command_option) {
+		if (no_commands && (i == no_commands || ret)) {
 			do_server_command(priv.s, 1, "exit");
 			break;
 		}
@@ -1236,10 +1933,11 @@ int main(int argc, char **argv) {
 	} while (!ret);
 
 	free(line);
+	ks_free(&ks);
 
 	free(priv.mountpoint);
 
 	close(priv.s);
 
-	exit(command_option?exit_status:0);
+	exit(no_commands?exit_status:0);
 }

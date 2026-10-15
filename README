@@ -268,6 +268,56 @@ files), and autoconf, automake and pkg-config:
 The programs are src/scubed3 and src/scubed3ctl.
 
 
+Key store
+~~~~~~~~~
+
+Typing a passphrase for every partition (and every LUKS volume) is a lot of
+work. scubed3ctl can keep their keys in a key store, /etc/scubed3.keys
+(another file with -K): one passphrase of the key store gives the keys of a
+set of partitions (a view), one or more passphrases can be given at once
+(unlock-all). Nothing in the file shows how many passphrases or keys there
+are, or whether it is used at all: it is 64 slots of random data, a slot
+with a view is encrypted with AES-256-GCM (the key from the passphrase,
+PBKDF2-SHA256 with the salt and iterations of the configuration file), a
+view has 64 entries (the name of a partition, its key and the key of its
+LUKS volume; unused entries cannot be told from used ones). Someone who
+learns one passphrase sees its view, the other slots look like unused ones.
+
+	s3> keys-setup		guided: creates the key store, unlocks all its
+				passphrases, adds passphrases and partitions,
+				writes it once
+	s3> unlock		one passphrase of the key store
+	s3> unlock-all		passphrases until an empty one
+	s3> keys		the unlocked views (names, [LUKS])
+	s3> open-all		opens all partitions of the unlocked views
+
+With the key store unlocked, open, create, luksformat, mke2fs and mount use
+its keys instead of asking passphrases, luksopen opens a LUKS volume (as
+/dev/mapper/scubed3-NAME). The keys of a LUKS volume are random (64 bytes),
+they are given to cryptsetup on a pipe, never in a file. To change the key
+store: keys-create, keys-passphrase-add, keys-passphrase-change [VIEW],
+keys-passphrase-remove [VIEW], keys-add NAME [VIEW] (new random keys, or the
+keys of NAME in another unlocked view: the same partition in more views),
+keys-import NAME [VIEW] (a partition with its own passphrase; if it is open
+and has LUKS on it, the LUKS volume gets a new key, cryptsetup asks one of
+its passphrases), keys-remove NAME [VIEW]. More commands at once:
+scubed3ctl -c unlock-all -c open-all (the views stay unlocked between them).
+
+Every change writes the whole key store again: the unlocked views with new
+IVs, all other slots new random data, so the file changes completely (an
+adversary with snapshots does not see which views changed). That is why ALL
+passphrases must be unlocked before a change: scubed3ctl cannot tell a view
+of a passphrase that is not unlocked from an unused slot, it is LOST (it
+asks you to type yes). The new file replaces the old one (a crash leaves the
+old or the new key store); on an SSD the old data may stay on the flash.
+Keep a backup of the key store (it is random data without its passphrases)
+and of the configuration file.
+
+One passphrase that opens everything is convenient, but if you have to give
+it away, everything is revealed: as with the partitions, keep a passphrase
+with a view you can admit, and others for the hidden partitions.
+
+
 Root on scubed3
 ~~~~~~~~~~~~~~~
 
@@ -279,7 +329,10 @@ the root partition (with LUKS on it) as the root device. The daemon keeps
 running until the computer is switched off: it never opens a file by its
 path after its start (the base device is opened once and shared by all
 partitions, random data comes from getrandom(2)), systemd does not kill it
-at shutdown (it runs as @scubed3). See contrib/initramfs-tools/README.
+at shutdown (it runs as @scubed3). With a key store (see Key store), its
+passphrases open all partitions and the LUKS volume of the root partition;
+the copy of the key store in the initramfs is destroyed after use. See
+contrib/initramfs-tools/README.
 
 
 You need to provide a set of macroblocks to scubed3, to which it has read/write

@@ -11,19 +11,28 @@
 # of the root partition, the daemon runs as @scubed3 (argv[0]) with
 # oom_score_adj -1000, both partitions are open, the level is 2
 #
+# then a boot with a key store (conf/scubed3.keys): root has LUKS on it
+# (its key in the store, the stand-in fake-cryptsetup); the answers: the
+# name of the root partition, one passphrase of the key store, an empty one,
+# an empty name, Yes; afterwards ROOT is /dev/mapper/scubed3-root with the
+# file system, both partitions are open, the copy of the key store is gone
+#
 # usage: initramfstest.sh DAEMON CTL (as root, in the directory with the
 # binaries; uses /dev/scubed3fs and /run/scubed3/control, like a real boot)
 D=$(realpath $1); C=$(realpath $2); P=$(mktemp -d); S=$(cd "$(dirname "$0")/.." && pwd)
 FUSERMOUNT=$(command -v fusermount3 || echo fusermount)
 FS=$P/fs; MNT=/dev/scubed3fs
-cleanup() {
+# what a boot leaves behind
+unboot() {
 	umount $FS 2> /dev/null
 	[ -n "$LOOP" ] && losetup -d $LOOP 2> /dev/null
+	[ -e /dev/mapper/scubed3-root ] && PATH=$P/sbin:$PATH cryptsetup close scubed3-root
 	$P/sbin/scubed3ctl -q -YYY -c "paranoia 1" > /dev/null 2>&1
 	for n in root hidden; do $P/sbin/scubed3ctl -c "close $n" > /dev/null 2>&1; done
 	$FUSERMOUNT -u $MNT 2> /dev/null; $FUSERMOUNT -u /mnt/s3 2> /dev/null; sleep 1
-	rmdir $MNT 2> /dev/null; rm -rf $P
+	rmdir $MNT 2> /dev/null; LOOP=; rm -f $P/conf/param.conf
 }
+cleanup() { unboot; rm -rf $P; }
 fail() { echo "INITRAMFSTEST FAILED: $1"; [ -f $P/out ] && cat $P/out; cleanup; exit 1; }
 [ -e /run/scubed3/control ] && fail "a scubed3 daemon is running"
 
@@ -35,9 +44,10 @@ EOF
 printf 'iterations=1000\nparanoia=2\n' > $P/etc/scubed3.conf
 printf 'BASE=%s\nOPTIONS="-m 12 -M 16"\n' $P/base > $P/conf/scubed3.conf
 cp $D "$P/sbin/@scubed3"
-printf '#!/bin/sh\nexec %s -C %s/etc/scubed3.conf "$@"\n' $C $P > $P/sbin/scubed3ctl
+printf '#!/bin/sh\nPATH=%s/sbin:$PATH exec %s -C %s/etc/scubed3.conf "$@"\n' $P $C $P > $P/sbin/scubed3ctl
 chmod +x $P/sbin/scubed3ctl
 ln -s "$(command -v losetup)" $P/sbin/losetup-util
+ln -s $S/dev/fake-cryptsetup $P/sbin/cryptsetup
 sed -e "s|/scripts/functions|$P/scripts/functions|" -e "s|/conf/|$P/conf/|g" \
 	-e "s|/sbin/|$P/sbin/|g" -e "s|PATH=/sbin:|PATH=$P/sbin:|" \
 	-e "s|/etc/scubed3.conf|$P/etc/scubed3.conf|g" \
@@ -92,6 +102,40 @@ echo "   ok: root and hidden are open, paranoia level 2"
 mount -o ro $LOOP $FS || fail "mount of $LOOP"
 grep -q "the root file system" $FS/marker || fail "the file system of the root partition"
 echo "   ok: $LOOP has the file system of the root partition"
+umount $FS
+unboot
+
+# ------------------------------------------------------------- a key store
+echo "a boot with a key store"
+KS=$P/conf/scubed3.keys
+head -c $((200<<16)) /dev/urandom > $P/base
+$D -b $P/base -m 12 -M 16 /mnt/s3 || fail "daemon"
+typed "$P/sbin/scubed3ctl -K $KS -c keys-create -c unlock-all -c keys-passphrase-add" "" A A yes
+typed "$P/sbin/scubed3ctl -K $KS -c unlock -c 'keys-add root' -c 'keys-add hidden' -c 'create root' -c 'create hidden'" A yes yes
+$P/sbin/scubed3ctl -q -YYY -c "resize root 60" > /dev/null
+$P/sbin/scubed3ctl -q -YYY -c "resize hidden 40" > /dev/null
+typed "$P/sbin/scubed3ctl -K $KS -c unlock -c 'luksformat root' -c 'mke2fs root' -c 'mount root $FS'" A yes yes yes yes
+mountpoint -q $FS || fail "the LUKS volume is not mounted: $(cat $P/out)"
+echo "the root file system on LUKS" > $FS/marker
+typed "$P/sbin/scubed3ctl -c 'umount root'"
+$P/sbin/scubed3ctl -c "close hidden" > /dev/null; $P/sbin/scubed3ctl -c "close root" > /dev/null 2>&1
+$FUSERMOUNT -u /mnt/s3; sleep 1
+
+typed "sh $P/local-top" root A "" "" Yes
+cp $P/out $P/boot2.out
+grep -q PANIC $P/out && fail "panic"
+grep -q "ROOT=/dev/mapper/scubed3-root" $P/conf/param.conf || fail "ROOT is not set: $(cat $P/conf/param.conf 2>&1)"
+echo "   ok: ROOT=/dev/mapper/scubed3-root (opened with the key from the store)"
+grep -q "Enter passphrase" $P/out && fail "a passphrase of a partition was asked"
+[ -e $KS ] && fail "the key store is not removed from the initramfs"
+echo "   ok: one passphrase of the key store, no other; the copy of the key store is gone"
+st=$($P/sbin/scubed3ctl -c p)
+echo "$st" | grep -q "paranoia level 2 " || fail "level: $st"
+echo "$st" | grep -q " blocks in root" && echo "$st" | grep -q " blocks in hidden" || fail "partitions: $st"
+echo "   ok: root and hidden are open, paranoia level 2"
+mount -o ro /dev/mapper/scubed3-root $FS || fail "mount of /dev/mapper/scubed3-root"
+grep -q "the root file system on LUKS" $FS/marker || fail "the file system on LUKS"
+echo "   ok: /dev/mapper/scubed3-root has the file system"
 umount $FS
 cleanup
 echo "INITRAMFSTEST OK"

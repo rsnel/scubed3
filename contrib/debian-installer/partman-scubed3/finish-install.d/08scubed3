@@ -1,0 +1,136 @@
+#!/bin/sh
+# finish-install of partman-scubed3 (the target is installed, apt works):
+# 1. scubed3 in the installed system: the package scubed3 if apt can find
+#    it, otherwise the programs and initramfs-tools scripts of the installer
+#    (in /usr/local/sbin and /etc/initramfs-tools)
+# 2. /etc/scubed3.conf (the salt, the iterations, the paranoia level)
+# 3. root on scubed3: cryptsetup and cryptsetup-initramfs (CRYPTSETUP=y),
+#    /etc/scubed3/initramfs.conf (BASE, OPTIONS, ROOT_PARTITION if wanted),
+#    update-initramfs
+# 4. the blocks lent to a partition are given back: the partition gets its
+#    own size again, the garbage collector removes the extra blocks while
+#    the installed system writes (scubed3ctl p shows "shrinking")
+# 5. a note: keep a copy of /etc/scubed3.conf and the options
+
+. /usr/share/debconf/confmodule
+
+STATE=/var/lib/partman/scubed3
+SHARE=/usr/share/scubed3
+
+[ -f $STATE/base ] || exit 0
+[ -S /run/scubed3/control ] || exit 0
+
+ctl () {
+	log-output -t scubed3-finish scubed3ctl -q -YYY -C $STATE/scubed3.conf "$@"
+}
+
+failed () {
+	db_subst partman-scubed3/install_failed WHAT "$1"
+	db_fset partman-scubed3/install_failed seen false
+	db_input critical partman-scubed3/install_failed
+	db_go || true
+}
+
+# the stable name of the base device
+stable_name () {
+	local real l
+	real=$(readlink -f "$1")
+	for l in /dev/disk/by-partuuid/* /dev/disk/by-id/* /dev/disk/by-path/*; do
+		[ -e "$l" ] || continue
+		if [ "$(readlink -f $l)" = "$real" ]; then
+			echo $l
+			return 0
+		fi
+	done
+	echo "$1"
+}
+
+root=
+for p in $STATE/parts/*; do
+	[ -d "$p" ] || continue
+	n=${p##*/}
+	if grep -q "^/dev/mapper/scubed3-$n /target " /proc/mounts; then
+		root=$n
+	fi
+done
+
+# 1. scubed3
+if ! apt-install scubed3; then
+	logger -t scubed3-finish "no package scubed3, the programs of the installer are copied"
+	mkdir -p /target/usr/local/sbin /target/etc/initramfs-tools/hooks \
+		/target/etc/initramfs-tools/scripts/local-top
+	cp /usr/sbin/scubed3 /usr/sbin/scubed3ctl /target/usr/local/sbin/
+	cp $SHARE/initramfs-tools/hooks/scubed3 /target/etc/initramfs-tools/hooks/
+	cp $SHARE/initramfs-tools/scripts/local-top/scubed3 \
+		/target/etc/initramfs-tools/scripts/local-top/
+	chmod 755 /target/usr/local/sbin/scubed3 /target/usr/local/sbin/scubed3ctl \
+		/target/etc/initramfs-tools/hooks/scubed3 \
+		/target/etc/initramfs-tools/scripts/local-top/scubed3
+	# the libraries of the programs (libgcrypt is in every system)
+	apt-install fuse3 || failed fuse3
+fi
+
+# 2. the configuration
+cp $STATE/scubed3.conf /target/etc/scubed3.conf
+chmod 644 /target/etc/scubed3.conf
+
+# 3. root on scubed3
+if [ "$root" ]; then
+	apt-install cryptsetup cryptsetup-initramfs || failed cryptsetup-initramfs
+	# cryptsetup in the initramfs, also without an entry in /etc/crypttab
+	hook=/target/etc/cryptsetup-initramfs/conf-hook
+	mkdir -p ${hook%/*}
+	if grep -q "^CRYPTSETUP=" $hook 2>/dev/null; then
+		sed -i 's/^CRYPTSETUP=.*/CRYPTSETUP=y/' $hook
+	else
+		echo "CRYPTSETUP=y" >> $hook
+	fi
+
+	db_subst partman-scubed3/store_root_name NAME "$root"
+	db_input critical partman-scubed3/store_root_name || true
+	db_go || true
+	db_get partman-scubed3/store_root_name
+	store=$RET
+
+	mkdir -p /target/etc/scubed3
+	{
+		echo "# /etc/scubed3/initramfs.conf: root on a scubed3 partition, made by"
+		echo "# the debian-installer (see /usr/share/doc/scubed3 or the README of"
+		echo "# contrib/initramfs-tools); KEEP OPTIONS THE SAME FOREVER"
+		echo "BASE=$(stable_name $(cat $STATE/base))"
+		echo "OPTIONS=\"$(cat $STATE/options)\""
+		if [ "$store" = true ]; then
+			echo "ROOT_PARTITION=$root"
+		else
+			echo "# the name of the root partition is asked at boot"
+			echo "#ROOT_PARTITION="
+		fi
+	} > /target/etc/scubed3/initramfs.conf
+
+	if ! log-output -t scubed3-finish in-target update-initramfs -u -k all; then
+		failed update-initramfs
+	fi
+fi
+
+# 4. give the lent blocks back
+for p in $STATE/parts/*; do
+	[ -f "$p/lent" ] || continue
+	read n r < $p/lent
+	if ctl -c "resize-internal ${p##*/} $n $r"; then
+		rm -f $p/lent
+	else
+		failed "resize-internal ${p##*/} $n $r"
+	fi
+done
+
+# 5. the note
+db_subst partman-scubed3/final_note SALT "$(sed -n 's/^salt=//p' $STATE/scubed3.conf)"
+db_subst partman-scubed3/final_note OPTIONS "$(cat $STATE/options)"
+db_fset partman-scubed3/final_note seen false
+db_input critical partman-scubed3/final_note || true
+db_go || true
+
+# what is written now is on disk (the file systems flush it again when
+# they are unmounted)
+sync
+exit 0

@@ -14,6 +14,18 @@ AC_PROG_CC
 # Checks for libraries.
 PKG_CHECK_MODULES([FUSE], [fuse3])
 
+# readline (line editing in scubed3ctl); --without-readline for the
+# debian-installer, it has no readline
+AC_ARG_WITH([readline],
+	[AS_HELP_STRING([--without-readline],
+		[build scubed3ctl without line editing])],
+	[], [with_readline=yes])
+AS_IF([test "x$with_readline" != xno],
+	[AC_CHECK_LIB([readline], [readline], [READLINE_LIBS=-lreadline],
+		[AC_MSG_ERROR([readline not found, use --without-readline])])],
+	[AC_DEFINE([NO_READLINE], [1], [build scubed3ctl without readline])])
+AC_SUBST([READLINE_LIBS])
+
 # Checks for header files.
 AC_CHECK_HEADERS([fcntl.h inttypes.h stdint.h stdlib.h string.h sys/ioctl.h sys/mount.h unistd.h])
 

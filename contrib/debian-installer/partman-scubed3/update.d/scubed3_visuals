@@ -1,0 +1,21 @@
+#!/bin/sh
+# "scubed3" in the method column of the base device
+
+. /lib/partman/lib/scubed3-base.sh
+
+dev=$1
+id=$3
+
+cd $dev
+
+[ -f $id/method ] || exit 0
+[ "$(cat $id/method)" = scubed3 ] || exit 0
+
+db_metaget partman/method_short/scubed3 description || RET=''
+printf "%s" "${RET:-scubed3}" >$id/visual_filesystem
+if s3_running; then
+	db_metaget partman-scubed3/text/active description || RET=''
+else
+	db_metaget partman-scubed3/text/not_active description || RET=''
+fi
+printf "%s" "$RET" >$id/visual_mountpoint

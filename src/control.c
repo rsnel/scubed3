@@ -754,11 +754,6 @@ static int control_resize(int s, control_thread_priv_t *priv, char *argv[]) {
 	if (!entry) return control_write_complete(s, 1,
 			"partition \"%s\" not found", argv[0]);
 
-	if (entry->inuse) {
-		hashtbl_unlock_element_byptr(entry);
-		return control_write_complete(s, 1,
-				"partition \"%s\" is busy", argv[0]);
-	}
 	dev = &entry->d;
 
 	if (parse_int(s, &size, argv[1]) || parse_int(s, &reserved, argv[2])) {
@@ -805,6 +800,20 @@ static int control_resize(int s, control_thread_priv_t *priv, char *argv[]) {
 				argv[0]);
 	}
 
+	/* a partition that is in use (its file is open) can get blocks, or
+	 * give them back, as long as it does not become smaller (the end of
+	 * the file system on it would be lost): more reserved blocks
+	 * (the debian-installer lends blocks to the partition it installs
+	 * on, and gives them back at the end, see contrib/debian-installer) */
+	old_usable = blockio_dev_usable_macroblocks(dev);
+	new_usable = (size > reserved)?size - reserved:0;
+	if (entry->inuse && (!size || new_usable < old_usable)) {
+		hashtbl_unlock_element_byptr(entry);
+		return control_write_complete(s, 1, "partition \"%s\" is "
+				"busy, it can be made smaller only when it is not "
+				"in use", argv[0]);
+	}
+
 	target = dev->no_macroblocks - dev->pending_removals;
 	if (!size && being_removed(dev)) {
 		finish_removal(entry);
@@ -827,9 +836,6 @@ static int control_resize(int s, control_thread_priv_t *priv, char *argv[]) {
 	/* the resize changes the state of the partition, it must not be
 	 * written first in a block that is its own next block */
 	scubed3_settle(&entry->l);
-
-	old_usable = blockio_dev_usable_macroblocks(dev);
-	new_usable = (size > reserved)?size - reserved:0;
 
 	if (new_usable < old_usable) {
 		/* the partition becomes smaller, write out the current block,

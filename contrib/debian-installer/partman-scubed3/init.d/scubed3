@@ -1,0 +1,112 @@
+#!/bin/sh
+# the LUKS volumes on the scubed3 partitions (/dev/mapper/scubed3-NAME)
+# become disks in partman, with one partition (a loop label, as the
+# encrypted volumes of partman-crypto); the first time, on a partition that
+# the installer created, it is set up to be formatted with the default file
+# system, the partition that the unclaimed blocks are lent to gets mount
+# point /
+
+. /lib/partman/lib/scubed3-base.sh
+
+dev_to_devdir () {
+	echo $DEVICES/$(echo $1 | tr / =)
+}
+
+create_disk () {
+	local device model size devdir response
+	device=$1
+	model=$2
+	size=$3
+
+	devdir=$(dev_to_devdir $device)
+	mkdir $devdir || return 1
+	cd $devdir
+
+	echo $device > $devdir/device
+	echo $model > $devdir/model
+	echo $size > $devdir/size
+
+	open_dialog OPEN $device
+	read_line response
+	close_dialog
+	if [ "$response" = failed ]; then
+		rm -rf $devdir
+		return 1
+	fi
+
+	return 0
+}
+
+create_partition () {
+	local id num size type fs path name free_space free_size filesystem
+	filesystem=$2
+
+	cd $(dev_to_devdir $1)
+
+	open_dialog NEW_LABEL loop
+	close_dialog
+
+	# find the free space
+	open_dialog PARTITIONS
+	free_space=''
+	while { read_line num id size type fs path name; [ "$id" ]; }; do
+		if [ "$fs" = free ]; then
+			free_space=$id
+			free_size=$size
+		fi
+	done
+	close_dialog
+
+	if [ "$free_space" ]; then
+		open_dialog NEW_PARTITION primary $filesystem $free_space full $free_size
+		read_line num id size type fs path name
+		close_dialog
+		if [ -z "$id" ]; then
+			log "error: NEW_PARTITION returned no id"
+			return
+		fi
+	fi
+	open_dialog DISK_UNCHANGED
+	close_dialog
+
+	mkdir -p $id
+	echo $id
+}
+
+[ -d $S3STATE/parts ] || exit 0
+s3_running || exit 0
+
+db_get partman/default_filesystem
+default_fs="$RET"
+
+for p in $S3STATE/parts/*; do
+	[ -f $p/luks_open ] || continue
+	name=${p##*/}
+	device=/dev/mapper/scubed3-$name
+	[ -b $device ] || continue
+	devdir=$(dev_to_devdir $device)
+
+	if [ ! -d $devdir ]; then
+		db_metaget partman-scubed3/text/disk_model description
+		# (informational, parted finds the size of the device itself)
+		size=$(stat -c %s $S3MNT/$name 2>/dev/null || echo 0)
+		create_disk $device "$(printf "$RET" "$name")" $size || continue
+	fi
+
+	# only the first time: a partition, with the default file system
+	[ -f $p/partman_done ] && continue
+	id=$(create_partition $device $default_fs)
+	[ "$id" ] || continue
+	cd $devdir
+	if [ -f $p/created ] && [ ! -e $id/method ]; then
+		echo format > $id/method
+		>$id/format
+		>$id/use_filesystem
+		echo $default_fs > $id/filesystem
+		[ -f $p/lent ] && echo / > $id/mountpoint
+		update_partition $devdir $id
+	fi
+	>$p/partman_done
+done
+
+exit 0

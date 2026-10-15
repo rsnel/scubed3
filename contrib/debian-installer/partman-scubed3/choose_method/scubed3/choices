@@ -1,0 +1,16 @@
+#!/bin/sh
+# "Use as: base device for scubed3" (not on a disk that scubed3 made)
+
+. /lib/partman/lib/scubed3-base.sh
+
+dev=$1
+id=$2
+
+s3_is_ours $dev && exit 0
+# scubed3 has one base device; it cannot be changed while it runs
+if s3_running && [ "$(cat $dev/$id/method 2>/dev/null)" != scubed3 ]; then
+	exit 0
+fi
+
+db_metaget partman/method_long/scubed3 description
+printf "scubed3\t%s\n" "$RET"

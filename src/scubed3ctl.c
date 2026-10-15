@@ -30,12 +30,14 @@
 #include <ctype.h>
 #include <strings.h>
 #undef NDEBUG /* we need sanity checking */
-#include <readline/readline.h>
-#include <readline/history.h>
 #include <termios.h>
 
 #include <assert.h>
 #include "config.h"
+#ifndef NO_READLINE
+#include <readline/readline.h>
+#include <readline/history.h>
+#endif
 #include "verbose.h"
 #include "control.h"
 #include "gcry.h"
@@ -290,8 +292,48 @@ int do_local_command(ctl_priv_t *priv,
 	return ret;
 }
 
+/* read a passphrase (a line) from stream; on a terminal without echo, from a
+ * pipe as it is (the debian-installer gives the passphrases on a pipe) */
+#ifdef NO_READLINE
+/* without readline (configure --without-readline, for the
+ * debian-installer): a line without editing, the result is malloc'ed, NULL
+ * at EOF */
+static char *readline(const char *prompt) {
+	char *line = NULL;
+	size_t n = 0;
+	ssize_t len;
+
+	if (prompt) {
+		printf("%s", prompt);
+		fflush(stdout);
+	}
+	if ((len = getline(&line, &n, stdin)) == -1) {
+		free(line);
+		return NULL;
+	}
+	if (len > 0 && line[len - 1] == '\n') line[len - 1] = '\0';
+
+	return line;
+}
+#endif
+
 int my_getpass(char **lineptr, size_t *n, FILE *stream) {
 	struct termios old, new;
+	ssize_t len;
+
+	if (!isatty(fileno(stream))) {
+		if ((len = getline(lineptr, n, stream)) <= 0) return -1;
+		/* the last line may have no newline */
+		if ((*lineptr)[len - 1] != '\n') {
+			char *tmp;
+			if (!(tmp = realloc(*lineptr, len + 2))) return -1;
+			*lineptr = tmp;
+			(*lineptr)[len++] = '\n';
+			(*lineptr)[len] = '\0';
+		}
+		*n = len;
+		return 0;
+	}
 
 	/* Turn echoing off and fail if we can't. */
 	if (tcgetattr(fileno(stream), &old) != 0) return -1;
@@ -482,27 +524,27 @@ static int ctl_create(ctl_priv_t *priv, char *argv[]) {
 }
 
 int yesno(const char *prompt) {
-	//char answer[4];
-	char *answer;
+	char *line, *answer;
 	if (assume_yes >= 3) {
 		printf("%s Yes (assumed)\n", prompt);
 		return 1;
 	}
 label:
-	answer = readline(prompt);
+	/* no answer (EOF) is No */
+	if (!(line = readline(prompt))) return 0;
+	answer = line;
 	while (*answer == ' ') answer++;
 
-	//fgets(answer, sizeof(answer), stdin);
 	if (answer[0] == '\0' || !strcmp("No", answer)) {
-		free(answer);
+		free(line);
 		return 0; /* No */
 	}
 	if (strcmp("Yes", answer)) {
 		prompt = "Please answer Yes or No. [No] ";
-		free(answer);
+		free(line);
 		goto label;
 	}
-	free(answer);
+	free(line);
 	return 1; /* Yes */
 }
 

@@ -48,7 +48,9 @@ passphrases); after a change of the key store, run update-initramfs -u.
 Installation
 ~~~~~~~~~~~~
 
-1. Install scubed3 (make install), and cryptsetup and cryptsetup-initramfs
+1. Install scubed3 (make install, or the package scubed3, see
+   contrib/debian-installer/README; the debian-installer can do all of
+   this, with partman-scubed3), and cryptsetup and cryptsetup-initramfs
    for LUKS on the root partition; set CRYPTSETUP=y in
    /etc/cryptsetup-initramfs/conf-hook, so that cryptsetup-initramfs adds
    cryptsetup with the crypto modules and the device mapper rules to the

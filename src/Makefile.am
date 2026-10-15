@@ -1,5 +1,5 @@
 AUTOMAKE_OPTIONS = foreign
-noinst_PROGRAMS = scubed3 scubed3ctl
+sbin_PROGRAMS = scubed3 scubed3ctl
 scubed3_SOURCES = scubed3.c scubed3.h binio.c binio.h bitmap.c bitmap.h \
 		  blockio.c blockio.h cipher.c cipher.h dllarr.c dllarr.h \
 		  fuse_io.c fuse_io.h gcry.c gcry.h hashtbl.c hashtbl.h \
@@ -12,4 +12,4 @@ scubed3ctl_SOURCES = scubed3ctl.c verbose.c verbose.h gcry.c gcry.h \
 AM_CFLAGS = -D_GNU_SOURCE -O3 -g -Wall -Werror -D_FILE_OFFSET_BITS=64
 scubed3_CFLAGS = $(AM_CFLAGS) $(FUSE_CFLAGS)
 scubed3_LDADD = -lpthread $(FUSE_LIBS) -lgcrypt -lm -lrt -lgpg-error
-scubed3ctl_LDADD = -lreadline -lgcrypt -lpthread -lgpg-error
+scubed3ctl_LDADD = $(READLINE_LIBS) -lgcrypt -lpthread -lgpg-error

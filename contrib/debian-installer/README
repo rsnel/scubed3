@@ -1,0 +1,215 @@
+Installing Debian on scubed3 (debian-installer)
+===============================================
+
+partman-scubed3 adds scubed3 to the partitioner of the debian-installer, in
+the same way as software RAID, LVM and encrypted volumes:
+
+- "Use as:" of a partition has "base device for scubed3 (hidden encrypted
+  partitions)"
+- the main menu of the partitioner has "Configure scubed3 (hidden encrypted
+  partitions)", next to "Configure software RAID", "Configure the Logical
+  Volume Manager" and "Configure encrypted volumes"
+
+"Configure scubed3" writes the partition table, fills the base device with
+random data (or uses an existing scubed3 store, with its salt), starts the
+daemon and shows a menu to create and open scubed3 partitions. The LUKS
+volumes on them (/dev/mapper/scubed3-NAME) become disks in the partitioner,
+the root file system goes on one of them. At the end of the installation
+the installed system gets scubed3, its configuration and an initramfs that
+opens the partitions at boot (contrib/initramfs-tools).
+
+Files:
+
+	build-udebs.sh			builds the packages (see below)
+	partman-scubed3/lib/scubed3-base.sh
+					functions (sizes, passphrases, LUKS)
+	partman-scubed3/choose_partition/scubed3
+					"Configure scubed3"
+	partman-scubed3/choose_method/scubed3
+					"Use as: base device for scubed3"
+	partman-scubed3/init.d/scubed3	the LUKS volumes become disks
+	partman-scubed3/update.d/scubed3_visuals
+					"scubed3" in the list of partitions
+	partman-scubed3/check.d/scubed3_check
+					only / on scubed3, a separate /boot
+	partman-scubed3/finish-install.d/08scubed3
+					scubed3 in the installed system
+	partman-scubed3/templates	the questions (English only)
+
+dev/installertest.sh tests the scripts in a simulated installer.
+
+
+Installing on scubed3, step by step
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+1. Partition disks, manual: make a /boot partition (about 1 GB, ext4, not
+   on scubed3: the kernel and the initramfs are read from it), and a
+   partition for scubed3; set "Use as:" of the latter to "base device for
+   scubed3". (An EFI system partition as usual.)
+
+2. Configure scubed3:
+
+   - the partition table is written
+   - a new store: the partition is filled with random data (through
+     dm-crypt with a random key, as partman-crypto erases a partition),
+     a random salt is made and shown (keep a copy); an existing store:
+     its salt and the number of iterations are asked
+   - the menu: create partitions (name, size, LUKS yes/no, passphrase),
+     and open existing ones. Create the hidden partitions you want now
+     too; on an existing store, open ALL its partitions (in paranoia level
+     2 and 3 the blocks of a partition that is not open are overwritten)
+   - finish: the paranoia level during the installation (2 is
+     recommended) and of the installed system; the unclaimed blocks are
+     lent to the partition you install on (see below); the LUKS
+     passphrases are asked
+
+3. The partition with LUKS that got the lent blocks is a disk in the
+   partitioner, with one partition: format with the default file system,
+   mount point /. Finish partitioning and install as usual.
+
+4. At the end of the installation (finish-install):
+
+   - scubed3 in the installed system: the package scubed3 if apt finds it
+     (put it in a local repository, see below), otherwise the programs of
+     the installer are copied to /usr/local/sbin and the initramfs-tools
+     scripts to /etc/initramfs-tools; cryptsetup, cryptsetup-initramfs
+     (with CRYPTSETUP=y in /etc/cryptsetup-initramfs/conf-hook)
+   - /etc/scubed3.conf (salt, iterations, paranoia level) and
+     /etc/scubed3/initramfs.conf (BASE, by /dev/disk/by-partuuid if there
+     is one, and the options of the daemon); the name of the root
+     partition is stored only if you want (otherwise it is asked at boot,
+     and you can have more than one root partition)
+   - update-initramfs
+   - the lent blocks are given back
+   - a note: keep a copy of /etc/scubed3.conf and the options
+
+5. At boot the initramfs asks the name of the root partition, its
+   passphrase, the names and passphrases of the other partitions (in level
+   2 and 3 ALL of them, an empty name when done), confirms the paranoia
+   level, and the LUKS passphrase of the root partition. A key store (see
+   Key store in the main README) can replace all of this with one
+   passphrase: set it up after the installation, then update-initramfs -u.
+
+
+Install on a big partition, give the blocks back afterwards
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+In paranoia level 2 and 3 a partition with a fraction f of the blocks of
+the base device needs on average 1/f block writes for a block of its own
+data, and the garbage collector copies less when a partition has more free
+blocks. An installation writes some gigabytes: on a root partition with a
+tenth of the blocks that is ten times as many block writes. Installing is
+much faster on a partition that has (almost) all blocks.
+
+But a partition cannot simply be made smaller afterwards: shrinking a
+scubed3 partition cuts off the end of the file system on it, and the root
+file system cannot be shrunk while it is mounted. So the installer LENDS
+the blocks: when the menu is finished, the blocks that no partition claims
+are added to the partition you install on as extra reserved blocks (scubed3
+command resize-internal NAME BLOCKS RESERVED with both numbers increased).
+Its size, and the size of the file system on it, stays what you chose; the
+extra blocks are room for the garbage collector. At the end of the
+installation they are given back (resize-internal with the old numbers):
+the garbage collector of the installed system removes them from the
+partition in the background, one with every write (in level 3 the clock
+writes all the time, in level 2 only when the system writes).
+"scubed3ctl p" shows
+
+	(shrinking root, N blocks still to be removed)
+
+until it is done; then the blocks are unclaimed again, for other (hidden)
+partitions. Blocks that were never written are given back at once.
+
+So: give the root partition the size it needs, with room to grow, not
+more (it can be enlarged later, also while it is mounted: scubed3ctl
+resize, losetup -c on the loop device under its LUKS volume, cryptsetup
+resize, resize2fs); create hidden partitions with the sizes they need;
+the rest of the base device is lent during the installation.
+
+The same works by hand, outside the installer (scubed3 allows a resize of
+a partition that is in use, as long as it does not become smaller):
+
+	# scubed3ctl -c "info root"	(no_macroblocks=B, reserved_macroblocks=R)
+	# scubed3ctl -c "resize-internal root $((B+N)) $((R+N))"
+	  ... write a lot ...
+	# scubed3ctl -c "resize-internal root B R"
+
+
+Building the packages
+~~~~~~~~~~~~~~~~~~~~~
+
+On a Debian system of the release you install (the udebs must match the
+libraries of its installer):
+
+	# apt install build-essential autoconf automake pkg-config \
+		libfuse3-dev libgcrypt20-dev libreadline-dev dpkg-dev
+	$ contrib/debian-installer/build-udebs.sh OUTDIR
+
+builds, with dpkg-deb (no debhelper needed):
+
+	scubed3-udeb_VERSION_ARCH.udeb	the daemon and scubed3ctl (built
+					--without-readline) and the
+					initramfs-tools scripts, for the
+					installer
+	partman-scubed3_VERSION_all.udeb	the partitioner part
+	scubed3_VERSION_ARCH.deb	scubed3 for the installed system (the
+					initramfs-tools scripts in
+					/usr/share/initramfs-tools)
+
+The dependencies of the udebs: libfuse3-*-udeb, libgcrypt20-udeb,
+libgpg-error0-udeb (from dpkg-shlibdeps), partman-crypto-dm (cryptsetup,
+dmsetup, the dm-crypt modules, blockdev-wipe and blockdev-keygen),
+fuse-modules and loop-modules (the kernel modules of the installer).
+
+
+Getting it into the installer
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+- A custom installer image: put the two udebs in build/localudebs/ of the
+  source of the debian-installer package and build the image (they are
+  then on the image, and the dependencies come from the mirror or the
+  image); or add them to an image made with debian-cd or simple-cdd.
+
+- For testing, in a normal installer (expert mode): after the mirror is
+  configured, in a shell (Alt-F2), with the udebs on a USB stick:
+
+	# anna-install partman-crypto-dm libfuse3-4-udeb libgcrypt20-udeb \
+		fuse-modules-$(uname -r)-di loop-modules-$(uname -r)-di
+	# udpkg -i /media/scubed3-udeb_*.udeb /media/partman-scubed3_*.udeb
+
+  (the names of the library udebs depend on the release: see the
+  Depends of scubed3-udeb). Then start "Partition disks" again.
+
+- The package scubed3 for the installed system: in a local repository
+  that the installer knows (preseed apt-setup/local0/repository), or on
+  the image. Without it, finish-install copies the programs of the
+  installer into the target (they work, scubed3ctl without line editing);
+  install the package later, it replaces them (remove
+  /usr/local/sbin/scubed3* and the scripts in /etc/initramfs-tools then).
+
+Preseeding: partman-scubed3/options (the options of the daemon, -m and -M,
+default: chosen for the size of the base device), partman-scubed3/level,
+partman-scubed3/boot_level, partman-scubed3/store_root_name. The
+passphrases are always asked.
+
+
+Limitations
+~~~~~~~~~~~
+
+- This was tested in a simulated installer (dev/installertest.sh: the
+  scripts with stand-ins for debconf, partman's library and cryptsetup),
+  NOT in a real installation yet; please report problems.
+- Only the root file system can be on scubed3 (the initramfs sets up only
+  the root partition); other mount points and swap are refused. Other
+  scubed3 partitions can be used after the installation with scubed3ctl.
+- One base device. The base device cannot be changed after "Configure
+  scubed3" (the daemon runs on it).
+- The partition you install on needs LUKS on it (the LUKS volume is the
+  disk in the partitioner).
+- The key store is not set up by the installer.
+- The shell of the installer must have 64 bit arithmetic (busybox with
+  FEATURE_SH_MATH_64, the default), partman-scubed3 checks it.
+- The questions are in English only.
+- See also Limitations in contrib/initramfs-tools/README (no swap on
+  scubed3, avoid running out of memory, level 3 limits the root file
+  system too).

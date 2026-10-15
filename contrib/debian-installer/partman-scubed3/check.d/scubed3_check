@@ -1,0 +1,72 @@
+#!/bin/sh
+# checks of partman-scubed3, before partman finishes:
+# - a base device must be configured (Configure scubed3)
+# - on a scubed3 partition only the root file system (the initramfs of the
+#   installed system sets up only the root partition), no swap
+# - root on scubed3 needs a /boot partition that is not on scubed3
+
+. /lib/partman/lib/scubed3-base.sh
+
+error () {
+	db_fset $1 seen false
+	db_input critical $1
+	db_go || true
+	exit 1
+}
+
+if [ "$(s3_bases)" ] && ! s3_running; then
+	error partman-scubed3/not_configured
+fi
+
+have_boot=no
+s3_root=no
+for dev in $DEVICES/*; do
+	[ -d "$dev" ] || continue
+	cd $dev
+	ours=no
+	s3_is_ours $dev && ours=yes
+	ids=
+	open_dialog PARTITIONS
+	while { read_line num id size type fs path name; [ "$id" ]; }; do
+		[ "$fs" != free ] || continue
+		ids="$ids $id"
+	done
+	close_dialog
+
+	for id in $ids; do
+		[ -f $id/method ] || continue
+		method=$(cat $id/method)
+		mnt=
+		[ -f $id/mountpoint ] && mnt=$(cat $id/mountpoint)
+		if [ $ours = no ]; then
+			[ "$mnt" = /boot ] && have_boot=yes
+			continue
+		fi
+		case $method in
+		    swap)
+			error partman-scubed3/no_swap
+			;;
+		    format|keep)
+			case "$mnt" in
+			    /)	s3_root=yes ;;
+			    "")	;;
+			    *)	db_subst partman-scubed3/only_root MOUNTPOINT "$mnt"
+				error partman-scubed3/only_root
+				;;
+			esac
+			;;
+		    dontuse)
+			;;
+		    *)
+			db_subst partman-scubed3/only_root MOUNTPOINT "$method"
+			error partman-scubed3/only_root
+			;;
+		esac
+	done
+done
+
+if [ $s3_root = yes ] && [ $have_boot = no ]; then
+	error partman-scubed3/root_needs_boot
+fi
+
+exit 0

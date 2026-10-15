@@ -1,0 +1,310 @@
+#!/bin/sh
+# "Configure scubed3" in the main menu of partman:
+#
+# 1. the first time: the partition table is written, the base device (the
+#    partition with method scubed3) is filled with random data (a new set of
+#    macroblocks) or the salt of an existing one is asked, the daemon is
+#    started
+# 2. a menu: create partitions, open existing ones (ALL partitions on the
+#    base device must be open before finish, in paranoia level 2 and 3 a
+#    partition that is not open is destroyed)
+# 3. finish: the paranoia level is switched, the unclaimed blocks are lent
+#    to the partition to install on (they are given back at the end of the
+#    installation, see finish-install.d/08scubed3), LUKS is put on the
+#    partitions that get it, partman is restarted: the LUKS volumes
+#    (/dev/mapper/scubed3-NAME) are disks in partman
+
+. /lib/partman/lib/crypto-base.sh
+. /lib/partman/lib/scubed3-base.sh
+
+note () {
+	db_fset $1 seen false
+	db_input critical $1
+	db_go || true
+}
+
+setup_store () {
+	local bases base size m salt iterations
+	bases=$(s3_bases)
+	if [ -z "$bases" ]; then
+		note partman-scubed3/no_base
+		return 1
+	fi
+	if [ $(echo "$bases" | wc -l) -gt 1 ]; then
+		note partman-scubed3/too_many_bases
+		return 1
+	fi
+
+	confirm_changes partman-scubed3 || return 1
+	commit_changes partman-scubed3/commit_failed || exit $?
+
+	# the path after the commit
+	base=$(s3_bases | cut -f3)
+	if ! size=$(s3_size_mib $base) || ! m=$(s3_choose_meso $size); then
+		db_subst partman-scubed3/too_large DEVICE "$(humandev $base)"
+		note partman-scubed3/too_large
+		return 1
+	fi
+
+	# the options of the daemon (preseeding can change them, they must be
+	# the same forever)
+	db_get partman-scubed3/options
+	[ "$RET" ] || db_set partman-scubed3/options "-m $m -M $S3MACRO_LOG"
+	db_input low partman-scubed3/options || true
+	db_go || return 1
+	db_get partman-scubed3/options
+	echo "$RET" > $S3STATE/options
+
+	db_subst partman-scubed3/store_type DEVICE "$(humandev $base)"
+	db_input critical partman-scubed3/store_type
+	db_go || return 1
+	db_get partman-scubed3/store_type
+	if [ "$RET" = new ]; then
+		salt=$(s3_random_salt)
+		if [ -z "$salt" ]; then
+			note partman-scubed3/no_salt
+			return 1
+		fi
+		iterations=$S3DEFAULT_ITERATIONS
+		db_subst partman-scubed3/fill DEVICE "$(humandev $base)"
+		db_set partman-scubed3/fill true
+		db_input critical partman-scubed3/fill
+		db_go || return 1
+		db_get partman-scubed3/fill
+		if [ "$RET" = true ] && ! s3_fill $base; then
+			db_subst partman-scubed3/fill_failed DEVICE "$(humandev $base)"
+			note partman-scubed3/fill_failed
+			return 1
+		fi
+		db_subst partman-scubed3/salt_note SALT "$salt"
+		note partman-scubed3/salt_note
+	else
+		db_input critical partman-scubed3/salt
+		db_input critical partman-scubed3/iterations
+		db_go || return 1
+		db_get partman-scubed3/salt
+		salt="$RET"
+		db_get partman-scubed3/iterations
+		iterations="$RET"
+	fi
+
+	cat > $S3CONF <<EOF
+# scubed3 KDF parameters (see the README of scubed3), made by the
+# debian-installer; KEEP A COPY: without the salt the partitions cannot be
+# opened
+kdf=PBKDF2-SHA256
+${salt:+salt=$salt}
+iterations=${iterations:-$S3DEFAULT_ITERATIONS}
+# the paranoia level that mount, mke2fs and luksformat require
+paranoia=2
+EOF
+	echo $base > $S3STATE/base
+
+	if ! s3_start $base; then
+		s3_error partman-scubed3/start_failed
+		rm -f $S3STATE/base
+		return 1
+	fi
+
+	db_metaget partman-scubed3/text/in_use description
+	partman_lock_unit $(mapdevfs $base) "$RET"
+	return 0
+}
+
+do_create () {
+	local name blocks free bytes mib
+	db_set partman-scubed3/name ""
+	db_fset partman-scubed3/name seen false
+	db_input critical partman-scubed3/name
+	db_go || return 0
+	db_get partman-scubed3/name
+	name="$RET"
+	if ! s3_valid_name "$name"; then
+		note partman-scubed3/bad_name
+		return 0
+	fi
+	if [ -e $S3MNT/$name ] || [ -d $S3STATE/parts/$name ]; then
+		db_subst partman-scubed3/name_exists NAME "$name"
+		note partman-scubed3/name_exists
+		return 0
+	fi
+
+	free=$(s3_p_number "blocks unclaimed")
+	if [ -z "$free" ] || [ "$free" -lt 2 ]; then
+		note partman-scubed3/no_space
+		return 0
+	fi
+	db_subst partman-scubed3/size NAME "$name"
+	db_subst partman-scubed3/size MAX "$(s3_mib_of $free) MiB"
+	db_set partman-scubed3/size ""
+	db_fset partman-scubed3/size seen false
+	db_input critical partman-scubed3/size
+	db_go || return 0
+	db_get partman-scubed3/size
+	if ! valid_human "$RET"; then
+		note partman-scubed3/bad_size
+		return 0
+	fi
+	bytes=$(human2longint "$RET")
+	mib=$(( bytes / 1048576 ))
+	blocks=$(s3_blocks_for $mib)
+	if [ $blocks -gt $free ]; then
+		note partman-scubed3/bad_size
+		return 0
+	fi
+
+	db_subst partman-scubed3/luks NAME "$name"
+	db_set partman-scubed3/luks true
+	db_input critical partman-scubed3/luks
+	db_go || return 0
+
+	db_metaget partman-scubed3/text/partition_description description
+	s3_ask_passphrase "$(printf "$RET" "$name")" yes || return 0
+
+	printf '%s\n%s\n' "$PASS" "$PASS" | s3ctl -c "create $name"
+	PASS=
+	if [ ! -e $S3MNT/$name ] || ! s3ctl -c "resize $name $blocks"; then
+		s3_error partman-scubed3/create_failed "$name"
+		return 0
+	fi
+	mkdir -p $S3STATE/parts/$name
+	>$S3STATE/parts/$name/created
+	db_get partman-scubed3/luks
+	[ "$RET" = true ] && >$S3STATE/parts/$name/luks
+	return 0
+}
+
+do_open () {
+	local name
+	db_set partman-scubed3/name ""
+	db_fset partman-scubed3/name seen false
+	db_input critical partman-scubed3/name
+	db_go || return 0
+	db_get partman-scubed3/name
+	name="$RET"
+	if ! s3_valid_name "$name"; then
+		note partman-scubed3/bad_name
+		return 0
+	fi
+	if [ -e $S3MNT/$name ] || [ -d $S3STATE/parts/$name ]; then
+		db_subst partman-scubed3/name_exists NAME "$name"
+		note partman-scubed3/name_exists
+		return 0
+	fi
+
+	db_metaget partman-scubed3/text/partition_description description
+	s3_ask_passphrase "$(printf "$RET" "$name")" no || return 0
+	printf '%s\n' "$PASS" | s3ctl -c "open $name"
+	PASS=
+	if [ ! -e $S3MNT/$name ]; then
+		db_subst partman-scubed3/no_blocks NAME "$name"
+		note partman-scubed3/no_blocks
+		return 0
+	fi
+	mkdir -p $S3STATE/parts/$name
+	if cryptsetup isLuks $S3MNT/$name 2>/dev/null; then
+		>$S3STATE/parts/$name/luks
+		s3_luks_open $name || true
+	fi
+	return 0
+}
+
+do_finish () {
+	local p name level free n r choices default
+
+	db_input critical partman-scubed3/level
+	db_input critical partman-scubed3/boot_level
+	db_go || return 1
+	db_get partman-scubed3/level
+	level=$RET
+	if ! s3ctl -c "paranoia $level"; then
+		s3_error partman-scubed3/level_failed
+		return 1
+	fi
+	echo $level > $S3STATE/level
+	db_get partman-scubed3/boot_level
+	sed -i "s/^paranoia=.*/paranoia=$RET/" $S3CONF
+
+	# lend the unclaimed blocks to the partition to install on (as
+	# reserved blocks: its size does not change)
+	choices=; default=
+	for p in $S3STATE/parts/*; do
+		[ -d "$p" ] || continue
+		[ -f $p/lent ] && choices= && break
+		[ -f $p/luks ] || continue
+		choices="${choices:+$choices, }${p##*/}"
+		[ "$default" ] || default=${p##*/}
+	done
+	free=$(s3_p_number "blocks unclaimed")
+	if [ "$choices" ] && [ "${free:-0}" -gt 0 ]; then
+		db_metaget partman-scubed3/text/lend_none description
+		db_subst partman-scubed3/lend CHOICES "$choices, $RET"
+		db_subst partman-scubed3/lend FREE "$(s3_mib_of $free) MiB"
+		db_set partman-scubed3/lend "$default"
+		db_input critical partman-scubed3/lend
+		db_go || return 1
+		db_get partman-scubed3/lend
+		name="$RET"
+		if [ -d "$S3STATE/parts/$name" ]; then
+			n=$(s3_info $name no_macroblocks)
+			r=$(s3_info $name reserved_macroblocks)
+			if s3ctl -c "resize-internal $name $((n + free)) $((r + free))"; then
+				echo "$n $r" > $S3STATE/parts/$name/lent
+			else
+				s3_error partman-scubed3/lend_failed "$name"
+			fi
+		fi
+	fi
+
+	# LUKS on the partitions that get it
+	for p in $S3STATE/parts/*; do
+		[ -d "$p" ] || continue
+		name=${p##*/}
+		[ -f $p/luks ] || continue
+		[ -f $p/luks_open ] && continue
+		if cryptsetup isLuks $S3MNT/$name 2>/dev/null; then
+			s3_luks_open $name || return 1
+		elif ! s3_luks_format $name; then
+			s3_error partman-scubed3/luks_failed "$name"
+			return 1
+		fi
+	done
+	return 0
+}
+
+if ! s3_math64; then
+	note partman-scubed3/no_math64
+	exit 0
+fi
+mkdir -p $S3STATE/parts
+
+if ! s3_running; then
+	setup_store || exit 0
+fi
+
+while :; do
+	list=$(s3_partition_list | tr '\n' ';' | sed 's/;$//; s/;/; /g')
+	if [ -z "$list" ]; then
+		db_metaget partman-scubed3/text/no_partitions description
+		list="$RET"
+	fi
+	db_subst partman-scubed3/mainmenu PARTITIONS "$list"
+	db_fset partman-scubed3/mainmenu seen false
+	db_input critical partman-scubed3/mainmenu
+	db_go || exit 10
+	db_get partman-scubed3/mainmenu
+	case $RET in
+	    create)	do_create ;;
+	    open)	do_open ;;
+	    finish)	break ;;
+	    *)
+		logger -t partman-scubed3 "Unknown selection '$RET'"
+		break ;;
+	esac
+done
+
+do_finish || exit 0
+
+stop_parted_server
+restart_partman
+exit 0

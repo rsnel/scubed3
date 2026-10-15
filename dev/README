@@ -214,6 +214,26 @@ initramfstest.sh DAEMON SCUBED3CTL
 	Uses /dev/scubed3fs and /run/scubed3/control (like a boot), no other
 	daemon may run.
 
+installertest.sh DAEMON SCUBED3CTL
+	partman-scubed3 (contrib/debian-installer) in a simulated
+	debian-installer: its scripts run with their paths in a temporary
+	directory, with stand-ins for debconf (the answers come from a list),
+	the library of partman (partition lists are files), blockdev-keygen,
+	apt-install, in-target, log-output and fake-cryptsetup; the daemon
+	and scubed3ctl are real, the base device is a loop device. Configure
+	scubed3: a new store, root (60 MB, LUKS) and hidden (20 MB), level 2,
+	the unclaimed blocks are lent to root (the size of its file does not
+	change); init.d makes /dev/mapper/scubed3-root a disk in partman
+	(format, mount point /); check.d wants /boot and refuses /home on
+	scubed3; 80 MB is "installed"; finish-install copies the programs
+	(apt-install scubed3 fails), writes /etc/scubed3.conf,
+	/etc/scubed3/initramfs.conf and CRYPTSETUP=y, runs update-initramfs in
+	the target and gives the lent blocks back (pending removals, no trim,
+	while root is in use; making it smaller is refused while it is in
+	use); then the local-top script of the installed
+	initramfs boots it, the root file system is there, writes drain the
+	pending removals. Uses /dev/scubed3fs and /run/scubed3/control.
+
 lukstest.sh DAEMON SCUBED3CTL
 	LUKS on top of a partition with scubed3ctl, and the warning below the
 	recommended paranoia level: in level 1 mount and luksformat warn, an

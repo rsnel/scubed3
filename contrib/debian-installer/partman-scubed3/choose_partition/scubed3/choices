@@ -1,0 +1,12 @@
+#!/bin/sh
+# "Configure scubed3" in the main menu of partman: when a partition is used
+# as the base device of scubed3, or scubed3 runs already
+
+. /lib/partman/lib/scubed3-base.sh
+
+if ! s3_running && [ -z "$(s3_bases)" ]; then
+	exit 0
+fi
+
+db_metaget partman-scubed3/text/configure description
+printf "scubed3\t%s\n" "$RET"

@@ -265,7 +265,16 @@ files), and autoconf, automake and pkg-config:
 
 	./autogen.sh && ./configure && make
 
-The programs are src/scubed3 and src/scubed3ctl.
+The programs are src/scubed3 and src/scubed3ctl, make install installs them
+in /usr/local/sbin (another place with ./configure --prefix=...).
+./configure --without-readline builds scubed3ctl without line editing (the
+debian-installer has no readline). scubed3ctl reads passphrases from the
+terminal without echo; when its input is not a terminal (a pipe), it reads
+them as lines from its input.
+
+Debian packages of scubed3, and a component of the debian-installer that
+installs Debian with the root file system on a scubed3 partition: see
+contrib/debian-installer/README.
 
 
 Key store
@@ -439,7 +448,11 @@ mesoblocks); see Shrinking; a
 partition has at least 2 blocks (with 1 block, every write would overwrite
 the only copy of its state), 0 blocks removes it; at least 1 block is
 reserved (the GC always empties one block, a partition that would be
-completely full could not make progress)
+completely full could not make progress); a partition that is in use (its
+file is open, for example mounted) can be resized as long as its usable
+size does not become smaller: it can grow, and it can get extra reserved
+blocks and give them back (the debian-installer lends the unclaimed blocks
+to the partition it installs on this way, see contrib/debian-installer)
 
 - info NAME
 

@@ -1,0 +1,428 @@
+Template: partman/method_long/scubed3
+Type: text
+Description: base device for scubed3 (hidden encrypted partitions)
+
+Template: partman/method_short/scubed3
+Type: text
+Description: scubed3
+
+Template: partman-scubed3/text/configure
+Type: text
+Description: Configure scubed3 (hidden encrypted partitions)
+
+Template: partman-scubed3/text/active
+Type: text
+Description: (scubed3 runs)
+
+Template: partman-scubed3/text/not_active
+Type: text
+Description: (not configured)
+
+Template: partman-scubed3/text/in_use
+Type: text
+Description: In use as the base device of scubed3
+
+Template: partman-scubed3/text/disk_model
+Type: text
+Description: scubed3 partition %s (LUKS)
+
+Template: partman-scubed3/text/partition_description
+Type: text
+Description: the scubed3 partition "%s"
+
+Template: partman-scubed3/text/luks_description
+Type: text
+Description: the LUKS volume on the scubed3 partition "%s"
+
+Template: partman-scubed3/text/no_partitions
+Type: text
+Description: none yet
+
+Template: partman-scubed3/text/lend_none
+Type: text
+Description: none
+
+Template: partman-scubed3/confirm
+Type: boolean
+Default: false
+Description: Write the changes to disk and configure scubed3?
+ Before scubed3 can be configured, the current partitioning scheme has to
+ be written to disk. These changes cannot be undone.
+ .
+ After scubed3 has been configured, its base device cannot be changed
+ anymore during this installation.
+ .
+ ${ITEMS}
+
+Template: partman-scubed3/confirm_nooverwrite
+Type: boolean
+Default: false
+Description: Write the changes to disk and configure scubed3?
+ Before scubed3 can be configured, the current partitioning scheme has to
+ be written to disk. These changes cannot be undone.
+ .
+ ${ITEMS}
+
+Template: partman-scubed3/confirm_nochanges
+Type: boolean
+Default: false
+Description: Keep the current partition layout and configure scubed3?
+ After scubed3 has been configured, its base device cannot be changed
+ anymore during this installation.
+
+Template: partman-scubed3/commit_failed
+Type: error
+Description: The partition table could not be written
+ An error occurred while writing the changes to the disks. scubed3 is not
+ configured.
+
+Template: partman-scubed3/no_math64
+Type: error
+Description: The shell of the installer has no 64 bit arithmetic
+ partman-scubed3 needs it to compute the sizes of the blocks. scubed3
+ cannot be configured with this installer.
+
+Template: partman-scubed3/no_base
+Type: error
+Description: No base device for scubed3
+ No partition is used as the base device of scubed3. Choose a partition,
+ and set "Use as:" to "base device for scubed3".
+
+Template: partman-scubed3/too_many_bases
+Type: error
+Description: More than one base device for scubed3
+ The installed system can use only one base device of scubed3. Use only one
+ partition as "base device for scubed3".
+
+Template: partman-scubed3/too_large
+Type: error
+Description: ${DEVICE} is too large for scubed3
+ scubed3 cannot use this partition as its base device. Use a smaller
+ partition (at most some tens of terabytes).
+
+Template: partman-scubed3/options
+Type: string
+Description: Options of the scubed3 daemon:
+ The sizes of the blocks are not stored on the base device: the same -m
+ (mesoblock size) and -M (macroblock size) must be used forever. The
+ default is chosen for the size of the base device. Change this only if you
+ know what you are doing, for example to use an existing base device with
+ the sizes it was made with.
+
+Template: partman-scubed3/store_type
+Type: select
+Choices-C: new, existing
+Choices: A new scubed3 store (the partition is filled with random data), An existing scubed3 store (keep the data on the partition)
+Default: new
+Description: What is on ${DEVICE}?
+ scubed3 hides encrypted partitions in a device full of random data:
+ without its passphrase a partition cannot be told apart from unused space.
+ .
+ A new store starts with random data on the whole partition. If the
+ partition already holds scubed3 partitions, choose the existing store: you
+ need its salt (in /etc/scubed3.conf of the system that made it) and the
+ passphrases of ALL its partitions.
+
+Template: partman-scubed3/fill
+Type: boolean
+Default: true
+Description: Fill ${DEVICE} with random data?
+ All data on ${DEVICE} will be overwritten with random data. This is the
+ last opportunity to abort.
+ .
+ This can take long on a large partition. Without it, the old data on the
+ partition shows which blocks scubed3 has written, and which not: do not
+ skip it, unless the partition was filled with random data before.
+
+Template: partman-scubed3/progress/fill_title
+Type: text
+Description: Filling ${DEVICE} with random data
+
+Template: partman-scubed3/progress/fill_text
+Type: text
+Description: The installer is now overwriting ${DEVICE} with random data. Cancelling leaves the rest of the partition as it is.
+
+Template: partman-scubed3/fill_failed
+Type: error
+Description: ${DEVICE} could not be filled with random data
+ An error occurred while ${DEVICE} was filled with random data. scubed3 is
+ not configured.
+
+Template: partman-scubed3/no_salt
+Type: error
+Description: No random salt
+ The installer could not make a random salt for scubed3.
+
+Template: partman-scubed3/salt_note
+Type: note
+Description: The salt of the new scubed3 store
+ The passphrases of the scubed3 partitions are turned into keys with this
+ salt:
+ .
+ ${SALT}
+ .
+ It is not secret, but without it the partitions cannot be opened. It is
+ stored in /etc/scubed3.conf of the installed system (and in its initramfs);
+ also keep a copy elsewhere, on paper is fine.
+
+Template: partman-scubed3/salt
+Type: string
+Description: Salt of the existing scubed3 store:
+ The salt is in /etc/scubed3.conf of the system that made the store (the
+ line salt=...). Without the right salt no partition can be opened. Leave it
+ empty for the default salt of scubed3 (if that system had no salt= line).
+
+Template: partman-scubed3/iterations
+Type: string
+Default: 16777216
+Description: Number of iterations of the key derivation:
+ The line iterations=... of /etc/scubed3.conf of the system that made the
+ store; 16777216 is the default of scubed3.
+
+Template: partman-scubed3/start_failed
+Type: error
+Description: scubed3 could not be started
+ The scubed3 daemon did not start on the base device.
+ .
+ ${ERROR}
+
+Template: partman-scubed3/mainmenu
+Type: select
+Choices-C: create, open, finish
+Choices: Create a partition, Open an existing partition, Finish
+Description: scubed3 configuration actions
+ Open partitions: ${PARTITIONS}
+ .
+ Create the partitions you want now, also hidden ones you will not install
+ on. On an existing store, open ALL its partitions before you finish: in
+ paranoia level 2 and 3 scubed3 overwrites the blocks of partitions that
+ are not open.
+ .
+ To install on a partition, it needs LUKS on it (the LUKS volume is the
+ disk you partition next, with the root file system on it).
+
+Template: partman-scubed3/name
+Type: string
+Description: Name of the scubed3 partition:
+ The name is used for the file of the partition, and for its LUKS volume
+ (/dev/mapper/scubed3-NAME). It is not stored on the base device: you can
+ use another name every time you open it. Letters, digits, '.', '_' and
+ '-' only.
+
+Template: partman-scubed3/bad_name
+Type: error
+Description: Invalid name
+ A name has at most 30 characters: letters, digits, '.', '_' and '-'; it
+ does not start with a '.'.
+
+Template: partman-scubed3/name_exists
+Type: error
+Description: "${NAME}" is already open
+ A partition with this name is open already. Choose another name.
+
+Template: partman-scubed3/no_space
+Type: error
+Description: No unclaimed blocks
+ All blocks of the base device belong to partitions.
+
+Template: partman-scubed3/size
+Type: string
+Description: Size of the scubed3 partition "${NAME}":
+ The space for data, for example "20 GB" (at most ${MAX}; a quarter more is
+ reserved for the garbage collector). Partitions can be enlarged and
+ shrunk later with scubed3ctl, the file system on them must be resized
+ with them.
+ .
+ Installing goes fastest when the partition you install on has most of the
+ blocks of the base device. Do not make it larger than you need for that:
+ at the end of the menu, the blocks that no partition claims are lent to
+ it during the installation, and given back afterwards.
+
+Template: partman-scubed3/bad_size
+Type: error
+Description: Invalid size
+ The size is not valid, or larger than the unclaimed space.
+
+Template: partman-scubed3/luks
+Type: boolean
+Default: true
+Description: Put LUKS on "${NAME}"?
+ LUKS on the partition protects its data when someone takes the computer
+ while it runs (in paranoia level 2 and 3 all partitions are open then).
+ The installer can only install on a partition with LUKS on it: the LUKS
+ volume is the disk you partition next. Its passphrase is asked when the
+ menu is finished; use another passphrase than the one of the partition.
+
+Template: partman-scubed3/passphrase
+Type: password
+Description: Passphrase:
+ The passphrase of ${DESCRIPTION}.
+ .
+ With the wrong passphrase scubed3 finds no blocks, as if the partition
+ does not exist. Choose a passphrase that is hard to guess.
+
+Template: partman-scubed3/passphrase-again
+Type: password
+Description: Re-enter the passphrase to verify:
+ Please enter the same passphrase again to verify that you have typed it
+ correctly.
+
+Template: partman-scubed3/passphrase-mismatch
+Type: error
+Description: Passphrase input error
+ The two passphrases you entered were not the same. Please try again.
+
+Template: partman-scubed3/passphrase-empty
+Type: error
+Description: Empty passphrase
+ You entered an empty passphrase, which is not allowed. Please choose a
+ non-empty passphrase.
+
+Template: partman-scubed3/weak_passphrase
+Type: boolean
+Default: false
+Description: Use weak passphrase?
+ You entered a passphrase that consists of less than eight characters,
+ which is considered too weak. You should choose a stronger passphrase.
+
+Template: partman-scubed3/create_failed
+Type: error
+Description: The partition "${NAME}" could not be created
+ ${ERROR}
+
+Template: partman-scubed3/no_blocks
+Type: error
+Description: No blocks found
+ No blocks of "${NAME}" were found with this passphrase: the passphrase is
+ wrong, or the salt is not the salt of this store (or the partition does
+ not exist: scubed3 cannot tell the difference).
+
+Template: partman-scubed3/level
+Type: select
+Choices: 1, 2, 3
+Default: 2
+Description: Paranoia level during the installation:
+ Level 1: the writes of a partition go to its own blocks (this shows which
+ blocks belong to which partition, to someone with two copies of the
+ disk, or with the write log of a flash drive).
+ .
+ Level 2: every write goes to a random block of the whole base device.
+ ALL partitions on the base device must be open now: a partition that is
+ not open is destroyed.
+ .
+ Level 3: as level 2, and the writes are done at random moments, also
+ when nothing is written; a partition writes at most its share of the rate
+ (800 KiB/s by default), installing takes long.
+ .
+ Level 2 is recommended for the installation.
+
+Template: partman-scubed3/boot_level
+Type: select
+Choices: 1, 2, 3
+Default: 2
+Description: Paranoia level of the installed system:
+ The initramfs of the installed system switches to this level after it has
+ opened the partitions (the line paranoia= of /etc/scubed3.conf). In level
+ 2 and 3 the names and passphrases of ALL partitions on the base device are
+ asked at boot.
+
+Template: partman-scubed3/level_failed
+Type: error
+Description: The paranoia level could not be switched
+ ${ERROR}
+
+Template: partman-scubed3/lend
+Type: select
+Choices: ${CHOICES}
+Description: Lend the unclaimed blocks during the installation to:
+ ${FREE} of the base device belong to no partition. In paranoia level 2 and
+ 3, a partition with a fraction f of the blocks of the base device needs on
+ average 1/f block writes for a block of its own data (a partition with a
+ tenth of the blocks: ten), and the garbage collector copies less when a
+ partition has more free blocks. So installing is much faster on a
+ partition that has most of the blocks.
+ .
+ The blocks are lent: the size of the partition does not change, the
+ blocks are extra room for the garbage collector. At the end of the
+ installation they are given back, and the garbage collector of the
+ installed system removes them from the partition in the background, while
+ it writes (scubed3ctl p shows "shrinking" until it is done). Then they can
+ be used for other (hidden) partitions.
+ .
+ Choose the partition you install on.
+
+Template: partman-scubed3/lend_failed
+Type: error
+Description: The blocks could not be lent to "${NAME}"
+ ${ERROR}
+
+Template: partman-scubed3/luks_failed
+Type: error
+Description: LUKS could not be put on "${NAME}"
+ ${ERROR}
+
+Template: partman-scubed3/luks_open_failed
+Type: error
+Description: The LUKS volume on "${NAME}" could not be opened
+ The passphrase is wrong, or the LUKS header is damaged.
+
+Template: partman-scubed3/not_configured
+Type: error
+Description: scubed3 is not configured
+ A partition is used as the base device of scubed3, but scubed3 has not
+ been configured. Choose "Configure scubed3" in the main menu, or use the
+ partition for something else.
+
+Template: partman-scubed3/only_root
+Type: error
+Description: Only the root file system can be on scubed3
+ The installed system sets up only the root partition at boot, "${MOUNTPOINT}"
+ cannot be on a scubed3 partition. Put it on the root file system, or on a
+ normal partition. Other scubed3 partitions can be used after the
+ installation, with scubed3ctl.
+
+Template: partman-scubed3/no_swap
+Type: error
+Description: No swap on scubed3
+ The kernel writes swap through the scubed3 daemon, which needs memory to
+ do that. Do not put swap on a scubed3 partition; use swap on zram, or no
+ swap.
+
+Template: partman-scubed3/root_needs_boot
+Type: error
+Description: No separate /boot partition
+ The root file system is on scubed3, the kernel and the initramfs must be
+ on a /boot partition that is not on scubed3. Create one (about 1 GB).
+
+Template: partman-scubed3/install_failed
+Type: error
+Description: scubed3 could not be set up in the installed system
+ The step "${WHAT}" failed, see the installation log. The installed system
+ may not boot from its scubed3 partition.
+
+Template: partman-scubed3/store_root_name
+Type: boolean
+Default: false
+Description: Store the name of the root partition on the boot partition?
+ The root file system is on the scubed3 partition "${NAME}". If its name is
+ stored in the initramfs (on the unencrypted boot partition), it is not
+ asked at boot; anyone who has the disk can read it. If it is not stored,
+ you type it at boot, before its passphrase, and you can have more than one
+ root partition (for example one you can admit and a hidden one).
+
+Template: partman-scubed3/final_note
+Type: note
+Description: scubed3 is set up
+ Keep a copy of /etc/scubed3.conf (the salt: ${SALT}) and of the options of
+ the daemon (${OPTIONS}): without them the partitions cannot be opened.
+ .
+ The blocks that were lent to the partition you installed on are given
+ back: the garbage collector removes them while the system writes.
+ "scubed3ctl p" shows "shrinking" until it is done. After that they can be
+ used for other partitions.
+ .
+ At boot, the names and passphrases of all scubed3 partitions are asked
+ (in paranoia level 2 and 3 ALL of them must be opened), then the
+ passphrase of the LUKS volume of the root partition. A key store can
+ replace all of them by one passphrase, see "Key store" in the README of
+ scubed3.

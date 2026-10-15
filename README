@@ -268,6 +268,20 @@ files), and autoconf, automake and pkg-config:
 The programs are src/scubed3 and src/scubed3ctl.
 
 
+Root on scubed3
+~~~~~~~~~~~~~~~
+
+contrib/initramfs-tools has a hook and a script for initramfs-tools (Debian
+and derivatives): the initramfs starts scubed3, asks for the passphrases of
+the root partition and of the other partitions (in level 2 and 3 all must be
+open, their names are not stored), switches the paranoia level and sets up
+the root partition (with LUKS on it) as the root device. The daemon keeps
+running until the computer is switched off: it never opens a file by its
+path after its start (the base device is opened once and shared by all
+partitions, random data comes from getrandom(2)), systemd does not kill it
+at shutdown (it runs as @scubed3). See contrib/initramfs-tools/README.
+
+
 You need to provide a set of macroblocks to scubed3, to which it has read/write
 access. Normally this is either a file or a block device, but it may be
 anything. (you would, however, need to write a custom blockio_init_* function

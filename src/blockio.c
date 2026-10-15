@@ -38,19 +38,38 @@
 #include "gcry.h"
 #include "ecch.h"
 
-/* stream (FILE*) stuff */
+/* the base device (a file or a block device) is opened once (see
+ * blockio_init_file), everything that reads or writes it shares the file
+ * descriptor: pread and pwrite do not use the file position, so more
+ * threads can use it at the same time; after the start nothing is opened
+ * by its path anymore, so scubed3 keeps working when the root directory is
+ * switched under it (root on scubed3, see contrib/initramfs-tools) */
+typedef struct file_s {
+	int fd;
+} file_t;
 
-static void stream_io(void *fp, void *buf, uint64_t offset, uint32_t size,
-		size_t (*io)(), const char *rwing) {
-	assert(fp && ((!buf && !size) || (buf && size)) && io);
+/* read or write all of [offset, offset + size) */
+static int file_pio(int fd, void *buf, uint64_t offset, uint32_t size,
+		int write) {
+	ssize_t n;
 
-	if (fseeko(fp, offset, SEEK_SET))
-		FATAL("error seeking to byte %lu: %s",
-				offset, strerror(errno));
+	while (size) {
+		n = write?pwrite(fd, buf, size, offset):
+			pread(fd, buf, size, offset);
+		if (n < 0) {
+			if (errno == EINTR) continue;
+			return -1;
+		}
+		if (!n) { /* unexpected end of file */
+			errno = EIO;
+			return -1;
+		}
+		buf = (char*)buf + n;
+		offset += n;
+		size -= n;
+	}
 
-	if (io(buf, size, 1, fp) != 1)
-		FATAL("error %s %u bytes: %s", rwing, size,
-				strerror(errno));
+	return 0;
 }
 
 #ifdef SCUBED3_CRASH_TEST
@@ -86,27 +105,21 @@ static int bad_sector(uint64_t offset, uint32_t size, int write) {
 
 /* a read error is not fatal: the mesoblocks that cannot be read are
  * treated as corrupt */
-static int stream_read(void *fp, void *buf, uint64_t offset, uint32_t size) {
-	assert(fp && buf && size);
+static int file_read(void *h, void *buf, uint64_t offset, uint32_t size) {
+	assert(h && buf && size);
 #ifdef SCUBED3_CRASH_TEST
 	if (bad_sector(offset, size, 0)) {
 		errno = EIO;
 		return -1;
 	}
 #endif
-	if (fseeko(fp, offset, SEEK_SET)) return -1;
-
-	if (fread(buf, size, 1, fp) != 1) {
-		if (!ferror(fp)) errno = EIO; /* unexpected end of file */
-		clearerr(fp);
-		return -1;
-	}
-
-	return 0;
+	return file_pio(((file_t*)h)->fd, buf, offset, size, 0);
 }
 
-static void stream_write(void *fp, const void *buf, uint64_t offset,
+static void file_write(void *h, const void *buf, uint64_t offset,
 		uint32_t size) {
+	int fd = ((file_t*)h)->fd;
+	assert(h && buf && size);
 #ifdef SCUBED3_CRASH_TEST
 	/* testing only: simulate a crash before the Nth write */
 	static int writes = 0;
@@ -119,12 +132,11 @@ static void stream_write(void *fp, const void *buf, uint64_t offset,
 			srand(getpid() ^ time(NULL));
 			for (i = 0; i + 4096 <= size; i += 4096) {
 				if (rand()&1) continue;
-				if (fseeko(fp, offset + i, SEEK_SET) ||
-						fwrite(buf + i, 4096, 1, fp) != 1)
+				if (file_pio(fd, (char*)buf + i, offset + i,
+							4096, 1))
 					FATAL("tear: %s", strerror(errno));
 				written++;
 			}
-			fflush(fp);
 		}
 		WARNING("simulated crash before write %d (%u pieces of it "
 				"written)", writes, written);
@@ -132,31 +144,26 @@ static void stream_write(void *fp, const void *buf, uint64_t offset,
 	}
 	bad_sector(offset, size, 1);
 #endif
-	stream_io(fp, (void*)buf, offset, size, fwrite, "writing");
+	if (file_pio(fd, (void*)buf, offset, size, 1))
+		FATAL("error writing %u bytes at byte %lu: %s", size,
+				(unsigned long)offset, strerror(errno));
 }
 
 /* make everything written so far durable */
-static void stream_sync(void *fp) {
-	if (fflush(fp))
-		FATAL("error flushing: %s", strerror(errno));
-	if (fdatasync(fileno(fp)))
+static void file_sync(void *h) {
+	if (fdatasync(((file_t*)h)->fd))
 		FATAL("error syncing: %s", strerror(errno));
 }
 
-static void stream_close(void *fp) {
-	fclose(fp);
+/* all users share the file descriptor, it is closed by blockio_free */
+static void *file_open(const void *priv) {
+	return (void*)priv;
 }
 
-static void *stream_open(const char *path) {
-	void *ret;
-	if (!(ret = fopen(path, "r+")))
-		ecch_throw(ECCH_DEFAULT, "fopening %s: %s",
-				path, strerror(errno));
-
-	return ret;
+static void file_close(void *h) {
 }
 
-/* end stream stuff */
+/* end file stuff */
 
 #define BASE			(dev->tmp_macroblock)
 #define INDEXBLOCK_SHA256	(BASE + 0x000)
@@ -206,6 +213,10 @@ void blockio_free(blockio_t *b) {
 	free(b->blockio_infos);
 	free(b->devs);
 	random_free(&b->r);
+	if (b->open_priv) {
+		close(((file_t*)b->open_priv)->fd);
+		free(b->open_priv);
+	}
 	pthd_mutex_destroy(&b->unallocated_mutex);
 	pthd_mutex_destroy(&b->io_mutex);
 }
@@ -221,13 +232,16 @@ void blockio_init_file(blockio_t *b, const char *path, uint8_t macroblock_log,
 	struct stat stat_info;
 	struct flock lock;
 	uint64_t tmp;
-	void *priv; /* FILE* */
+	file_t *priv;
 	assert(b);
 	assert(sizeof(off_t)==8);
 	assert(macroblock_log < 8*sizeof(uint32_t));
 
-	b->open_priv = strdup(path);
-	if (!b->open_priv) FATAL("out of memory");
+	/* the base device is opened once, it stays open (and locked) */
+	priv = ecalloc(1, sizeof(*priv));
+	if ((priv->fd = open(path, O_RDWR|O_CLOEXEC)) == -1)
+		FATAL("opening %s: %s", path, strerror(errno));
+	b->open_priv = priv;
 	b->macroblock_log = macroblock_log;
 	b->macroblock_size = 1<<macroblock_log;
 	b->mesoblk_log = mesoblk_log;
@@ -253,30 +267,27 @@ void blockio_init_file(blockio_t *b, const char *path, uint8_t macroblock_log,
         VERBOSE("maximum amount of macroblocks supported %d",
 			b->max_macroblocks);
 
-	b->open = (void* (*)(const void*))stream_open;
-	b->read = stream_read;
-	b->write = stream_write;
-	b->close = stream_close;
-	b->sync = stream_sync;
+	b->open = file_open;
+	b->read = file_read;
+	b->write = file_write;
+	b->close = file_close;
+	b->sync = file_sync;
 
-	/* each scubed device has it's own handle
-	 * to the file (for thead safity), we open the
-	 * file here temporarily to look at it */
-	priv = stream_open(b->open_priv);
-
+	/* the lock is held as long as the file descriptor is open (closing
+	 * any file descriptor of the file would release it) */
 	lock.l_type = F_WRLCK;
 	lock.l_whence = SEEK_SET;
 	lock.l_start = 0;
 	lock.l_len = 0;  /* whole file */
 
-	if (fcntl(fileno(priv), F_SETLK, &lock) == -1) {
-		if (fcntl(fileno(priv), F_GETLK, &lock) == -1) assert(0);
+	if (fcntl(priv->fd, F_SETLK, &lock) == -1) {
+		if (fcntl(priv->fd, F_GETLK, &lock) == -1) assert(0);
 
 		FATAL("process with PID %d has already locked %s",
 				lock.l_pid, path);
 	}
 
-	if (stat(path, &stat_info) < 0)
+	if (fstat(priv->fd, &stat_info) < 0)
 		FATAL("unable to 'stat' file %s: %s", path, strerror(errno));
 
 	/* we support using a regular file or a block device as backend */
@@ -287,7 +298,7 @@ void blockio_init_file(blockio_t *b, const char *path, uint8_t macroblock_log,
 		b->total_macroblocks = stat_info.st_size>>b->macroblock_log;
 	} else if (S_ISBLK(stat_info.st_mode)) {
 		DEBUG("%s is a block device", path);
-		if (ioctl(fileno(priv), BLKGETSIZE64, &tmp))
+		if (ioctl(priv->fd, BLKGETSIZE64, &tmp))
 			FATAL("error querying size of blockdevice %s", path);
 
 	} else FATAL("%s is not a regular file or a block device", path);
@@ -313,7 +324,6 @@ void blockio_init_file(blockio_t *b, const char *path, uint8_t macroblock_log,
 	for (uint32_t i = 0; i < b->total_macroblocks; i++) 
 		dllarr_append(&b->unallocated, &b->blockio_infos[i]);
 
-	stream_close(priv);
 	pthd_mutex_init(&b->unallocated_mutex);
 
 	b->paranoia = 1;
@@ -1408,8 +1418,7 @@ static void blockio_write_random(blockio_t *b, void *io, blockio_info_t *bi) {
 	char *buf = ecalloc(1, 1<<b->macroblock_log);
 
 	DEBUG("write random data to free block %u", id);
-	if (fread(buf, 1<<b->macroblock_log, 1, b->r.fp) != 1)
-		FATAL("reading from /dev/urandom: %s", strerror(errno));
+	random_bytes(&b->r, buf, 1<<b->macroblock_log);
 	blockio_write_block(b, io, id, buf);
 	b->random_writes++;
 	free(buf);

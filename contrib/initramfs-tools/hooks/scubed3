@@ -1,0 +1,73 @@
+#!/bin/sh
+# initramfs-tools hook of scubed3: root on a scubed3 partition (see README)
+#
+# only active if /etc/scubed3/initramfs.conf exists; copies the daemon (as
+# /sbin/@scubed3, see scripts/local-top/scubed3), scubed3ctl, losetup, the
+# configuration files and the modules fuse and loop into the initramfs, and
+# cryptsetup with dm_mod and dm_crypt if cryptsetup is installed (for LUKS on
+# the root partition, cryptsetup-initramfs adds the rest)
+
+PREREQ=""
+prereqs() { echo "$PREREQ"; }
+case "$1" in
+prereqs)
+	prereqs
+	exit 0
+	;;
+esac
+
+. /usr/share/initramfs-tools/hook-functions
+
+CONF=/etc/scubed3/initramfs.conf
+[ -f "$CONF" ] || exit 0
+
+# the programs are looked for in these directories (update-initramfs may
+# run with a PATH without /usr/local, during an upgrade of the kernel)
+find_bin() {
+	for d in /usr/local/sbin /usr/local/bin /usr/sbin /usr/bin /sbin /bin; do
+		if [ -x "$d/$1" ]; then
+			echo "$d/$1"
+			return 0
+		fi
+	done
+	return 1
+}
+
+# without them the system does not boot: fail, so that the old initramfs is
+# kept
+for p in scubed3 scubed3ctl losetup; do
+	if ! find_bin $p > /dev/null; then
+		echo "E: scubed3 hook: $p not found, root on scubed3 needs it" >&2
+		exit 1
+	fi
+done
+
+# a process whose argv[0] starts with @ is not killed by systemd at
+# shutdown (a storage daemon for the root file system); the local-top script
+# starts it by this name
+copy_exec "$(find_bin scubed3)" /sbin/@scubed3
+copy_exec "$(find_bin scubed3ctl)" /sbin/scubed3ctl
+# util-linux losetup (-f --show), busybox has its own
+copy_exec "$(find_bin losetup)" /sbin/losetup-util
+
+copy_file config "$CONF" /conf/scubed3.conf
+# the KDF parameters (salt and iterations) and the recommended paranoia
+# level
+if [ -f /etc/scubed3.conf ]; then
+	copy_file config /etc/scubed3.conf /etc/scubed3.conf
+fi
+# readline of scubed3ctl (the questions it asks) works better with it
+for t in /usr/share/terminfo/l/linux /lib/terminfo/l/linux; do
+	if [ -f "$t" ]; then
+		copy_file terminfo "$t" "$t"
+	fi
+done
+
+manual_add_modules fuse loop
+
+if c=$(find_bin cryptsetup); then
+	copy_exec "$c" /sbin/cryptsetup
+	manual_add_modules dm_mod dm_crypt
+fi
+
+exit 0

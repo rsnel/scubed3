@@ -22,10 +22,12 @@
 #include <stdint.h>
 
 typedef struct random_s {
-	FILE *fp;
+	int init;
 } random_t;
 
 void random_init(random_t*);
+
+void random_bytes(random_t*, void*, size_t);
 
 uint32_t random_uint32(random_t*);
 

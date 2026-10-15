@@ -1,0 +1,19 @@
+# /etc/scubed3/initramfs.conf: root on a scubed3 partition (see README);
+# the hook of scubed3 is only active if this file exists, it is copied into
+# the initramfs (it is readable by anyone who has the boot partition)
+
+# the base device, by a name that does not change between boots
+BASE=/dev/disk/by-partuuid/00000000-0000-0000-0000-000000000000
+
+# the scubed3 partition with the root file system (this name is stored, the
+# names of the other partitions are asked at boot)
+ROOT_PARTITION=root
+
+# options of the daemon: the same -m and -M as always (the sizes are not
+# stored), -r KIBPS for paranoia level 3, FUSE options
+OPTIONS=""
+
+# the paranoia level after all partitions are opened (default: paranoia= in
+# /etc/scubed3.conf, otherwise 2), and the rate of level 3 in KiB/s
+#PARANOIA=2
+#RATE=800

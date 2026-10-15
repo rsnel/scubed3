@@ -3,20 +3,36 @@
 #include<string.h>
 #include<assert.h>
 #include<errno.h>
+#include<sys/random.h>
 #include"verbose.h"
 #include"random.h"
 
-
+/* the random numbers come from getrandom(2) (the same source as
+ * /dev/urandom, but no file is opened: scubed3 must not open files by their
+ * path after the start, see file_t in blockio.c; it waits until the random
+ * generator of the kernel is initialized, early during a boot) */
 void random_init(random_t *r) {
-	if (!(r->fp = fopen("/dev/urandom", "r")))
-		FATAL("opening /dev/urandom: %s", strerror(errno));
+	r->init = 1;
+}
+
+void random_bytes(random_t *r, void *buf, size_t len) {
+	ssize_t n;
+
+	assert(r->init);
+	while (len) {
+		if ((n = getrandom(buf, len, 0)) < 0) {
+			if (errno == EINTR) continue;
+			FATAL("getrandom: %s", strerror(errno));
+		}
+		buf = (char*)buf + n;
+		len -= n;
+	}
 }
 
 uint32_t random_uint32(random_t *r) {
 	uint32_t ret;
 
-	if (fread(&ret, sizeof(ret), 1, r->fp) != 1)
-                FATAL("reading from /dev/urandom: %s", strerror(errno));
+	random_bytes(r, &ret, sizeof(ret));
 
         return ret;
 }
@@ -61,7 +77,5 @@ uint32_t random_custom(random_t *r, uint32_t count) {
 }
 
 void random_free(random_t *r) {
-	// we can't handle errors in cleanup functions
-	if (r->fp && fclose(r->fp) == EOF)
-		WARNING("closing /dev/urandom: %s", strerror(errno));
+	r->init = 0;
 }

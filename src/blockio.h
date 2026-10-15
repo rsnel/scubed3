@@ -231,7 +231,7 @@ struct blockio_s {
 	blockio_info_t *blockio_infos;
 
 	void *(*open)(const void*);
-	void *open_priv; /* filename, required for open */
+	void *open_priv; /* the base device, required for open */
 	int (*read)(void*, void*, uint64_t, uint32_t); /* -1 on error */
 	void (*write)(void*, const void*, uint64_t, uint32_t);
 	void (*close)(void*);

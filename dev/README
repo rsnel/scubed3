@@ -179,6 +179,26 @@ configtest.sh DAEMON SCUBED3CTL
 	errors in the file are fatal, also an invalid paranoia= (uses
 	script(1) to type the passphrase).
 
+rootswitchtest.py DAEMON SEED
+	scubed3 keeps working when its root directory is emptied after its
+	start (root on scubed3: run-init deletes the files of the initramfs):
+	the daemon is started in a chroot with its libraries, /dev/fuse,
+	/dev/urandom and the base file, then everything in the chroot is
+	deleted; partitions are created, written, closed, opened again and
+	read, also in paranoia level 3; afterwards a normal daemon finds the
+	data in the base file (a hard link outside the chroot).
+
+initramfstest.sh DAEMON SCUBED3CTL
+	The local-top script of contrib/initramfs-tools in a simulated
+	initramfs (its paths point into a temporary directory, a stand-in for
+	/scripts/functions, the answers typed with script(1)): a wrong
+	passphrase is asked again, another partition is opened, Yes for level
+	2; afterwards ROOT in param.conf is a loop device with the file system
+	of the root partition, the daemon runs as @scubed3 (with oom_score_adj
+	-1000, where that can be set), both partitions are open, level 2.
+	Uses /dev/scubed3fs and /run/scubed3/control (like a boot), no other
+	daemon may run.
+
 lukstest.sh DAEMON SCUBED3CTL
 	LUKS on top of a partition with scubed3ctl, and the warning below the
 	recommended paranoia level: in level 1 mount and luksformat warn, an

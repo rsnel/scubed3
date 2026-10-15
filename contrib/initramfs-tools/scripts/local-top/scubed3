@@ -1,0 +1,128 @@
+#!/bin/sh
+# initramfs-tools local-top script of scubed3: root on a scubed3 partition
+# (see README)
+#
+# 1. the daemon is started on the base device (BASE), as @scubed3: systemd
+#    does not kill a process whose argv[0] starts with @ at shutdown (it is
+#    a storage daemon for the root file system); it keeps running after the
+#    switch to the real root: it opens nothing by its path after its start,
+#    its mount point is below /dev and its control socket below /run, the
+#    initramfs moves both to the real root
+# 2. the root partition (ROOT_PARTITION) is opened, its passphrase is asked
+# 3. the names of the other partitions are asked: in paranoia level 2 and 3
+#    ALL partitions must be open, their names are not stored anywhere
+# 4. the paranoia level is switched (PARANOIA, or paranoia= in
+#    /etc/scubed3.conf, default 2), before anything is written
+# 5. the root partition becomes a block device: with LUKS on it
+#    /dev/mapper/scubed3-ROOT_PARTITION (its passphrase is asked), otherwise
+#    a loop device; ROOT is set to it
+
+PREREQ=""
+prereqs() { echo "$PREREQ"; }
+case "$1" in
+prereqs)
+	prereqs
+	exit 0
+	;;
+esac
+
+. /scripts/functions
+
+[ -f /conf/scubed3.conf ] || exit 0
+. /conf/scubed3.conf
+
+MNT=/dev/scubed3fs
+SOCK=/run/scubed3/control
+
+msg() { echo "scubed3: $*" >&2; }
+ctl() { /sbin/scubed3ctl "$@"; }
+
+if [ -z "$BASE" ] || [ -z "$ROOT_PARTITION" ]; then
+	panic "scubed3: BASE and ROOT_PARTITION must be set in /etc/scubed3/initramfs.conf"
+fi
+
+# the questions must be visible
+if command -v plymouth > /dev/null && plymouth --ping; then
+	plymouth hide-splash
+fi
+
+# the base device may appear late
+i=0
+while [ ! -e "$BASE" ]; do
+	[ $i = 0 ] && msg "waiting for $BASE"
+	i=$((i + 1))
+	[ $i -gt 30 ] && panic "scubed3: $BASE does not appear"
+	sleep 1
+done
+
+modprobe -q fuse
+modprobe -q loop
+mkdir -p $MNT
+
+# 1. the daemon (the PATH lookup keeps the name @scubed3 as argv[0])
+if ! PATH=/sbin:$PATH @scubed3 -b "$BASE" $OPTIONS $MNT; then
+	panic "scubed3: the daemon did not start"
+fi
+i=0
+while [ ! -S $SOCK ]; do
+	i=$((i + 1))
+	[ $i -gt 100 ] && panic "scubed3: the daemon does not listen on $SOCK"
+	sleep 0.1 2> /dev/null || sleep 1
+done
+# the root file system depends on it: never kill it when memory is short
+for p in /proc/[0-9]*; do
+	if [ "$(cat $p/comm 2> /dev/null)" = "@scubed3" ]; then
+		echo -1000 2> /dev/null > $p/oom_score_adj
+	fi
+done
+
+# 2. the root partition
+i=0
+while [ ! -e "$MNT/$ROOT_PARTITION" ]; do
+	i=$((i + 1))
+	[ $i -gt 3 ] && panic "scubed3: partition $ROOT_PARTITION is not opened"
+	msg "partition $ROOT_PARTITION"
+	ctl -c "open $ROOT_PARTITION"
+done
+
+# 3. the other partitions (their names are asked, not stored)
+msg "in paranoia level 2 and 3 ALL partitions must be open:"
+msg "open the other partitions of $BASE now"
+while :; do
+	printf "scubed3: name of another partition (empty when done): " >&2
+	read name || break
+	[ -z "$name" ] && break
+	ctl -c "open $name"
+done
+
+# 4. the paranoia level (scubed3ctl asks for confirmation, it shows the open
+# partitions)
+level=$PARANOIA
+if [ -z "$level" ] && [ -f /etc/scubed3.conf ]; then
+	level=$(sed -n 's/^[[:space:]]*paranoia[[:space:]]*=[[:space:]]*\([0-3]\)[[:space:]]*$/\1/p' /etc/scubed3.conf)
+fi
+[ -z "$level" ] && level=2
+if [ "$level" -ge 2 ]; then
+	ctl -c "paranoia $level${RATE:+ $RATE}"
+fi
+if ! ctl -c p | grep -q "paranoia level $level "; then
+	msg "WARNING: the paranoia level is not $level, what is written now"
+	msg "shows which blocks belong to which partition"
+fi
+
+# 5. the block device of the root partition
+if [ -x /sbin/cryptsetup ] && /sbin/cryptsetup isLuks "$MNT/$ROOT_PARTITION"; then
+	dev=/dev/mapper/scubed3-$ROOT_PARTITION
+	i=0
+	until /sbin/cryptsetup open "$MNT/$ROOT_PARTITION" scubed3-$ROOT_PARTITION; do
+		i=$((i + 1))
+		[ $i -ge 3 ] && panic "scubed3: the LUKS volume on $ROOT_PARTITION is not opened"
+	done
+else
+	dev=$(/sbin/losetup-util -f --show "$MNT/$ROOT_PARTITION") ||
+		panic "scubed3: no loop device for $ROOT_PARTITION"
+fi
+msg "the root file system is on $dev"
+echo "ROOT=$dev" >> /conf/param.conf
+
+exit 0

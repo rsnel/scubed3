@@ -32,6 +32,8 @@ run trunc python3 -u $T/truncatetest.py scubed3
 run config sh $T/configtest.sh ./scubed3 ./scubed3ctl
 run socket sh $T/sockettest.sh ./scubed3 ./scubed3ctl
 run luks sh $T/lukstest.sh ./scubed3 ./scubed3ctl
+run rootswitch python3 -u $T/rootswitchtest.py scubed3 18
+run initramfs sh $T/initramfstest.sh ./scubed3 ./scubed3ctl
 run size python3 -u $T/sizetest.py scubed3
 run resizestat python3 -u $T/resizestat.py scubed3-crash 1500 11
 run level0 python3 -u $T/level0test.py scubed3-crash 3

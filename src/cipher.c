@@ -116,6 +116,18 @@ void cipher_dec(cipher_t *w, char *out,
 	w->spec->dec(w->ctx, out, in, iv);
 }
 
+/* decrypt the first len bytes (a multiple of 16) of a mesoblock, they are
+ * the same as the first len bytes of cipher_dec */
+void cipher_dec_prefix(cipher_t *w, char *out,
+		const char *in, size_t len, uint64_t iv0, uint32_t iv1,
+		uint32_t iv2) {
+	char iv[16];
+
+	assert(w && w->spec && w->spec->dec_prefix && w->ctx && !(len%16));
+	set_iv(iv, iv0, iv1, iv2);
+	w->spec->dec_prefix(w->ctx, out, in, iv, len/16);
+}
+
 void cipher_free(cipher_t *w) {
 	assert(w);
 	if (w->spec && w->spec->free && w->ctx)

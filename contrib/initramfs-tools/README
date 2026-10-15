@@ -17,7 +17,8 @@ What happens at boot (scripts/local-top/scubed3):
 
 1. scubed3 is started on BASE, with its mount point /dev/scubed3fs and its
    control socket /run/scubed3/control
-2. the root partition (ROOT_PARTITION) is opened, its passphrase is asked
+2. the root partition is opened: ROOT_PARTITION, or if that is not set
+   (the default) its name is asked; then its passphrase
 3. the names of the other partitions are asked, one by one (empty when
    done), and their passphrases: in paranoia level 2 and 3 ALL partitions
    must be open, their names are not stored anywhere
@@ -58,8 +59,9 @@ Installation
 
 3. Copy the three files (see above, the scripts executable) in the new
    system, set BASE (a name that does not change: /dev/disk/by-partuuid/...
-   or /dev/disk/by-id/...), ROOT_PARTITION and OPTIONS (the same -m and -M as
-   always) in /etc/scubed3/initramfs.conf, and copy /etc/scubed3.conf (the
+   or /dev/disk/by-id/...) and OPTIONS (the same -m and -M as always) in
+   /etc/scubed3/initramfs.conf (and ROOT_PARTITION, if you want to store the
+   name of the root partition), and copy /etc/scubed3.conf (the
    salt and the iterations). Then, chrooted in the new system:
 
 	# update-initramfs -u -k all
@@ -110,9 +112,11 @@ Limitations
 ~~~~~~~~~~~
 
 - The boot partition is not hidden: the initramfs shows that scubed3 is
-  used, the base device, and the name of the root partition (not the names
-  of the other partitions, they are asked at boot). The root partition is
-  the one whose existence you can admit; hide the others.
+  used and which device is the base device (the threat model assumes that
+  anyway), and the name of the root partition if ROOT_PARTITION is set.
+  Without it no name is stored: there can be more than one root partition
+  (one you can admit and a hidden one), you choose at boot by name and
+  passphrase; all of them are opened at boot anyway (level 2 and 3).
 - No swap on scubed3, and avoid running out of memory: the kernel writes
   dirty pages of the root file system through the daemon, which needs memory
   to do that (a known limit of root file systems on FUSE). Swap on zram, or

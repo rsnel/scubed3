@@ -1,2 +1,0 @@
-opening a partition reads the index of every macroblock of the base device,
-that is slow for large base devices

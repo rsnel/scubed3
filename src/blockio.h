@@ -44,6 +44,10 @@ typedef struct blockio_info_s blockio_info_t;
 
 #include "juggler.h"
 
+/* the start of the index that is decrypted to check the magic (at 0x70,
+ * see README, Layout of macroblock) */
+#define BLOCKIO_HEADER 128
+
 
 typedef struct blockio_s blockio_t;
 
@@ -233,6 +237,8 @@ struct blockio_s {
 	void *(*open)(const void*);
 	void *open_priv; /* the base device, required for open */
 	int (*read)(void*, void*, uint64_t, uint32_t); /* -1 on error */
+	/* optional: [offset, offset + size) will be read soon */
+	void (*prefetch)(void*, uint64_t, uint32_t);
 	void (*write)(void*, const void*, uint64_t, uint32_t);
 	void (*close)(void*);
 	void (*sync)(void*);
@@ -251,6 +257,15 @@ struct blockio_s {
 	 * one (one partition may write blocks of another one): this lock is
 	 * taken before the lock of a partition by everything that may write */
 	pthread_mutex_t io_mutex;
+
+	/* the first BLOCKIO_HEADER bytes of every block (ciphertext, the
+	 * start of its index, with the magic): read once (header_valid), and
+	 * updated by every write, so opening a partition only decrypts them to
+	 * find its blocks (see blockio_dev_maybe_ours), the base device is not
+	 * read again for every partition; protected by io_mutex (opening a
+	 * partition and every write hold it) */
+	unsigned char *headers;
+	bitmap_t header_valid;
 
 	/* statistics: blocks of the free space written with random data */
 	uint64_t random_writes;

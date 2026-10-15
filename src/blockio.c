@@ -149,6 +149,12 @@ static void file_write(void *h, const void *buf, uint64_t offset,
 				(unsigned long)offset, strerror(errno));
 }
 
+/* the kernel starts reading it now, many of these reads are done at the
+ * same time (the start of the index of every block, see blockio_dev_init) */
+static void file_prefetch(void *h, uint64_t offset, uint32_t size) {
+	posix_fadvise(((file_t*)h)->fd, offset, size, POSIX_FADV_WILLNEED);
+}
+
 /* make everything written so far durable */
 static void file_sync(void *h) {
 	if (fdatasync(((file_t*)h)->fd))
@@ -211,6 +217,8 @@ static uint64_t mesoblk_hash(const void *ciphertext, size_t size) {
 void blockio_free(blockio_t *b) {
 	assert(b);
 	free(b->blockio_infos);
+	free(b->headers);
+	bitmap_free(&b->header_valid);
 	free(b->devs);
 	random_free(&b->r);
 	if (b->open_priv) {
@@ -269,6 +277,7 @@ void blockio_init_file(blockio_t *b, const char *path, uint8_t macroblock_log,
 
 	b->open = file_open;
 	b->read = file_read;
+	b->prefetch = file_prefetch;
 	b->write = file_write;
 	b->close = file_close;
 	b->sync = file_sync;
@@ -319,6 +328,8 @@ void blockio_init_file(blockio_t *b, const char *path, uint8_t macroblock_log,
 
 	b->blockio_infos = ecalloc(sizeof(blockio_info_t),
 			b->total_macroblocks);
+	b->headers = ecalloc(b->total_macroblocks, BLOCKIO_HEADER);
+	bitmap_init(&b->header_valid, b->total_macroblocks);
 
 	dllarr_init(&b->unallocated, offsetof(blockio_info_t, ur));
 	for (uint32_t i = 0; i < b->total_macroblocks; i++) 
@@ -366,6 +377,26 @@ static int magic_ok(const void *p) {
  * with their seqnos) */
 static uint64_t blockio_iv0(blockio_info_t *bi) {
 	return bi->seqno^bi->nonce;
+}
+
+static int blockio_get_header(blockio_t*, void*, uint32_t, unsigned char*);
+
+/* can the index of block id belong to the partition (to its key)? most
+ * blocks do not: only the start of the index is decrypted (with CBC the
+ * first cipherblocks do not depend on the rest), its magic must be right
+ * (a random block has it with probability 2^-64), then the whole index is
+ * read and checked; 1 if it can, 0 if not, -1 if it cannot be read */
+static int blockio_dev_maybe_ours(blockio_dev_t *dev, uint32_t id) {
+	unsigned char buf[BLOCKIO_HEADER];
+	int ret;
+
+	if (blockio_get_header(dev->b, dev->io, id, buf)) return -1;
+	cipher_dec_prefix(dev->c, (char*)buf, (char*)buf, BLOCKIO_HEADER,
+			0, 0, id);
+	ret = magic_ok(buf + 0x070);
+	wipememory(buf, BLOCKIO_HEADER);
+
+	return ret;
 }
 
 static void blockio_dev_take_index(blockio_dev_t*);
@@ -862,6 +893,14 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 	 * of unallocated blocks */
 	pthd_mutex_lock(&b->unallocated_mutex);
 
+	/* the start of the index of every block that is not in the cache
+	 * (see blockio_t) is read: all reads are started first, then they
+	 * are done at the same time, much faster than one by one */
+	if (b->prefetch) for (i = 0; i < b->total_macroblocks; i++)
+		if (!bitmap_getbit(&b->header_valid, i))
+			b->prefetch(dev->io, ((uint64_t)i)<<b->macroblock_log,
+					BLOCKIO_HEADER);
+
 	for (i = 0; i < b->total_macroblocks; i++)
 		blockio_dev_scan_header(&dev->replay, dev,
 				dev->b->blockio_infos + i, &seqno);
@@ -1134,8 +1173,18 @@ void blockio_dev_scan_header(dllarr_t *replay, blockio_dev_t *dev,
 	}
 
 	/* read header, if that fails, the block may be ours, that is only
-	 * known when the bitmap is known (see blockio_dev_init) */
+	 * known when the bitmap is known (see blockio_dev_init); most blocks
+	 * are not ours, that is seen from the start of their index */
 	bi->unreadable = 0;
+	switch (blockio_dev_maybe_ours(dev, no)) {
+	case 0:
+		return;
+	case -1:
+		WARNING("error reading index of block %u: %s", no,
+				strerror(errno));
+		bi->unreadable = 1;
+		return;
+	}
 	if (dev->b->read(dev->io, BASE, ((off_t)no)<<dev->b->macroblock_log,
 			1<<dev->b->mesoblk_log)) {
 		WARNING("error reading index of block %u: %s", no,
@@ -1408,6 +1457,28 @@ static void blockio_write_block(blockio_t *b, void *io, uint32_t id,
 	b->sync(io);
 	b->write(io, buf, offset, meso);
 	b->sync(io);
+
+	/* the start of the index, for blockio_dev_maybe_ours */
+	memcpy(b->headers + ((size_t)id)*BLOCKIO_HEADER, buf, BLOCKIO_HEADER);
+	if (!bitmap_getbit(&b->header_valid, id))
+		bitmap_setbit_safe(&b->header_valid, id);
+}
+
+/* the start of the index of block id (ciphertext): from the cache, it is
+ * read from the base device the first time (see blockio_t); -1 if it
+ * cannot be read */
+static int blockio_get_header(blockio_t *b, void *io, uint32_t id,
+		unsigned char *buf) {
+	unsigned char *h = b->headers + ((size_t)id)*BLOCKIO_HEADER;
+
+	if (!bitmap_getbit(&b->header_valid, id)) {
+		if (b->read(io, h, ((off_t)id)<<b->macroblock_log,
+					BLOCKIO_HEADER)) return -1;
+		bitmap_setbit_safe(&b->header_valid, id);
+	}
+	memcpy(buf, h, BLOCKIO_HEADER);
+
+	return 0;
 }
 
 /* paranoia level 2: overwrite a free block with random data, it looks the
@@ -1442,9 +1513,12 @@ static void blockio_dev_release_wiped(blockio_dev_t *dev, blockio_info_t *bi) {
 /* does the (free) block have an index of this partition? */
 static int blockio_dev_has_index(blockio_dev_t *dev, blockio_info_t *bi) {
 	uint32_t no = bi - dev->b->blockio_infos;
-	unsigned char *buf = ecalloc(1, 1<<dev->b->mesoblk_log);
+	unsigned char *buf;
 	char sha256[32];
 	int ret = 0;
+
+	if (blockio_dev_maybe_ours(dev, no) != 1) return 0;
+	buf = ecalloc(1, 1<<dev->b->mesoblk_log);
 
 	if (dev->b->read(dev->io, buf, ((off_t)no)<<dev->b->macroblock_log,
 				1<<dev->b->mesoblk_log)) goto out;
@@ -1969,6 +2043,21 @@ void blockio_dev_write_current_macroblock(blockio_dev_t *dev) {
 	/* a new nonce for every write (see blockio_iv0) */
 	dev->bi->nonce = ((uint64_t)random_uint32(&dev->r)<<32)|
 		random_uint32(&dev->r);
+#ifdef SCUBED3_CRASH_TEST
+	/* testing only: log the IV of every block write, before the write
+	 * (see dev/ivtest.py) */
+	{
+		static FILE *ivlog = NULL;
+		if (!ivlog && getenv("SCUBED3_IV_LOG"))
+			ivlog = fopen(getenv("SCUBED3_IV_LOG"), "a");
+		if (ivlog) {
+			fprintf(ivlog, "%s %u %lu %lu\n", dev->name, id,
+					(unsigned long)dev->bi->seqno,
+					(unsigned long)dev->bi->nonce);
+			fflush(ivlog);
+		}
+	}
+#endif
 
 	/* encrypt datablocks (also the unused ones), the plaintext
 	 * stays in tmp_macroblock, store the hash of each ciphertext
@@ -2125,9 +2214,12 @@ void blockio_prepare_block(blockio_info_t *bi) {
  * need tombstones (see scubed3_readded) */
 static void blockio_dev_check_readded(blockio_dev_t *dev, blockio_info_t *bi) {
 	uint32_t no = blockio_get_macroblock_index(bi), n, k;
-	unsigned char *buf = ecalloc(1, 1<<dev->b->mesoblk_log);
+	unsigned char *buf;
 	char sha256[32];
 	uint64_t seqno;
+
+	if (blockio_dev_maybe_ours(dev, no) != 1) return;
+	buf = ecalloc(1, 1<<dev->b->mesoblk_log);
 
 	if (dev->b->read(dev->io, buf, ((off_t)no)<<dev->b->macroblock_log,
 				1<<dev->b->mesoblk_log)) goto out;

@@ -2,9 +2,10 @@
 # initramfstest.sh - the local-top script of contrib/initramfs-tools (root on
 # scubed3) in a simulated initramfs: its paths point into a temporary
 # directory, /scripts/functions is a stand-in (panic), the answers are typed
-# on a terminal (script(1)): a wrong passphrase of the root partition, the
-# right one, the name and passphrase of another partition, an empty name,
-# Yes for paranoia level 2
+# on a terminal (script(1)): the name of the root partition (ROOT_PARTITION
+# is not set), a wrong passphrase, the name again and the right passphrase,
+# the name and passphrase of another partition, an empty name, Yes for
+# paranoia level 2
 #
 # afterwards: ROOT in conf/param.conf is a loop device with the file system
 # of the root partition, the daemon runs as @scubed3 (argv[0]) with
@@ -32,7 +33,7 @@ cat > $P/scripts/functions <<EOF
 panic() { echo "PANIC: \$*"; exit 1; }
 EOF
 printf 'iterations=1000\nparanoia=2\n' > $P/etc/scubed3.conf
-printf 'BASE=%s\nROOT_PARTITION=root\nOPTIONS="-m 12 -M 16"\n' $P/base > $P/conf/scubed3.conf
+printf 'BASE=%s\nOPTIONS="-m 12 -M 16"\n' $P/base > $P/conf/scubed3.conf
 cp $D "$P/sbin/@scubed3"
 printf '#!/bin/sh\nexec %s -C %s/etc/scubed3.conf "$@"\n' $C $P > $P/sbin/scubed3ctl
 chmod +x $P/sbin/scubed3ctl
@@ -63,7 +64,7 @@ $P/sbin/scubed3ctl -c "close root" > /dev/null; $P/sbin/scubed3ctl -c "close hid
 $FUSERMOUNT -u /mnt/s3; sleep 1
 
 # the boot
-typed "sh $P/local-top" bad pw hidden hpw "" Yes
+typed "sh $P/local-top" root bad root pw hidden hpw "" Yes
 cp $P/out $P/boot.out
 grep -q PANIC $P/out && fail "panic"
 grep -q "ROOT=/dev/loop" $P/conf/param.conf || fail "ROOT is not set: $(cat $P/conf/param.conf 2>&1)"

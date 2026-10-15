@@ -8,7 +8,9 @@
 #    switch to the real root: it opens nothing by its path after its start,
 #    its mount point is below /dev and its control socket below /run, the
 #    initramfs moves both to the real root
-# 2. the root partition (ROOT_PARTITION) is opened, its passphrase is asked
+# 2. the root partition is opened (ROOT_PARTITION, if it is not set its name
+#    is asked: there may be more than one root partition), its passphrase
+#    is asked
 # 3. the names of the other partitions are asked: in paranoia level 2 and 3
 #    ALL partitions must be open, their names are not stored anywhere
 # 4. the paranoia level is switched (PARANOIA, or paranoia= in
@@ -37,8 +39,8 @@ SOCK=/run/scubed3/control
 msg() { echo "scubed3: $*" >&2; }
 ctl() { /sbin/scubed3ctl "$@"; }
 
-if [ -z "$BASE" ] || [ -z "$ROOT_PARTITION" ]; then
-	panic "scubed3: BASE and ROOT_PARTITION must be set in /etc/scubed3/initramfs.conf"
+if [ -z "$BASE" ]; then
+	panic "scubed3: BASE must be set in /etc/scubed3/initramfs.conf"
 fi
 
 # the questions must be visible
@@ -76,14 +78,21 @@ for p in /proc/[0-9]*; do
 	fi
 done
 
-# 2. the root partition
+# 2. the root partition (its name is asked if it is not configured)
+root=$ROOT_PARTITION
 i=0
-while [ ! -e "$MNT/$ROOT_PARTITION" ]; do
+while [ -z "$root" ] || [ ! -e "$MNT/$root" ]; do
 	i=$((i + 1))
-	[ $i -gt 3 ] && panic "scubed3: partition $ROOT_PARTITION is not opened"
-	msg "partition $ROOT_PARTITION"
-	ctl -c "open $ROOT_PARTITION"
+	[ $i -gt 3 ] && panic "scubed3: no root partition is opened"
+	if [ -z "$ROOT_PARTITION" ]; then
+		printf "scubed3: name of the root partition: " >&2
+		read root || panic "scubed3: no root partition"
+		[ -z "$root" ] && continue
+	else msg "partition $root"
+	fi
+	ctl -c "open $root"
 done
+ROOT_PARTITION=$root
 
 # 3. the other partitions (their names are asked, not stored)
 msg "in paranoia level 2 and 3 ALL partitions must be open:"

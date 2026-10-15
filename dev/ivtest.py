@@ -8,7 +8,8 @@
 #     backup is restored and the partition is written again (the seqnos
 #     repeat, the first write goes to the same block as before)
 #  2. kill -9 with a torn write at a random moment, a restart, more writes
-#     (the torn block is ignored, its write is redone with the same seqno)
+#     (the interrupted write is redone with the same seqno; scubed3-crash
+#     logs the IV of every block write, see SCUBED3_IV_LOG)
 #  3. a base device written by an older scubed3 (SSS3v0.4, no nonce) is
 #     opened, read and written: both versions of blocks are read
 #
@@ -162,11 +163,18 @@ check(s > 0, "the seqnos repeat (the test makes sense)")
 check(i == 0, "no IV is used twice (%d)" % i)
 
 # ------------------------------------------------------------- 2. torn
+# every block is written in two steps (data, then index, see README,
+# Durability): an interrupted write leaves the new data under the old
+# index, the redo writes the same block with the same seqno; that is not
+# seen in the indices, so scubed3-crash logs every block write (partition,
+# block, seqno, nonce) to SCUBED3_IV_LOG, before the write
 print("2. kill -9 with a torn write, the write is redone", flush=True)
+ivlog = B + "/iv.ivlog"
+if os.path.exists(ivlog): os.unlink(ivlog)
+os.environ["SCUBED3_IV_LOG"] = ivlog
 fresh(); create()
 fd = opent("a", os.O_RDWR); write_round(fd, 200); os.close(fd)
-cmd("close a"); stop(); record()
-torn = 0
+cmd("close a"); stop()
 for r in range(10):
     start(crash_after=rng.randint(1, 15), tear=True)
     cmd("open-internal a CBC_ESSIV(AES256) %s" % K)
@@ -178,12 +186,19 @@ for r in range(10):
     try: P.wait(timeout=10)
     except subprocess.TimeoutExpired: P.kill(); P.wait()
     subprocess.run([FUSERMOUNT, "-u", "-z", MNT], capture_output=True)
-    record()                        # the torn block (if its index got through)
     start(); cmd("open-internal a CBC_ESSIV(AES256) %s" % K)
-    fd = opent("a", os.O_RDWR); write_round(fd, 20); os.close(fd); record()
+    fd = opent("a", os.O_RDWR); write_round(fd, 20); os.close(fd)
     cmd("close a"); stop()
-s, i = repeats()
-print("   %d writes of a block with a seqno that was used before for it" % s, flush=True)
+del os.environ["SCUBED3_IV_LOG"]
+seen_seq, seen_iv = {}, {}
+for l in open(ivlog):
+    name, blk, seq, nonce = l.split(); blk, seq, nonce = int(blk), int(seq), int(nonce)
+    seen_seq[(name, blk, seq)] = seen_seq.get((name, blk, seq), 0) + 1
+    seen_iv[(name, blk, seq ^ nonce)] = seen_iv.get((name, blk, seq ^ nonce), 0) + 1
+os.unlink(ivlog)
+s = sum(1 for v in seen_seq.values() if v > 1); i = sum(1 for v in seen_iv.values() if v > 1)
+print("   %d block writes logged, %d times a seqno was used again for a block" %
+      (sum(seen_seq.values()), s), flush=True)
 check(s > 0, "the seqnos repeat (the test makes sense)")
 check(i == 0, "no IV is used twice (%d)" % i)
 

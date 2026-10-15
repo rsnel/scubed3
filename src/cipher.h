@@ -39,6 +39,8 @@ typedef struct cipher_spec_s {
 	void *(*init)(const char*, size_t, const void*, size_t);
 	void (*enc)(void*, char*, const char*, const char*);
 	void (*dec)(void*, char*, const char*, const char*);
+	/* decrypt only the first n cipherblocks (possible with CBC) */
+	void (*dec_prefix)(void*, char*, const char*, const char*, size_t);
 	void (*free)(void*);
 	const char *name;
 } cipher_spec_t;
@@ -57,6 +59,9 @@ void cipher_init(cipher_t*, const char*, size_t, const void*, size_t);
 void cipher_enc(cipher_t*, char*, const char*, uint64_t, uint32_t, uint32_t);
 
 void cipher_dec(cipher_t*, char*, const char*, uint64_t, uint32_t, uint32_t);
+
+void cipher_dec_prefix(cipher_t*, char*, const char*, size_t, uint64_t,
+		uint32_t, uint32_t);
 
 void cipher_free(cipher_t*);
 

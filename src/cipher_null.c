@@ -32,6 +32,11 @@ static void null_cipher(void *priv, char *out,
 	if (in != out) memmove(out, in, (size_t)priv*16);
 }
 
+static void null_prefix(void *priv, char *out,
+		const char *in, const char *iv, size_t n) {
+	if (in != out) memmove(out, in, n*16);
+}
+
 static void null_free(void *priv) {
 }
 
@@ -39,6 +44,7 @@ const cipher_spec_t cipher_null = {
 	.init = null_init,
 	.enc = null_cipher,
 	.dec = null_cipher,
+	.dec_prefix = null_prefix,
 	.free = null_free,
 	.name = "NULL"
 };

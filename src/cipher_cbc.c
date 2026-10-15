@@ -105,13 +105,14 @@ static void enc_essiv(void *priv, char *out,
 	enc_plain(ctx->plain, out, in, newiv);
 }
 
-static void dec_plain(void *priv, char *out,
-		const char *in, const char *iv) {
-	cbc_plain_t *ctx = priv;
+/* decrypt the first n blocks (with CBC they do not depend on the blocks
+ * after them) */
+static void dec_plain_n(cbc_plain_t *ctx, char *out,
+		const char *in, const char *iv, size_t n) {
 	block_t tmp, tmp2;
 	const char *gcry_in = in;
 	size_t gcry_inlen = 16;
-	int i = ctx->no_blocks;
+	size_t i = n;
 
 	if (out == in) {
 		gcry_in = NULL;
@@ -134,6 +135,21 @@ static void dec_plain(void *priv, char *out,
 	wipememory(tmp2, 16);
 }
 
+static void dec_plain(void *priv, char *out,
+		const char *in, const char *iv) {
+	cbc_plain_t *ctx = priv;
+
+	dec_plain_n(ctx, out, in, iv, ctx->no_blocks);
+}
+
+static void dec_prefix_plain(void *priv, char *out,
+		const char *in, const char *iv, size_t n) {
+	cbc_plain_t *ctx = priv;
+
+	assert(n <= ctx->no_blocks);
+	dec_plain_n(ctx, out, in, iv, n);
+}
+
 static void dec_essiv(void *priv, char *out,
 		const char *in, const char *iv) {
 	block_t newiv;
@@ -142,6 +158,15 @@ static void dec_essiv(void *priv, char *out,
 	gcry_call(cipher_encrypt, ctx->hd, newiv, 16, iv, 16);
 	//verbose_md5((const char*)newiv);
 	dec_plain(ctx->plain, out, in, newiv);
+}
+
+static void dec_prefix_essiv(void *priv, char *out,
+		const char *in, const char *iv, size_t n) {
+	block_t newiv;
+	cbc_essiv_t *ctx = priv;
+
+	gcry_call(cipher_encrypt, ctx->hd, newiv, 16, iv, 16);
+	dec_prefix_plain(ctx->plain, out, in, newiv, n);
 }
 
 static void free_plain(void *priv) {
@@ -161,6 +186,7 @@ const cipher_spec_t cipher_cbc_plain = {
 	.init = init_plain,
 	.enc = enc_plain,
 	.dec = dec_plain,
+	.dec_prefix = dec_prefix_plain,
 	.free = free_plain,
 	.name = "CBC_PLAIN"
 };
@@ -169,6 +195,7 @@ const cipher_spec_t cipher_cbc_essiv = {
 	.init = init_essiv,
 	.enc = enc_essiv,
 	.dec = dec_essiv,
+	.dec_prefix = dec_prefix_essiv,
 	.free = free_essiv,
 	.name = "CBC_ESSIV"
 };

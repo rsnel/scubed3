@@ -781,6 +781,17 @@ write order stays uniform.
 On startup, a block with our signature is stale (not replayed) if it is
 FREE in the bitmap of the most recent block, or if its seqno < trim_floor.
 
+Opening a partition looks at every macroblock of the base device: only the
+first 128 bytes of its index are decrypted (with CBC they do not depend on
+the rest), the magic (at 0x70) must be right, then the whole index is read
+and checked (most blocks are not ours, a random block has the magic with
+probability 2^-64). scubed3 keeps the ciphertext of those 128 bytes of every
+block in memory (128 bytes per macroblock), it is updated by every write:
+the first open reads them from the base device (all reads are started at
+once, posix_fadvise), later opens only decrypt them. dev/opentime.py
+measures it: with 29000 macroblocks, the first open took 0.15s instead of
+1.7s, later opens 0.008s instead of 0.15s.
+
 Durability
 ~~~~~~~~~~
 

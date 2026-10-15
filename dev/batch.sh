@@ -45,6 +45,7 @@ run wipe python3 -u $T/wipetest.py scubed3-crash 14
 run iv python3 -u $T/ivtest.py scubed3-crash 17 $OLD_DAEMON
 run waitread2 python3 -u $T/waitreadtest.py scubed3 20 15 2
 run waitread3 python3 -u $T/waitreadtest.py scubed3 30 16 3 640 0.5
+run opentime python3 -u $T/opentime.py scubed3
 run memoryless python3 -u $T/memoryless.py scubed3-crash 6000
 run jstat ./jstat 200000
 echo ALLDONE >> batch.summary

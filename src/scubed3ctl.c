@@ -439,6 +439,23 @@ label:
 	return 1; /* Yes */
 }
 
+/* for an operation that cannot be undone: the answer must be "yes" (the
+ * whole word), anything else (also nothing) is no */
+int typed_yes(const char *prompt) {
+	char *answer;
+	int ret;
+
+	if (assume_yes >= 3) {
+		printf("%s yes (assumed)\n", prompt);
+		return 1;
+	}
+	if (!(answer = readline(prompt))) return 0;
+	ret = !strcmp(answer, "yes");
+	free(answer);
+
+	return ret;
+}
+
 void warning(void) {
 	printf("---WARNING---WARNING---WARNING---WARNING"
 			"---WARNING---WARNING---WARNING---\n");
@@ -560,19 +577,22 @@ only safe if ALL your scubed3 partitions are open, continue? [No] ";
 			assert(no_macroblocks > new);
 			warning();
 			if (!new) {
-				printf("removing %s: all its data is lost, its "
-						"blocks are wiped, in paranoia\nlevel 2 "
-						"and 3 in random order, that takes "
-						"long (\"p\" shows how many\nblocks "
-						"are left, %s cannot be closed until "
-						"they are wiped);\nDO NOT USE ITS "
-						"PASSPHRASE AGAIN UNTIL ALL ITS BLOCKS "
-						"ARE WIPED\n(if scubed3 crashes before "
-						"that, open %s again first, before\n"
-						"the other partitions, that resumes "
-						"the wipe)\n", argv[0], argv[0],
-						argv[0]);
-				if (!yesno("continue? [No] ")) return 0;
+				printf("\
+removing %s: all its data is lost.\n\
+\n\
+Removing a partition is a sensitive operation: its blocks are wiped, in\n\
+paranoia level 2 and 3 in random order, that takes long (%s cannot be\n\
+closed until it is done). To protect its data, and the existence of its\n\
+passphrase: if scubed3 stops before \"p\" shows %s as [removed, wiped],\n\
+OPEN %s FIRST every time you start scubed3, before you switch to level 2\n\
+or 3 and before you write to the other partitions, until \"p\" shows\n\
+[removed, wiped]. Do not use its passphrase again before that.\n\
+\n", argv[0], argv[0], argv[0], argv[0]);
+				if (!typed_yes("type yes if you understand this "
+							"and want to remove it: ")) {
+					printf("%s is not removed\n", argv[0]);
+					return 0;
+				}
 				return do_server_command(priv->s, 1,
 						"resize-internal %s 0 0", argv[0]);
 			}

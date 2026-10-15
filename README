@@ -344,7 +344,20 @@ tombstones_pending, mapped_mesoblocks
 - p
 
 shows all open partitions, the paranoia level, the number of free blocks
-that were overwritten with random data, and the rate of level 3
+that were overwritten with random data, and the rate of level 3; after a
+partition its flags: [U] in use, [C] closed when released, [MNT dir]
+mounted, and for a partition of size 0 that is removed (see Removing a
+partition):
+	[removing]		the removal is not on disk yet
+	[removed, wiping: N with data, M empty]
+				blocks with an index of it are not wiped yet:
+				N with an older index (they would bring it
+				back, with data), M with an index that says
+				it is empty (last and prelast)
+	[removed, wiping: M empty]
+				only last and prelast are left
+	[removed, wiped]	no block has an index of it anymore, its
+				passphrase can be used again
 
 - paranoia LEVEL [KIBPS]
 
@@ -687,6 +700,14 @@ about it otherwise):
   once)
 - if the crash came before anything of the removal was written, the
   partition is opened as it was, with its data: remove it again
+A wipe is interrupted safely: the random data is written before the index
+(see Durability), so if any of the old data of a block is left, its old
+index is left too, and the block is found again when the wipe is resumed
+(without the index, the old data would stay on disk: with CBC, a wrong IV
+only garbles the first 16 bytes of every mesoblock, someone with the key
+could read the rest).
+scubed3ctl warns about this when a partition is removed (resize NAME 0),
+you have to type yes (the whole word) to go on.
 Until the partition is opened again, last and prelast are ordinary free
 blocks for the other partitions: if both are overwritten while blocks with
 an older index of it are left, the most recent of those comes back (opening
@@ -709,8 +730,10 @@ FREE in the bitmap of the most recent block, or if its seqno < trim_floor.
 Durability
 ~~~~~~~~~~
 
-Every macroblock write is followed by fdatasync() of the base device, so
-macroblocks reach the disk in the order in which they are written: the
+Every macroblock is written in two steps: its data mesoblocks, then its
+index, each followed by fdatasync() of the base device. So the index is only
+on disk when its data is, and macroblocks reach the disk in the order in
+which they are written: the
 block that absorbed the live data of its tail is on disk before the tail
 is overwritten. Therefore only the most recently written block can be
 incomplete after a power failure; on startup the hashes of all its
@@ -718,7 +741,9 @@ mesoblocks are checked, if one of them doesn't match, the block is ignored
 (corruption of the most recent block by other causes looks the same, its
 data is then lost). The index of the block before it
 names the same block as next_block, so it will be written again and the
-incomplete contents are overwritten.
+incomplete contents are overwritten. All writes have these two steps, also
+the random data of level 2 and 3 and of a wipe (see Removing a partition),
+so they look the same.
 
 fsync() on a partition writes out the current block (if it contains new
 data), so after fsync() returns, everything written before is on disk.

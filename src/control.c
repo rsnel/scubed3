@@ -315,6 +315,33 @@ typedef struct control_status_priv_s {
 	uint32_t macroblocks_left;
 } control_status_priv_t;
 
+/* is the partition being removed (resized to 0, the removal is not on disk
+ * yet)? */
+static int being_removed(blockio_dev_t *dev) {
+	return dev->no_macroblocks &&
+		dev->pending_removals == dev->no_macroblocks;
+}
+
+/* the state of a partition of size 0 that is (being) removed, for p:
+ * removing: the removal is not on disk yet (the final write is pending)
+ * wiping: blocks with an index of it are left (see blockio_dev_start_wipe),
+ *   with data (blocks with an older index, they would bring it back) and
+ *   empty (last and prelast, their index says that it is empty)
+ * wiped: no block has an index of it anymore */
+static const char *removal_state(blockio_dev_t *dev, char *buf, size_t len) {
+	uint32_t data = dllarr_count(&dev->wipe),
+		 empty = (dev->last?1:0) + (dev->prelast?1:0);
+
+	if (dev->final_write || being_removed(dev)) return " [removing]";
+	if (!dev->removed || dev->no_macroblocks) return "";
+	if (!dev->dying) return " [removed, wiped]";
+	if (data) snprintf(buf, len, " [removed, wiping: %u with data, %u "
+			"empty]", data, empty);
+	else snprintf(buf, len, " [removed, wiping: %u empty]", empty);
+
+	return buf;
+}
+
 static int control_status(int s, control_thread_priv_t *priv, char *argv[]) {
 	control_status_priv_t status_priv = {
 		.s = s,
@@ -323,6 +350,7 @@ static int control_status(int s, control_thread_priv_t *priv, char *argv[]) {
         int rep(control_status_priv_t *priv, fuse_io_entry_t *entry) {
 		size_t size = blockio_dev_usable_macroblocks(&entry->d)*
 			entry->d.b->mmpm;
+		char state[64];
 		priv->macroblocks_left -= entry->d.no_macroblocks;
 		if (entry->d.pending_removals) {
 			if (control_write_line(priv->s, "(shrinking %s, "
@@ -330,14 +358,8 @@ static int control_status(int s, control_thread_priv_t *priv, char *argv[]) {
 					entry->head.key,
 					entry->d.pending_removals)) return -1;
 		}
-		if (blockio_dev_wipe_left(&entry->d)) {
-			if (control_write_line(priv->s, "(%s is removed, %u "
-					"blocks still to be wiped)\n",
-					entry->head.key, blockio_dev_wipe_left(
-						&entry->d))) return -1;
-		}
                 return control_write_line(priv->s,
-				"%07u blocks in %s (%.1fMiB)%s%s%s%s%s\n",
+				"%07u blocks in %s (%.1fMiB)%s%s%s%s%s%s\n",
 				entry->d.no_macroblocks -
 				entry->d.pending_removals, entry->head.key,
 				(size<<entry->d.b->mesoblk_log)/(1024.*1024.),
@@ -345,7 +367,8 @@ static int control_status(int s, control_thread_priv_t *priv, char *argv[]) {
 				entry->close_on_release?" [C]":"",
 				entry->mountpoint?" [MNT ":"",
 				entry->mountpoint?entry->mountpoint:"",
-				entry->mountpoint?"]":"");
+				entry->mountpoint?"]":"",
+				removal_state(&entry->d, state, sizeof(state)));
         }
 
 	if (control_write_status(s, 0)) return -1;
@@ -363,13 +386,6 @@ static int control_status(int s, control_thread_priv_t *priv, char *argv[]) {
 				priv->b->rate, priv->b->ticks)) return -1;
 
 	return control_write_terminate(s);
-}
-
-/* is the partition being removed (resized to 0, the removal is not on disk
- * yet)? */
-static int being_removed(blockio_dev_t *dev) {
-	return dev->no_macroblocks &&
-		dev->pending_removals == dev->no_macroblocks;
 }
 
 /* removing a partition needs writes of it (see

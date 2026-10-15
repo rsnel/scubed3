@@ -131,21 +131,6 @@ static void stream_write(void *fp, const void *buf, uint64_t offset,
 		_exit(9);
 	}
 	bad_sector(offset, size, 1);
-
-	/* testing only: log the offset of every write (and the time on
-	 * CLOCK_MONOTONIC if SCUBED3_WRITE_LOG_TIME is set) */
-	static FILE *wlog = NULL;
-	if (!wlog && getenv("SCUBED3_WRITE_LOG"))
-		wlog = fopen(getenv("SCUBED3_WRITE_LOG"), "a");
-	if (wlog) {
-		struct timespec now;
-		if (getenv("SCUBED3_WRITE_LOG_TIME")) {
-			clock_gettime(CLOCK_MONOTONIC, &now);
-			fprintf(wlog, "%lu %ld.%09ld\n", (unsigned long)offset,
-					(long)now.tv_sec, now.tv_nsec);
-		} else fprintf(wlog, "%lu\n", (unsigned long)offset);
-		fflush(wlog);
-	}
 #endif
 	stream_io(fp, (void*)buf, offset, size, fwrite, "writing");
 }
@@ -1378,6 +1363,43 @@ static blockio_info_t *nth_free_block(blockio_t *b, uint32_t n,
 	return ret;
 }
 
+/* write macroblock id (buf is the whole macroblock, the index is its first
+ * mesoblock): the data mesoblocks first, then the index, each followed by a
+ * sync, so the index is only on disk when its data is; an interrupted
+ * write leaves either the old index (with data that does not match its
+ * hashes: the block is ignored, its live data is in the most recent block)
+ * or the new index with all of its data; a wipe (random data, see
+ * blockio_write_random) that is interrupted leaves the old index if any of
+ * the old data is left, so the block is found again when the wipe is
+ * resumed (see blockio_dev_resume_wipe); every block is written like this,
+ * so a wipe looks the same as other writes */
+static void blockio_write_block(blockio_t *b, void *io, uint32_t id,
+		const char *buf) {
+	off_t offset = ((off_t)id)<<b->macroblock_log;
+	uint32_t meso = 1<<b->mesoblk_log;
+#ifdef SCUBED3_CRASH_TEST
+	/* testing only: log the offset of every block write (and the time
+	 * on CLOCK_MONOTONIC if SCUBED3_WRITE_LOG_TIME is set) */
+	static FILE *wlog = NULL;
+	if (!wlog && getenv("SCUBED3_WRITE_LOG"))
+		wlog = fopen(getenv("SCUBED3_WRITE_LOG"), "a");
+	if (wlog) {
+		struct timespec now;
+		if (getenv("SCUBED3_WRITE_LOG_TIME")) {
+			clock_gettime(CLOCK_MONOTONIC, &now);
+			fprintf(wlog, "%lu %ld.%09ld\n", (unsigned long)offset,
+					(long)now.tv_sec, now.tv_nsec);
+		} else fprintf(wlog, "%lu\n", (unsigned long)offset);
+		fflush(wlog);
+	}
+#endif
+
+	b->write(io, buf + meso, offset + meso, b->macroblock_size - meso);
+	b->sync(io);
+	b->write(io, buf, offset, meso);
+	b->sync(io);
+}
+
 /* paranoia level 2: overwrite a free block with random data, it looks the
  * same as a block of a partition (with io: the io of the partition that
  * waits for its turn, or of the clock thread) */
@@ -1388,9 +1410,7 @@ static void blockio_write_random(blockio_t *b, void *io, blockio_info_t *bi) {
 	DEBUG("write random data to free block %u", id);
 	if (fread(buf, 1<<b->macroblock_log, 1, b->r.fp) != 1)
 		FATAL("reading from /dev/urandom: %s", strerror(errno));
-	b->write(io, buf, ((off_t)id)<<b->macroblock_log,
-			1<<b->macroblock_log);
-	b->sync(io);
+	blockio_write_block(b, io, id, buf);
 	b->random_writes++;
 	free(buf);
 }
@@ -1468,6 +1488,7 @@ static void blockio_dev_start_wipe(blockio_dev_t *dev) {
 	pthd_mutex_unlock(&b->unallocated_mutex);
 
 	dev->dying = 1;
+	dev->removed = 1;
 	VERBOSE("\"%s\" is removed, %u blocks are wiped (%u free blocks had "
 			"an old index of it)", dev->name, dllarr_count(&dev->wipe) +
 			(dev->last?1:0) + (dev->prelast?1:0), found);
@@ -2006,15 +2027,12 @@ void blockio_dev_write_current_macroblock(blockio_dev_t *dev) {
 	/* encrypt index */
 	cipher_enc(dev->c, dev->out_macroblock, BASE, 0, 0, id);
 
-	dev->b->write(dev->io, dev->out_macroblock,
-			((off_t)id)<<dev->b->macroblock_log,
-			1<<dev->b->macroblock_log);
-
 	/* the block must be on disk before the next block is written: the
 	 * next block may be the tail of this block, its live data is in
 	 * this block now; this also means that only the most recently
-	 * written block can be incomplete after a power failure */
-	dev->b->sync(dev->io);
+	 * written block can be incomplete after a power failure (see
+	 * blockio_write_block, it syncs) */
+	blockio_write_block(dev->b, dev->io, id, dev->out_macroblock);
 
 	/* the old index of this block is replaced by the new one */
 	for (i = 0; i < dev->no_old_ondisk; i++)

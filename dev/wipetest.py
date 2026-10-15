@@ -115,6 +115,26 @@ def blocks_of(k):
                 out.append((mid, struct.unpack(">Q", p[0x60:0x68])[0], nmb - pend - res))
     return out
 
+def leftover(k, pattern):
+    """the mesoblocks on the base device with data of key k (pattern, the
+    data that was written), also without an index: with CBC the IV only
+    changes the first 16 bytes, an unknown IV leaves the rest readable"""
+    kb = bytes.fromhex(k); n = 0
+    with open(base, "rb") as f:
+        for mid in range(TOTAL):
+            f.seek(mid * MACRO); blk = f.read(MACRO)
+            for s in range(1, MMPM + 1):
+                p = Cipher(algorithms.AES(kb), modes.CBC(bytes(16))).decryptor().update(
+                        blk[s * MESO:(s + 1) * MESO])
+                if p[16:] == pattern[16:]: n += 1
+    return n
+
+def pflag(n):
+    """the flags of partition n in the output of p"""
+    for l in cmd("p").split("\n"):
+        if l.endswith(" blocks in %s" % n) or (" blocks in %s " % n) in l: return l
+    return ""
+
 errors = []
 def check(cond, what):
     print(("   ok: " if cond else "   FAILED: ") + what, flush=True)
@@ -146,6 +166,12 @@ cmd("resize-internal c 20 %d" % reserved(20))
 cmd("paranoia 3 6400")
 remove("c")
 left = int(info("c")["wipe_left"])
+f0 = pflag("c")                         # the final write may still wait for its turn
+for _ in range(400):
+    if "[removing]" not in pflag("c"): break
+    time.sleep(0.05)
+check("[removing]" in f0 or "[removed, wiping: " in f0, "p first: %s" % f0[-45:])
+check("[removed, wiping: " in pflag("c"), "p: %s" % pflag("c")[-45:])
 t = cmd("close c", ok=False)
 check(left > 0 and "not wiped yet" in t, "close refused while %d blocks are left" % left)
 t = cmd("resize-internal c 5 1", ok=False)
@@ -155,6 +181,7 @@ check(t.startswith("ERR"), "the key cannot be used while c is wiped")
 t0 = time.monotonic()
 while int(info("c")["wipe_left"]) and time.monotonic() - t0 < 120: time.sleep(0.2)
 check(int(info("c")["wipe_left"]) == 0, "wiped in %.1fs" % (time.monotonic() - t0))
+check(pflag("c").endswith("[removed, wiped]"), "p: %s" % pflag("c")[-45:])
 cmd("close c")
 check("paranoia level 3" in cmd("p"), "still level 3")
 check(not blocks_of(key("c")), "no block has an index of c")
@@ -225,6 +252,8 @@ for r in range(16):
     if removed and not res.startswith("not removed"):
         check(not left, "round %d: %s, %d blocks had an index of c, afterwards %d" %
               (r, res, before, left))
+        data = leftover(k, b"C" * MESO)
+        check(not data, "round %d: %d mesoblocks with data of c left (without an index)" % (r, data))
     results[res] = results.get(res, 0) + 1
 print("   after the crash, opening c: %s" % results, flush=True)
 check(not any("DATA" in r for r in results), "the data never comes back")

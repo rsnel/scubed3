@@ -1,8 +1,11 @@
 #!/bin/sh
 # checks of partman-scubed3, before partman finishes:
 # - a base device must be configured (Configure scubed3)
-# - on a scubed3 partition only the root file system (the initramfs of the
-#   installed system sets up only the root partition), no swap
+# - no swap on a scubed3 partition, no /boot
+# - other file systems on scubed3 (/home, ...) need root on scubed3: the
+#   initramfs starts scubed3 only for root on scubed3, the other LUKS
+#   volumes are opened from /etc/crypttab of the root file system; a note
+#   says that whoever has the passphrase of the root partition sees them
 # - root on scubed3 needs a /boot partition that is not on scubed3
 
 . /lib/partman/lib/scubed3-base.sh
@@ -20,6 +23,7 @@ fi
 
 have_boot=no
 s3_root=no
+others=
 for dev in $DEVICES/*; do
 	[ -d "$dev" ] || continue
 	cd $dev
@@ -48,25 +52,39 @@ for dev in $DEVICES/*; do
 			;;
 		    format|keep)
 			case "$mnt" in
-			    /)	s3_root=yes ;;
-			    "")	;;
-			    *)	db_subst partman-scubed3/only_root MOUNTPOINT "$mnt"
-				error partman-scubed3/only_root
-				;;
+			    /)		s3_root=yes ;;
+			    /boot|/boot/*)
+				error partman-scubed3/no_boot ;;
+			    "")		;;
+			    *)		others="${others:+$others, }$mnt" ;;
 			esac
 			;;
 		    dontuse)
 			;;
 		    *)
-			db_subst partman-scubed3/only_root MOUNTPOINT "$method"
-			error partman-scubed3/only_root
+			db_subst partman-scubed3/not_supported METHOD "$method"
+			error partman-scubed3/not_supported
 			;;
 		esac
 	done
 done
 
+if [ "$others" ] && [ $s3_root = no ]; then
+	db_subst partman-scubed3/others_need_root MOUNTPOINTS "$others"
+	error partman-scubed3/others_need_root
+fi
 if [ $s3_root = yes ] && [ $have_boot = no ]; then
 	error partman-scubed3/root_needs_boot
+fi
+# once: the other file systems are not hidden from the root partition
+if [ "$others" ]; then
+	db_fget partman-scubed3/others_note seen
+	if [ "$RET" != true ]; then
+		db_subst partman-scubed3/others_note MOUNTPOINTS "$others"
+		db_input critical partman-scubed3/others_note || true
+		db_go || true
+		db_fset partman-scubed3/others_note seen true
+	fi
 fi
 
 exit 0

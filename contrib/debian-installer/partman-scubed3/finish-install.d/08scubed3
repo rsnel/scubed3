@@ -6,7 +6,10 @@
 # 2. /etc/scubed3.conf (the salt, the iterations, the paranoia level)
 # 3. root on scubed3: cryptsetup and cryptsetup-initramfs (CRYPTSETUP=y),
 #    /etc/scubed3/initramfs.conf (BASE, OPTIONS, ROOT_PARTITION if wanted),
-#    update-initramfs
+#    update-initramfs; the other file systems on scubed3 (/home, ...):
+#    /etc/crypttab opens their LUKS volumes from /run/scubed3/fs/NAME (the
+#    initramfs makes that link), nofail in /etc/crypttab and /etc/fstab
+#    (they are mounted only if their partition was opened at boot)
 # 4. the blocks lent to a partition are given back: the partition gets its
 #    own size again, the garbage collector removes the extra blocks while
 #    the installed system writes (scubed3ctl p shows "shrinking")
@@ -45,12 +48,14 @@ stable_name () {
 	echo "$1"
 }
 
-root=
+root=; others=
 for p in $STATE/parts/*; do
 	[ -d "$p" ] || continue
 	n=${p##*/}
 	if grep -q "^/dev/mapper/scubed3-$n /target " /proc/mounts; then
 		root=$n
+	elif grep -q "^/dev/mapper/scubed3-$n /target/" /proc/mounts; then
+		others="$others $n"
 	fi
 done
 
@@ -106,6 +111,15 @@ if [ "$root" ]; then
 			echo "#ROOT_PARTITION="
 		fi
 	} > /target/etc/scubed3/initramfs.conf
+
+	# the other file systems on scubed3: their LUKS volumes from
+	# /etc/crypttab (not below /dev: systemd would wait for a device),
+	# nofail (also in /etc/fstab): without their partition the system
+	# boots without them
+	for n in $others; do
+		echo "scubed3-$n /run/scubed3/fs/$n none luks,nofail" >> /target/etc/crypttab
+		sed -i "/^\/dev\/mapper\/scubed3-$n[[:space:]]/{/nofail/!s/^\([^[:space:]][^[:space:]]*[[:space:]][[:space:]]*[^[:space:]][^[:space:]]*[[:space:]][[:space:]]*[^[:space:]][^[:space:]]*[[:space:]][[:space:]]*[^[:space:]][^[:space:]]*\)/\1,nofail/}" /target/etc/fstab
+	done
 
 	if ! log-output -t scubed3-finish in-target update-initramfs -u -k all; then
 		failed update-initramfs

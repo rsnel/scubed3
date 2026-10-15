@@ -16,7 +16,15 @@ Files:
 What happens at boot (scripts/local-top/scubed3):
 
 1. scubed3 is started on BASE, with its mount point /dev/scubed3fs and its
-   control socket /run/scubed3/control
+   control socket /run/scubed3/control; /run/scubed3/fs is a link to
+   /dev/scubed3fs, for /etc/crypttab of the real root: other file systems
+   on scubed3 partitions (with LUKS) can be opened from there, after the
+   switch, for example
+
+	scubed3-home /run/scubed3/fs/home none luks,nofail
+
+   (with nofail in /etc/fstab too; not /dev/scubed3fs/home: systemd would
+   wait for a device for a source below /dev)
 2. the name of the root partition: ROOT_PARTITION, or if that is not set
    (the default) it is asked
 3. with a key store (/etc/scubed3.keys, see Key store in the main README):

@@ -32,7 +32,7 @@ unboot() {
 	$FUSERMOUNT -u $MNT 2> /dev/null; $FUSERMOUNT -u /mnt/s3 2> /dev/null; sleep 1
 	rmdir $MNT 2> /dev/null; LOOP=; rm -f $P/conf/param.conf
 }
-cleanup() { unboot; rm -rf $P; }
+cleanup() { unboot; rm -rf $P; rm -f /run/scubed3/fs; }
 fail() { echo "INITRAMFSTEST FAILED: $1"; [ -f $P/out ] && cat $P/out; cleanup; exit 1; }
 [ -e /run/scubed3/control ] && fail "a scubed3 daemon is running"
 

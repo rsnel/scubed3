@@ -373,13 +373,40 @@ Description: scubed3 is not configured
  been configured. Choose "Configure scubed3" in the main menu, or use the
  partition for something else.
 
-Template: partman-scubed3/only_root
+Template: partman-scubed3/others_need_root
 Type: error
-Description: Only the root file system can be on scubed3
- The installed system sets up only the root partition at boot, "${MOUNTPOINT}"
- cannot be on a scubed3 partition. Put it on the root file system, or on a
- normal partition. Other scubed3 partitions can be used after the
- installation, with scubed3ctl.
+Description: Root is not on scubed3
+ ${MOUNTPOINTS} on scubed3 needs the root file system on scubed3 too: the
+ installed system starts scubed3 at boot only for a root file system on
+ it, the other scubed3 file systems are opened from /etc/crypttab on the
+ root file system.
+
+Template: partman-scubed3/not_supported
+Type: error
+Description: Not supported on scubed3
+ A scubed3 partition can hold a file system, not "${METHOD}".
+
+Template: partman-scubed3/no_boot
+Type: error
+Description: /boot cannot be on scubed3
+ The kernel and the initramfs, which starts scubed3, are read from /boot:
+ it must be a normal partition.
+
+Template: partman-scubed3/others_note
+Type: note
+Description: ${MOUNTPOINTS}: not hidden from the root partition
+ These file systems are on scubed3 partitions too. They are opened after
+ the root file system is mounted, from /etc/crypttab (their LUKS
+ passphrases are asked then), and mounted from /etc/fstab.
+ .
+ Both files are on the root file system: whoever has the passphrase of the
+ root partition sees that these partitions exist. Use them for data you can
+ admit to; open hidden partitions by hand (scubed3ctl), never from
+ /etc/fstab.
+ .
+ At boot, give their names and passphrases with the other partitions (in
+ paranoia level 1 too, otherwise they are not mounted: they are "nofail",
+ the system boots without them).
 
 Template: partman-scubed3/no_swap
 Type: error

@@ -16,7 +16,8 @@
 # keys-copy (the same partition under another name), unlock-until (for a
 # boot: passphrases from a pipe, one answer each), luksopen-all, a new
 # passphrase is never generated (an empty one is no passphrase, two
-# different ones do not match)
+# different ones do not match), the slot of a new view is random, -k with
+# the key of keys-derive
 #
 # usage: keystoretest.sh DAEMON CTL (as root; CRYPTSETUP=path: the
 # cryptsetup to use, default the stand-in dev/fake-cryptsetup, it needs no
@@ -201,7 +202,7 @@ printf 'no view for this passphrase\nview 1: 2 entries, without "old"\n"old" is 
 head -n 3 $T/out | cmp -s - $T/expect || fail "unlock-until: $(cat $T/out)"
 grep -q "^view 1:" $T/out && grep -q "^view 2:" $T/out || fail "the views after unlock-until: $(cat $T/out)"
 printf 'Q\n' | ctl -c "unlock-until old" -c keys > $T/out 2> /dev/null && fail "unlock-until without old succeeds"
-grep -q '^no view with "old" is unlocked' $T/out && ! grep -q "^view 1:$" $T/out ||
+grep -q '^no view with "old" is unlocked' $T/out && ! grep -q "^view 1: \[slot" $T/out ||
 	fail "unlock-until at the end of the input: $(cat $T/out)"
 ok "unlock-until: one answer per passphrase, the views stay unlocked; at the end of the input the next command is not done"
 K=$T/keys
@@ -232,6 +233,42 @@ cmp -s $K $T/keys.before || fail "the key store changed"
 run "-c unlock -c keys" newpass1
 grep -q "no view for this passphrase" $T/out || fail "newpass1 has a view: $(cat $T/out)"
 ok "a new passphrase is never generated: an empty one is no passphrase, two different ones do not match (the store does not change)"
+
+
+echo "11. the slots of the views, -k and keys-derive"
+# a new view gets a slot at random (not the first free one): 300 new key
+# stores with one view, 64 slots, about 4.7 per slot
+: > $T/slots
+i=0
+while [ $i -lt 300 ]; do
+	rm -f $T/k1
+	ctl -K $T/k1 -c keys-create > /dev/null
+	printf '\nS\nS\n' | ctl -K $T/k1 -c unlock-all -c keys-passphrase-add |
+		sed -n 's/.*view 1 is added (empty, in slot \([0-9]*\) of 64, chosen at random)$/\1/p' >> $T/slots
+	i=$((i + 1))
+done
+[ "$(wc -l < $T/slots)" = 300 ] || fail "the slot of a new view is not shown"
+n=$(sort -u $T/slots | wc -l); max=$(sort $T/slots | uniq -c | sort -n | tail -n 1 | awk '{ print $1 }')
+[ $n -ge 50 ] && [ $max -le 18 ] || fail "the slots are not random: $n slots used, one $max times"
+printf 'S\n' | ctl -K $T/k1 -c unlock -c keys > $T/out
+grep -q "^view 1: (empty) \[slot $(tail -n 1 $T/slots) of 64\]$" $T/out || fail "keys shows no slot: $(cat $T/out)"
+ok "300 new views are in $n of the 64 slots (at most $max in one), keys shows the slot"
+key=$(printf 'S\n' | ctl -K $T/k1 -c keys-derive | sed -n 's/.*key: \([0-9a-f]\{64\}\)$/\1/p')
+[ ${#key} = 64 ] || fail "keys-derive: $(printf 'S\n' | ctl -K $T/k1 -c keys-derive)"
+printf '%s\n' "$key" | ctl -k -K $T/k1 -c unlock -c keys > $T/out
+grep -q "view 1: 0 entries" $T/out || fail "-k unlock with the key: $(cat $T/out)"
+printf '%s\n' "$key" | tr a-f A-F | ctl -k -K $T/k1 -c unlock > $T/out
+grep -q "view 1: 0 entries" $T/out || fail "-k unlock with the key in capitals: $(cat $T/out)"
+printf 'S\n' | ctl -k -K $T/k1 -c unlock > $T/out && fail "-k takes a passphrase"
+grep -q "not a key" $T/out || fail "-k with a passphrase: $(cat $T/out)"
+printf '%s\n' "${key%?}" | ctl -k -K $T/k1 -c unlock > $T/out && fail "-k takes 63 digits"
+# a view added with -k (its key from keys-derive) opens with the passphrase
+key2=$(printf 'T\n' | ctl -K $T/k1 -c keys-derive | sed -n 's/.*key: \([0-9a-f]\{64\}\)$/\1/p')
+printf '%s\n\n%s\n%s\n' "$key" "$key2" "$key2" | ctl -k -K $T/k1 -c unlock-all -c keys-passphrase-add > $T/out
+grep -q "view 2 is added" $T/out || fail "-k keys-passphrase-add: $(cat $T/out)"
+printf 'T\n' | ctl -K $T/k1 -c unlock > $T/out
+grep -q "view 1: 0 entries" $T/out || fail "the passphrase of a view added with -k: $(cat $T/out)"
+ok "keys-derive gives the key of a passphrase, -k unlocks and adds views with it (not with a passphrase or a wrong key)"
 
 cleanup
 echo "KEYSTORETEST OK"

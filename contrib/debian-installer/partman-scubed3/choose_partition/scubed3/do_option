@@ -203,7 +203,9 @@ do_open () {
 	s3_ask_passphrase "$(printf "$RET" "$name")" no || return 0
 	pass=$PASS
 	PASS=
+	s3_busy open
 	printf '%s\n' "$pass" | s3ctl -c "open $name"
+	s3_busy_done
 	if [ ! -e $S3MNT/$name ]; then
 		pass=
 		db_subst partman-scubed3/no_blocks NAME "$name"
@@ -235,11 +237,13 @@ do_open () {
 		s3ctl -c "close $name"
 		return 0
 	fi
+	s3_busy open
 	if [ "$luks" ]; then
 		printf '%s\n%s\n' "$pass" "$luks" | s3ks -c "keys-import $name $VIEW"
 	else
 		printf '%s\n' "$pass" | s3ks -c "keys-import $name $VIEW"
 	fi
+	s3_busy_done
 	pass=; luks=
 	mkdir -p $S3STATE/parts/$name
 	echo $VIEW > $S3STATE/parts/$name/view
@@ -293,14 +297,18 @@ do_finish () {
 		[ -f $p/luks_open ] && continue
 		view=$(cat $p/view 2>/dev/null || echo 1)
 		if ! cryptsetup isLuks $S3MNT/$name 2>/dev/null; then
+			s3_busy luks
 			s3ks -c "luksformat $name" < /dev/null
+			s3_busy_done
 			if ! cryptsetup isLuks $S3MNT/$name 2>/dev/null; then
 				s3_error partman-scubed3/luks_failed "$name"
 				return 1
 			fi
 		fi
 		[ "$view" = 1 ] || continue
+		s3_busy luks
 		s3ks -c "luksopen $name" < /dev/null
+		s3_busy_done
 		if [ ! -b $(s3_luks_dev $name) ]; then
 			s3_error partman-scubed3/luks_failed "$name"
 			return 1
@@ -316,7 +324,7 @@ if ! s3_math64; then
 fi
 mkdir -p $S3STATE/parts
 
-S3PASSES=
+S3VIEWKEYS=
 if ! s3_running; then
 	setup_store || exit 0
 fi
@@ -324,7 +332,7 @@ fi
 # before)
 if [ ! -f $S3KEYS ]; then
 	s3_keystore_new || exit 0
-elif [ -z "$S3PASSES" ]; then
+elif [ -z "$S3VIEWKEYS" ]; then
 	s3_keystore_unlock || exit 0
 fi
 
@@ -348,7 +356,7 @@ while :; do
 		break ;;
 	esac
 done
-S3PASSES=
+S3VIEWKEYS=
 
 stop_parted_server
 restart_partman

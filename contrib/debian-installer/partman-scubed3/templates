@@ -147,6 +147,26 @@ Template: partman-scubed3/progress/fill_text
 Type: text
 Description: The installer is now overwriting ${DEVICE} with random data. Cancelling leaves the rest of the partition as it is.
 
+Template: partman-scubed3/progress/busy_title
+Type: text
+Description: Configuring scubed3
+
+Template: partman-scubed3/progress/derive
+Type: text
+Description: Computing the key of the passphrase (this can take a minute, longer in a slow virtual machine)...
+
+Template: partman-scubed3/progress/open
+Type: text
+Description: Opening the partition: computing the key of its passphrase (this can take a minute, longer in a slow virtual machine)...
+
+Template: partman-scubed3/progress/luks_check
+Type: text
+Description: Checking the passphrase of the LUKS volume...
+
+Template: partman-scubed3/progress/luks
+Type: text
+Description: Setting up LUKS (this can take a minute)...
+
 Template: partman-scubed3/fill_failed
 Type: error
 Description: ${DEVICE} could not be filled with random data
@@ -339,6 +359,11 @@ Default: false
 Description: Use weak passphrase?
  You entered a passphrase that consists of less than eight characters,
  which is considered too weak. You should choose a stronger passphrase.
+
+Template: partman-scubed3/keystore_failed
+Type: error
+Description: The key store could not be created
+ ${ERROR}
 
 Template: partman-scubed3/create_failed
 Type: error

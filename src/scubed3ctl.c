@@ -79,6 +79,10 @@ const char *config_file = NULL; /* NULL: DEFAULT_CONFIG_FILE, if it exists */
 /* the key store (see keystore.h), read when it is used */
 keystore_t ks = { .path = DEFAULT_KEYSTORE_FILE };
 int assume_yes = 0;
+/* -k: the passphrases of the key store are given as their keys (64
+ * hexadecimal digits, from keys-derive): a script (the debian-installer)
+ * computes the KDF of a passphrase once, not every time it runs scubed3ctl */
+static int key_input = 0;
 
 /* in non-interactive mode, the exit status of
  * scubed3ctl must match the exit status of the
@@ -544,6 +548,7 @@ static int ctl_help(ctl_priv_t *priv, char *argv[]) {
 	printf("                   a partition with the same name and other keys)\n");
 	printf("keys\n");
 	printf("keys-passphrase-add\n");
+	printf("keys-derive       (the key of a passphrase, for -k)\n");
 	printf("keys-passphrase-change [VIEW]\n");
 	printf("keys-passphrase-remove [VIEW]\n");
 	printf("keys-add NAME [VIEW]\n");
@@ -1116,8 +1121,27 @@ static int ks_open(void) {
 	return 0;
 }
 
+/* 64 hexadecimal digits to a key of 32 bytes, 0 on success */
+static int ks_parse_key(const char *hex, size_t len, unsigned char *key) {
+	int i, j, d;
+
+	if (len != 64) return -1;
+	for (i = 0; i < 64; i++) {
+		j = hex[i];
+		if (j >= '0' && j <= '9') d = j - '0';
+		else if (j >= 'a' && j <= 'f') d = j - 'a' + 10;
+		else if (j >= 'A' && j <= 'F') d = j - 'A' + 10;
+		else return -1;
+		if (i&1) key[i/2] |= d;
+		else key[i/2] = d<<4;
+	}
+
+	return 0;
+}
+
 /* the key of the key store for a passphrase (the suffix makes it another
- * key than that of a partition with the same passphrase) */
+ * key than that of a partition with the same passphrase); with -k the
+ * input is the key itself (see keys-derive) */
 static int ks_ask_key(const char *prompt, int verify, unsigned char *key) {
 	char *pw;
 	size_t len;
@@ -1127,7 +1151,16 @@ static int ks_ask_key(const char *prompt, int verify, unsigned char *key) {
 		free_passphrase(pw, len);
 		return 0;
 	}
-	derive_key(pw, len, "/keystore", key);
+	if (key_input) {
+		if (ks_parse_key(pw, len, key)) {
+			free_passphrase(pw, len);
+			wipememory(key, 32);
+			printf("not a key (-k: 64 hexadecimal digits, see "
+					"keys-derive)\n");
+			exit_status = EXIT_FAILURE;
+			return -1;
+		}
+	} else derive_key(pw, len, "/keystore", key);
 	free_passphrase(pw, len);
 
 	return 1;
@@ -1331,7 +1364,8 @@ static int ctl_unlock_until(ctl_priv_t *priv, char *argv[]) {
 static void ks_list(int v) {
 	int i, other;
 
-	printf("view %d:%s\n", v + 1, ks_count(v)?"":" (empty)");
+	printf("view %d:%s [slot %d of %d]\n", v + 1, ks_count(v)?"":" (empty)",
+			ks.views[v]->slot + 1, KS_SLOTS);
 	for (i = 0; i < KS_ENTRIES; i++) {
 		ks_entry_t *e = &ks.views[v]->e[i];
 		if (!(e->flags&KS_USED)) continue;
@@ -1367,6 +1401,35 @@ static int ctl_keys(ctl_priv_t *priv, char *argv[]) {
 	return 0;
 }
 
+/* the key of a passphrase of the key store, for -k: the KDF is computed
+ * once (it takes seconds), a script gives the key to the next runs of
+ * scubed3ctl; the key unlocks the view as the passphrase does, keep it as
+ * secret */
+static int ctl_keys_derive(ctl_priv_t *priv, char *argv[]) {
+	unsigned char key[32];
+	char *pw;
+	size_t len;
+	int i;
+
+	if (!(pw = ask_passphrase("Key store passphrase: ", 0, &len)))
+		return 0;
+	if (!len) {
+		free_passphrase(pw, len);
+		printf("no passphrase\n");
+		exit_status = EXIT_FAILURE;
+		return 0;
+	}
+	derive_key(pw, len, "/keystore", key);
+	free_passphrase(pw, len);
+	printf("key: ");
+	for (i = 0; i < 32; i++) printf("%02x", key[i]);
+	printf("\n");
+	fflush(stdout);
+	wipememory(key, sizeof(key));
+
+	return 0;
+}
+
 static int ctl_keys_passphrase_add(ctl_priv_t *priv, char *argv[]) {
 	unsigned char key[32];
 	int view;
@@ -1381,7 +1444,9 @@ static int ctl_keys_passphrase_add(ctl_priv_t *priv, char *argv[]) {
 	} else if ((view = ks_add_view(&ks, key)) < 0) {
 		printf("all %d slots are used by unlocked views\n", KS_SLOTS);
 	} else {
-		printf("view %d is added (empty)\n", view + 1);
+		printf("view %d is added (empty, in slot %d of %d, chosen at "
+				"random)\n", view + 1, ks.views[view]->slot + 1,
+				KS_SLOTS);
 		ks_commit();
 	}
 	wipememory(key, 32);
@@ -1692,7 +1757,9 @@ static int ctl_keys_setup(ctl_priv_t *priv, char *argv[]) {
 		else if ((v = ks_add_view(&ks, key)) < 0)
 			printf("all %d slots are used\n", KS_SLOTS);
 		else {
-			printf("view %d is added\n", v + 1);
+			printf("view %d is added (in slot %d of %d, chosen at "
+					"random)\n", v + 1, ks.views[v]->slot + 1,
+					KS_SLOTS);
 			changed = 1;
 		}
 		wipememory(key, 32);
@@ -1865,6 +1932,11 @@ static ctl_command_t ctl_commands[] = {
 	}, {
 		.head.key = "keys",
 		.command = ctl_keys,
+		.argc = 0,
+		.usage = ""
+	}, {
+		.head.key = "keys-derive",
+		.command = ctl_keys_derive,
 		.argc = 0,
 		.usage = ""
 	}, {
@@ -2085,7 +2157,7 @@ void show_help() {
 	printf("manage scubed3 partitions (also known as hidden volumes)\n");
 	printf("\n");
 	printf("Usage:\n\n$ %s [-C CONFIG_FILE] [-s KDF_SALT] [-i KDF_ITERATIONS] \\\n", exec_name); //argv[0]);
-	printf("                [-a SOCKET_ADDRESS] [-K KEY_STORE] [-YYY] [-c COMMAND]... \\\n");
+	printf("                [-a SOCKET_ADDRESS] [-K KEY_STORE] [-k] [-YYY] [-c COMMAND]... \\\n");
 	printf("                [-v] [-q] [-d]\n");
 	printf("\nOptions (defaults shown in parentheses):\n\n");
 	printf("-C CONFIG_FILE    file with the KDF parameters (%s, if it\n", DEFAULT_CONFIG_FILE);
@@ -2102,6 +2174,9 @@ void show_help() {
 	printf("                  if the command has spaces, it must be quoted;\n");
 	printf("                  more -c options: the commands one after the other\n");
 	printf("-K KEY_STORE      the key store (%s)\n", DEFAULT_KEYSTORE_FILE);
+	printf("-k                the passphrases of the key store are given as their\n");
+	printf("                  keys (64 hexadecimal digits, from keys-derive), for\n");
+	printf("                  scripts: the KDF is computed once\n");
 	printf("-v                show verbose output\n");
 	printf("-d                show debug output\n");
 	printf("-q                do not show warnings, if \"assume Yes\" is active\n");
@@ -2127,7 +2202,7 @@ int main(int argc, char **argv) {
 	verbose_init(argv[0]);
 
 	opterr = 0;
-	while ((opt = getopt(argc, argv, "+C:s:i:a:hYc:vdqK:")) != -1) {
+	while ((opt = getopt(argc, argv, "+C:s:i:a:hYc:vdqK:k")) != -1) {
 		switch (opt) {
 			case 'q':
 				quiet = 1;
@@ -2149,6 +2224,9 @@ int main(int argc, char **argv) {
 			case 'K':
 				if (strlen(optarg) == 0) FATAL("key store file name must not be empty");
 				ks.path = optarg;
+				break;
+			case 'k':
+				key_input = 1;
 				break;
 			case 'a':
 				if (strlen(optarg) == 0) FATAL("socket address may not be empty");

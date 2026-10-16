@@ -255,8 +255,11 @@ installertest.sh DAEMON SCUBED3CTL
 	home (20 MB, LUKS) are created (a note about a backup of the key
 	store), level 2, the
 	unclaimed blocks are lent to root (the size of its file does not
-	change); the views of the key store; Configure scubed3 again: the
-	passphrases are asked again (a wrong one again), no view is lost;
+	change); the KDF of a passphrase of the key store is computed once
+	(keys-derive, all other runs of scubed3ctl with the key store have
+	-k), a message is shown while the KDF and LUKS run; the views of the
+	key store; Configure scubed3 again: the passphrases are asked again
+	(a wrong one again, keys-derive three times), no view is lost;
 	init.d makes /dev/mapper/testhost-root and -home (the hostname is
 	testhost) disks in partman
 	(format, root at /); check.d wants /boot (not on scubed3), / on root,
@@ -351,7 +354,11 @@ keystoretest.sh DAEMON SCUBED3CTL
 	the input the next command is not done), luksopen-all, keys-import of
 	an open partition with LUKS (its LUKS passphrase is asked, the new
 	LUKS key opens it), an empty new passphrase is refused (key store
-	passphrases are never generated). Uses fake-cryptsetup (CRYPTSETUP=path
+	passphrases are never generated); 300 new key stores with one view:
+	its slot is random (at least 50 of the 64 slots, at most 18 times the
+	same), keys shows it; keys-derive gives the key of a passphrase, -k
+	unlocks and adds views with it (not with a passphrase or a wrong
+	key). Uses fake-cryptsetup (CRYPTSETUP=path
 	for another cryptsetup).
 
 entropytest.sh DAEMON SCUBED3CTL

@@ -337,6 +337,21 @@ The passphrases of the key store are always typed by you (twice when they
 are new), they are never generated; the keys in it are random (getrandom(2)):
 the key of a partition 256 bits, the key of a LUKS volume 512 bits.
 
+A new view gets a slot chosen at random (getrandom(2)) among the slots that
+no unlocked view uses, not the first free one: the order in which the
+passphrases were added is not in the file. "view N" is only the order in
+which the views were unlocked by this run of scubed3ctl, keys shows the
+slot of every view ([slot S of 64]).
+
+The KDF of a passphrase takes seconds (with the default 16777216
+iterations; minutes in a slow virtual machine). A script that runs
+scubed3ctl often computes it once: keys-derive prints the key of a
+passphrase of the key store (key: 64 hexadecimal digits), with -k
+scubed3ctl takes these keys where it asks the passphrases of the key store
+(unlock, unlock-all, unlock-until, keys-passphrase-add, ...). The key
+unlocks the view as the passphrase does: keep it as secret (the
+debian-installer keeps the keys in its memory, not in a file).
+
 Every change writes the whole key store again: the unlocked views with new
 IVs, all other slots new random data, so the file changes completely (an
 adversary with snapshots does not see which views changed). That is why ALL

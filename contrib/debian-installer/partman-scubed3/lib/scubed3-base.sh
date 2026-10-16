@@ -11,8 +11,10 @@
 #			1 is the view of the boot passphrase (root and the
 #			partitions that are opened at boot with it), views
 #			2, ... of hidden passphrases (typed at boot before
-#			the boot passphrase); the passphrases are only in
-#			the memory of do_option (S3PASSES)
+#			the boot passphrase); the keys of the passphrases
+#			(keys-derive: the KDF takes long, it is computed
+#			once per passphrase) are only in the memory of
+#			do_option (S3VIEWKEYS), not the passphrases
 #	views		the number of views
 #	parts/NAME/	a partition, opened or created by the installer:
 #		view		the view of the key store it is in
@@ -398,30 +400,59 @@ s3_partition_list () {
 	done
 }
 
-# scubed3ctl with the key store, all its views unlocked: the passphrases
-# (S3PASSES, one per line, the boot passphrase first: view 1) come first on
-# its input, then the input of the caller (for the commands)
+# scubed3ctl with the key store, all its views unlocked: the keys of the
+# passphrases (S3VIEWKEYS, one per line, of the boot passphrase first: view
+# 1, scubed3ctl -k) come first on its input, then the input of the caller
+# (for the commands)
 s3ks () {
-	{ printf '%s\n\n' "$S3PASSES"; cat; } |
+	{ printf '%s\n\n' "$S3VIEWKEYS"; cat; } |
 		log-output -t partman-scubed3 scubed3ctl -q -YYY -C $S3CONF \
-			-K $S3KEYS -c unlock-all "$@"
+			-K $S3KEYS -k -c unlock-all "$@"
 }
 
 # the same, its output on stdout
 s3ks_out () {
-	{ printf '%s\n\n' "$S3PASSES"; cat; } |
-		scubed3ctl -q -YYY -C $S3CONF -K $S3KEYS -c unlock-all "$@" \
+	{ printf '%s\n\n' "$S3VIEWKEYS"; cat; } |
+		scubed3ctl -q -YYY -C $S3CONF -K $S3KEYS -k -c unlock-all "$@" \
 			2>/dev/null
 }
 
-# the number of views that the passphrases in S3PASSES unlock (the
-# prompts of scubed3ctl are on the same lines)
+# a message while something takes long (the KDF of a passphrase, LUKS):
+# without it the screen of the installer stays empty; $1 is the text
+# (partman-scubed3/progress/$1)
+s3_busy () {
+	db_progress START 0 1 partman-scubed3/progress/busy_title
+	db_progress INFO partman-scubed3/progress/$1
+}
+
+s3_busy_done () {
+	db_progress SET 1
+	db_progress STOP
+}
+
+# the key of passphrase $1 of the key store in KEY (64 hexadecimal digits,
+# keys-derive of scubed3ctl): the KDF takes seconds (minutes in a slow
+# virtual machine), it is computed once per passphrase; returns 1 if it
+# fails
+s3_key_of () {
+	s3_busy derive
+	KEY=$(printf '%s\n' "$1" | s3ctl_out -c keys-derive |
+		sed -n 's/.*key: \([0-9a-f]\{64\}\)$/\1/p')
+	s3_busy_done
+	[ ${#KEY} = 64 ] && return 0
+	KEY=
+	logger -t partman-scubed3 "keys-derive failed"
+	return 1
+}
+
+# the number of views that the keys in S3VIEWKEYS unlock (the prompts of
+# scubed3ctl are on the same lines)
 s3_unlocked_views () {
 	s3ks_out -c keys < /dev/null | sed -n 's/.*\(view [0-9][0-9]*\):.*/\1/p' |
 		sort -u | wc -l | tr -d ' '
 }
 
-# the view of passphrase $1 (its line in S3PASSES), 0 if it has none
+# the view of key $1 (its line in S3VIEWKEYS), 0 if it has none
 s3_view_of () {
 	local n l
 	n=0
@@ -429,7 +460,7 @@ s3_view_of () {
 		n=$((n + 1))
 		[ "$l" = "$1" ] && echo $n && return 0
 	done <<EOF
-$S3PASSES
+$S3VIEWKEYS
 EOF
 	echo 0
 }
@@ -438,17 +469,24 @@ EOF
 s3_keystore_new () {
 	db_metaget partman-scubed3/text/boot_passphrase description
 	s3_ask_passphrase "$RET" yes || return 1
-	rm -f $S3KEYS
-	if ! s3ctl -K $S3KEYS -c keys-create; then
+	if ! s3_key_of "$PASS"; then
 		PASS=
+		s3_error partman-scubed3/keystore_failed
 		return 1
 	fi
-	printf '\n%s\n%s\n' "$PASS" "$PASS" |
-		s3ctl -K $S3KEYS -c unlock-all -c keys-passphrase-add
-	S3PASSES=$PASS
 	PASS=
+	rm -f $S3KEYS
+	if ! s3ctl -K $S3KEYS -c keys-create; then
+		KEY=
+		s3_error partman-scubed3/keystore_failed
+		return 1
+	fi
+	printf '\n%s\n%s\n' "$KEY" "$KEY" |
+		s3ctl -K $S3KEYS -k -c unlock-all -c keys-passphrase-add
+	S3VIEWKEYS=$KEY
+	KEY=
 	if [ "$(s3_unlocked_views)" != 1 ]; then
-		S3PASSES=
+		S3VIEWKEYS=
 		rm -f $S3KEYS
 		return 1
 	fi
@@ -465,7 +503,7 @@ s3_keystore_new () {
 s3_keystore_unlock () {
 	local views n
 	views=$(cat $S3STATE/views 2>/dev/null || echo 1)
-	S3PASSES=
+	S3VIEWKEYS=
 	n=1
 	while [ $n -le $views ]; do
 		if [ $n = 1 ]; then
@@ -474,19 +512,24 @@ s3_keystore_unlock () {
 			db_metaget partman-scubed3/text/hidden_passphrase description
 		fi
 		s3_ask_passphrase "$RET" no || return 1
-		if [ "$(s3_view_of "$PASS")" != 0 ]; then
+		if ! s3_key_of "$PASS"; then
 			PASS=
 			continue
 		fi
-		S3PASSES="${S3PASSES:+$S3PASSES
-}$PASS"
 		PASS=
+		if [ "$(s3_view_of "$KEY")" != 0 ]; then
+			KEY=
+			continue
+		fi
+		S3VIEWKEYS="${S3VIEWKEYS:+$S3VIEWKEYS
+}$KEY"
+		KEY=
 		if [ "$(s3_unlocked_views)" = $n ]; then
 			n=$((n + 1))
 			continue
 		fi
 		# not a passphrase of the key store: again
-		S3PASSES=$(printf '%s\n' "$S3PASSES" | sed '$d')
+		S3VIEWKEYS=$(printf '%s\n' "$S3VIEWKEYS" | sed '$d')
 		db_fset partman-scubed3/wrong_passphrase seen false
 		db_input critical partman-scubed3/wrong_passphrase
 		db_go || true
@@ -511,9 +554,14 @@ s3_choose_view () {
 
 	db_metaget partman-scubed3/text/hidden_passphrase description
 	s3_ask_passphrase "$RET" yes || return 1
-	v=$(s3_view_of "$PASS")
-	if [ $v = 1 ]; then
+	if ! s3_key_of "$PASS"; then
 		PASS=
+		return 1
+	fi
+	PASS=
+	v=$(s3_view_of "$KEY")
+	if [ $v = 1 ]; then
+		KEY=
 		db_fset partman-scubed3/hidden_is_boot seen false
 		db_input critical partman-scubed3/hidden_is_boot
 		db_go || true
@@ -521,16 +569,16 @@ s3_choose_view () {
 	fi
 	if [ $v != 0 ]; then
 		VIEW=$v
-		PASS=
+		KEY=
 		return 0
 	fi
-	printf '%s\n%s\n' "$PASS" "$PASS" | s3ks -c keys-passphrase-add
-	S3PASSES="$S3PASSES
-$PASS"
-	PASS=
-	VIEW=$(( $(printf '%s\n' "$S3PASSES" | wc -l) ))
+	printf '%s\n%s\n' "$KEY" "$KEY" | s3ks -c keys-passphrase-add
+	S3VIEWKEYS="$S3VIEWKEYS
+$KEY"
+	KEY=
+	VIEW=$(( $(printf '%s\n' "$S3VIEWKEYS" | wc -l) ))
 	if [ "$(s3_unlocked_views)" != $VIEW ]; then
-		S3PASSES=$(printf '%s\n' "$S3PASSES" | sed '$d')
+		S3VIEWKEYS=$(printf '%s\n' "$S3VIEWKEYS" | sed '$d')
 		return 1
 	fi
 	echo $VIEW > $S3STATE/views
@@ -544,11 +592,13 @@ s3_luks_check () {
 	keyfile=$S3STATE/key.$$
 	printf %s "$1" > $keyfile
 	ret=1
+	s3_busy luks_check
 	if log-output -t partman-scubed3 cryptsetup open --key-file $keyfile \
 			$S3MNT/$2 scubed3-check-$2; then
 		log-output -t partman-scubed3 cryptsetup close scubed3-check-$2
 		ret=0
 	fi
+	s3_busy_done
 	dd if=/dev/urandom of=$keyfile bs=$(( ${#1} + 1 )) count=1 conv=notrunc 2>/dev/null
 	rm -f $keyfile
 	return $ret

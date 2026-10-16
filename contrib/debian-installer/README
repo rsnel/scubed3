@@ -80,8 +80,11 @@ Installing on scubed3, step by step
      unclaimed: a new partition can get them, and in paranoia level 2 and
      3 they are overwritten); an existing partition can be opened with
      the name root. Create the hidden partitions you want now too.
-   - finish: the paranoia level during the installation (2 is
-     recommended) and of the installed system; the unclaimed blocks are
+     "Show the layout": the base device, the partitions (size, view,
+     LUKS), the unclaimed blocks and the slots of the views in the key
+     store.
+   - finish: the paranoia level during the installation (0, the fastest,
+     to 3; 2 is recommended) and of the installed system; the unclaimed blocks are
      lent to root (see below); LUKS on the partitions that get it (their
      keys are random, they are in the key store), the LUKS volumes of the
      view of the boot passphrase are opened
@@ -224,13 +227,16 @@ Getting it into the installer
 - For testing, in a normal installer (expert mode): after the mirror is
   configured, in a shell (Alt-F2), with the udebs on a USB stick:
 
-	# anna-install partman-crypto-dm
+	# anna-install partman-crypto-dm cryptsetup-udeb
 	# udpkg -i /media/scubed3-udeb_*.udeb /media/partman-scubed3_*.udeb
 	# modprobe fuse; modprobe loop	(if that fails: insmod fuse,
 					insmod loop)
 
   (with STATIC=no also the library udebs, see the Depends of
-  scubed3-udeb). Then start "Partition disks" again. The
+  scubed3-udeb). udpkg installs no dependencies: without cryptsetup
+  "Configure scubed3" runs anna-install cryptsetup-udeb (and dmsetup-udeb,
+  crypto-dm-modules), if that fails it says so (LUKS on root needs it).
+  Then start "Partition disks" again. The
   running debconf of the installer may not have the templates of a udeb
   that is installed by hand (partman then says
   "partman/method_long/scubed3 doesn't exist"); partman-scubed3 loads

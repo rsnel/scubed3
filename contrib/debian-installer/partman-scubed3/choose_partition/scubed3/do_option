@@ -252,7 +252,7 @@ do_open () {
 }
 
 do_finish () {
-	local p name level free n r view
+	local p name level boot_level free n r view
 
 	# the root file system goes on root, with LUKS (the LUKS volume is
 	# the disk that is partitioned next)
@@ -272,7 +272,10 @@ do_finish () {
 	fi
 	echo $level > $S3STATE/level
 	db_get partman-scubed3/boot_level
-	sed -i "s/^paranoia=.*/paranoia=$RET/" $S3CONF
+	boot_level=$RET
+	# luksformat wants the level of paranoia= now (it warns otherwise),
+	# the installed system gets the boot level after it
+	sed -i "s/^paranoia=.*/paranoia=$level/" $S3CONF
 
 	# lend the unclaimed blocks to root (as reserved blocks: its size does
 	# not change)
@@ -315,11 +318,25 @@ do_finish () {
 		fi
 		>$p/luks_open
 	done
+	sed -i "s/^paranoia=.*/paranoia=$boot_level/" $S3CONF
 	return 0
+}
+
+# the layout of the base device, the partitions and the key store (the
+# lines are separated by \n: debconf with the capability escape)
+do_layout () {
+	db_capb backup align escape
+	db_subst partman-scubed3/layout LAYOUT "$(s3_layout)"
+	note partman-scubed3/layout
+	db_capb backup align
 }
 
 if ! s3_math64; then
 	note partman-scubed3/no_math64
+	exit 0
+fi
+if ! s3_cryptsetup; then
+	note partman-scubed3/no_cryptsetup
 	exit 0
 fi
 mkdir -p $S3STATE/parts
@@ -350,6 +367,7 @@ while :; do
 	case $RET in
 	    create)	do_create ;;
 	    open)	do_open ;;
+	    layout)	do_layout ;;
 	    finish)	do_finish && break ;;
 	    *)
 		logger -t partman-scubed3 "Unknown selection '$RET'"

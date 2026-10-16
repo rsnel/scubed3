@@ -430,6 +430,63 @@ s3_busy_done () {
 	db_progress STOP
 }
 
+# cryptsetup (for LUKS, root has it): partman-crypto-dm depends on
+# cryptsetup-udeb, but a udeb installed by hand (udpkg -i) gets no
+# dependencies; it is installed if it is missing
+s3_cryptsetup () {
+	local u
+	command -v cryptsetup > /dev/null 2>&1 && return 0
+	for u in cryptsetup-udeb dmsetup-udeb crypto-dm-modules; do
+		log-output -t partman-scubed3 anna-install $u ||
+			logger -t partman-scubed3 "anna-install $u failed"
+	done
+	command -v cryptsetup > /dev/null 2>&1
+}
+
+# the layout for the menu: the base device, the partitions (size, view,
+# LUKS), the unclaimed blocks, the slots of the views of the key store;
+# the lines are separated by \n (debconf with the capability escape)
+s3_layout () {
+	local mib total free level p n blocks view line lent slots
+	mib=$(( 1 << ($(sed -n 's/.*-M \([0-9]*\).*/\1/p' $S3STATE/options) - 20) ))
+	total=$(s3_p_number "blocks total")
+	free=$(s3_p_number "blocks unclaimed")
+	level=$(s3ctl_out -c p | sed -n 's/^paranoia level \([0-3]\) .*/\1/p')
+	printf '%s: %s blocks of %s MiB, paranoia level %s' \
+		"$(humandev $(cat $S3STATE/base))" "${total:-0}" $mib "${level:-?}"
+	for p in $S3STATE/parts/*; do
+		[ -d "$p" ] || continue
+		n=${p##*/}
+		blocks=$(s3_info $n no_macroblocks)
+		view=$(cat $p/view 2>/dev/null || echo 1)
+		line="$n: $(s3_mib_of ${blocks:-0}) MiB (${blocks:-0} blocks)"
+		if [ -f $p/lent ]; then
+			lent=$(( ${blocks:-0} - $(cut -d' ' -f1 $p/lent) ))
+			line="$line, of them $lent lent until the end of the installation"
+		fi
+		if [ "$view" = 1 ]; then
+			line="$line, view 1 (boot passphrase)"
+		else
+			line="$line, view $view (hidden passphrase)"
+		fi
+		if [ ! -f $p/luks ]; then
+			line="$line, no LUKS"
+		elif [ -f $p/luks_open ]; then
+			line="$line, LUKS open as $(s3_luks_dev $n)"
+		elif cryptsetup isLuks $S3MNT/$n 2>/dev/null; then
+			line="$line, LUKS"
+		else
+			line="$line, LUKS at finish"
+		fi
+		printf '\\n%s' "$line"
+	done
+	printf '\\nunclaimed: %s blocks' "${free:-0}"
+	slots=$(s3ks_out -c keys < /dev/null |
+		sed -n 's/.*\(view [0-9]*\):.*\[slot \([0-9]*\) of [0-9]*\]$/\1 in slot \2/p' |
+		tr '\n' ';' | sed 's/;$//; s/;/, /g')
+	printf '\\nkey store: %s of 64 slots (chosen at random)\n' "$slots"
+}
+
 # the key of passphrase $1 of the key store in KEY (64 hexadecimal digits,
 # keys-derive of scubed3ctl): the KDF takes seconds (minutes in a slow
 # virtual machine), it is computed once per passphrase; returns 1 if it

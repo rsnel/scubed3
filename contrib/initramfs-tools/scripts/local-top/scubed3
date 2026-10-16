@@ -213,7 +213,8 @@ if [ -z "$level" ] && [ -f /etc/scubed3.conf ]; then
 	level=$(sed -n 's/^[[:space:]]*paranoia[[:space:]]*=[[:space:]]*\([0-3]\)[[:space:]]*$/\1/p' /etc/scubed3.conf)
 fi
 [ -z "$level" ] && level=2
-if [ "$level" -ge 2 ]; then
+# (the daemon starts in level 1)
+if [ "$level" != 1 ]; then
 	ctl -c "paranoia $level${RATE:+ $RATE}" >> $LOG 2>&1
 fi
 if ! ctl -c p 2>> $LOG | tee -a $LOG | grep -q "paranoia level $level "; then

@@ -218,8 +218,8 @@ Description: scubed3 could not be started
 
 Template: partman-scubed3/mainmenu
 Type: select
-Choices-C: create, open, finish
-Choices: Create a partition, Open an existing partition, Finish
+Choices-C: create, open, layout, finish
+Choices: Create a partition, Open an existing partition, Show the layout, Finish
 Description: scubed3 configuration actions
  Open partitions: ${PARTITIONS}
  .
@@ -232,6 +232,23 @@ Description: scubed3 configuration actions
  partition that is not open look unclaimed, a new partition can get them
  (and in paranoia level 2 and 3 scubed3 overwrites them). Create the
  partitions you want now, also hidden ones you will not install on.
+
+Template: partman-scubed3/layout
+Type: note
+Description: The layout of scubed3
+ ${LAYOUT}
+ .
+ Hidden partitions are only shown while their passphrase is unlocked;
+ blocks of a partition that is not open are counted as unclaimed.
+
+Template: partman-scubed3/no_cryptsetup
+Type: error
+Description: cryptsetup is missing
+ The root file system goes on LUKS on a scubed3 partition, which needs
+ cryptsetup. It could not be installed (anna-install cryptsetup-udeb, see
+ /var/log/syslog). Load the installer components partman-crypto-dm and
+ cryptsetup-udeb (in a shell: anna-install cryptsetup-udeb), then choose
+ "Configure scubed3" again.
 
 Template: partman-scubed3/name
 Type: string
@@ -379,9 +396,14 @@ Description: No blocks found
 
 Template: partman-scubed3/level
 Type: select
-Choices: 1, 2, 3
+Choices: 0, 1, 2, 3
 Default: 2
 Description: Paranoia level during the installation:
+ Level 0: the writes of a partition go to its emptiest blocks: the fastest,
+ but the order of the writes shows which blocks hold old data, and which
+ blocks belong to which partition (to someone with two copies of the disk,
+ or with the write log of a flash drive).
+ .
  Level 1: the writes of a partition go to its own blocks (this shows which
  blocks belong to which partition, to someone with two copies of the
  disk, or with the write log of a flash drive).
@@ -398,7 +420,7 @@ Description: Paranoia level during the installation:
 
 Template: partman-scubed3/boot_level
 Type: select
-Choices: 1, 2, 3
+Choices: 0, 1, 2, 3
 Default: 2
 Description: Paranoia level of the installed system:
  The initramfs of the installed system switches to this level after it has

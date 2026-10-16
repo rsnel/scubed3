@@ -31,6 +31,13 @@
 #include <strings.h>
 #undef NDEBUG /* we need sanity checking */
 #include <termios.h>
+#include <fcntl.h>
+#include <dirent.h>
+#include <sys/stat.h>
+#include <sys/time.h>
+#include <sys/ioctl.h>
+#include <sys/sysmacros.h>
+#include <linux/loop.h>
 
 #include <assert.h>
 #include "config.h"
@@ -160,6 +167,10 @@ int vwrite_line(int s, const char *format, va_list ap) {
 	return 0;
 }
 
+/* the daemon serves one scubed3ctl at a time: the first command waits with
+ * a timeout (SO_RCVTIMEO), if it expires a message says why we wait */
+static int wait_note = 0;
+
 int do_server_command(int s, int echo, char *format, ...) {
 	int ret = 0, buf_len = 0, start = 0, i, done = 0;
 	int status_known = 0;
@@ -178,6 +189,21 @@ int do_server_command(int s, int echo, char *format, ...) {
 		if (buf_len == BUF_SIZE) FATAL("response too long");
 		n = recv(s, result.buf + buf_len, BUF_SIZE - buf_len, 0);
 		if (n == 0) FATAL("recv: connection reset by peer");
+		if (n < 0 && errno == EINTR) continue;
+		if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK) &&
+				wait_note) {
+			struct timeval tv = { 0, 0 };
+
+			fprintf(stderr, "scubed3ctl: waiting: the scubed3 "
+					"daemon serves another scubed3ctl (an "
+					"s3> prompt?),\nthis one goes on when "
+					"that one quits\n");
+			wait_note = 0;
+			if (setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &tv,
+						sizeof(tv)))
+				FATAL("setsockopt: %s", strerror(errno));
+			continue;
+		}
 		if (n < 0) FATAL("recv: %s", strerror(errno));
 
 		for (i = buf_len; i < buf_len + n; i++) {
@@ -324,6 +350,19 @@ static char *readline(const char *prompt) {
 }
 #endif
 
+/* killed (Ctrl-C, kill) while echo is off: the terminal gets it back; a
+ * key store that is written is not replaced (its temporary file is
+ * removed), the old one stays */
+static struct termios saved_tty;
+static volatile sig_atomic_t tty_fd = -1;
+
+static void on_signal(int sig) {
+	if (tty_fd != -1) (void) tcsetattr(tty_fd, TCSANOW, &saved_tty);
+	ks_signal_cleanup();
+	signal(sig, SIG_DFL);
+	raise(sig);
+}
+
 /* a line (without echo on a terminal), with its newline (one is added if
  * the last line has none), *n is its length; -1 at the end of the input
  * (also Ctrl-D on a terminal) */
@@ -339,14 +378,19 @@ int my_getpass(char **lineptr, size_t *n, FILE *stream) {
 
 		new = old;
 		new.c_lflag &= ~ECHO;
-		if (tcsetattr(fileno(stream), TCSAFLUSH, &new) != 0)
+		saved_tty = old;
+		tty_fd = fileno(stream);
+		if (tcsetattr(fileno(stream), TCSAFLUSH, &new) != 0) {
+			tty_fd = -1;
 			return -1;
+		}
 
 		/* Read the password. */
 		len = getline(lineptr, n, stream);
 
 		/* Restore terminal. */
 		(void) tcsetattr(fileno(stream), TCSAFLUSH, &old);
+		tty_fd = -1;
 
 		printf("\n");
 	}
@@ -538,6 +582,7 @@ static int ctl_help(ctl_priv_t *priv, char *argv[]) {
 	printf("resize NAME MACROBLOCKS\n");
 	printf("luksformat NAME\n");
 	printf("luksopen NAME\n");
+	printf("luksstatus [NAME] (LUKS header, key store, loop device, /dev/mapper, mount)\n");
 	printf("\nKey store (%s):\n\n", ks.path);
 	printf("keys-setup        (guided: creates, unlocks, adds passphrases and partitions)\n");
 	printf("keys-create\n");
@@ -885,6 +930,170 @@ static int luks_open(ctl_priv_t *priv, const char *name) {
 
 	return var_system("cryptsetup open %s/%s " LUKS_NAME,
 			priv->mountpoint, name, luks_prefix, name);
+}
+
+/* the block device whose major:minor is in /sys/block/NAME/dev (or the
+ * sysfs file at path), 0 if there is none */
+static dev_t sysfs_dev(const char *path) {
+	unsigned int ma, mi;
+	FILE *f;
+	int ok;
+
+	if (!(f = fopen(path, "r"))) return 0;
+	ok = fscanf(f, "%u:%u", &ma, &mi) == 2;
+	fclose(f);
+
+	return ok?makedev(ma, mi):0;
+}
+
+/* where the block device dev is mounted (the first mount point in mnt),
+ * 1 if it is */
+static int mounted_at(dev_t dev, char *mnt, size_t size) {
+	char src[PATH_MAX], dir[PATH_MAX];
+	struct stat st;
+	FILE *f;
+	int ret = 0;
+
+	if (!(f = fopen("/proc/self/mounts", "r"))) return 0;
+	while (fscanf(f, "%4095s %4095s %*[^\n]", src, dir) == 2) {
+		if (src[0] != '/' || stat(src, &st) || !S_ISBLK(st.st_mode) ||
+				st.st_rdev != dev) continue;
+		snprintf(mnt, size, "%s", dir);
+		ret = 1;
+		break;
+	}
+	fclose(f);
+
+	return ret;
+}
+
+/* the device mapper device on loop device dev (a device in /dev/mapper with
+ * it as slave; or a node of the loop device itself, as fake-cryptsetup of
+ * the tests makes it), its name in name, its device in *mdev */
+static int mapper_on(const char *loop, dev_t dev, char *name, size_t size,
+		dev_t *mdev) {
+	char path[PATH_MAX];
+	struct dirent *de;
+	struct stat st;
+	DIR *d;
+	int ret = 0;
+
+	if (!(d = opendir("/dev/mapper"))) return 0;
+	while (!ret && (de = readdir(d))) {
+		if (de->d_name[0] == '.' || !strcmp(de->d_name, "control"))
+			continue;
+		snprintf(path, sizeof(path), "/dev/mapper/%s", de->d_name);
+		if (stat(path, &st) || !S_ISBLK(st.st_mode)) continue;
+		snprintf(path, sizeof(path), "/sys/dev/block/%u:%u/slaves/%s",
+				major(st.st_rdev), minor(st.st_rdev), loop);
+		if (st.st_rdev != dev && access(path, F_OK)) continue;
+		snprintf(name, size, "%s", de->d_name);
+		*mdev = st.st_rdev;
+		ret = 1;
+	}
+	closedir(d);
+
+	return ret;
+}
+
+/* the LUKS status of one partition: its LUKS header, the key store, the
+ * loop devices on its file, the device mapper device on them (LUKS open),
+ * where it is mounted */
+static void luks_status(ctl_priv_t *priv, const char *name) {
+	char path[PATH_MAX], loop[NAME_MAX + 1], mapper[NAME_MAX + 1],
+	     mnt[PATH_MAX];
+	unsigned char hdr[8];
+	struct loop_info64 li;
+	struct dirent *de;
+	struct stat st;
+	ks_entry_t *e;
+	dev_t ldev, mdev;
+	int fd, luks = 0, version = 0, v, loops = 0;
+	DIR *d;
+
+	snprintf(path, sizeof(path), "%s/%s", priv->mountpoint, name);
+	if (stat(path, &st)) {
+		printf("%s: not open\n", name);
+		exit_status = EXIT_FAILURE;
+		return;
+	}
+	if ((fd = open(path, O_RDONLY|O_CLOEXEC)) != -1) {
+		if (pread(fd, hdr, sizeof(hdr), 0) == sizeof(hdr) &&
+				!memcmp(hdr, "LUKS\272\276", 6)) {
+			luks = 1;
+			version = hdr[6]<<8|hdr[7];
+		}
+		close(fd);
+	}
+	printf("%s: ", name);
+	if (luks && (version == 1 || version == 2))
+		printf("LUKS%d header", version);
+	else if (luks) printf("LUKS header (version %d)", version);
+	else printf("no LUKS header");
+	if (ks.data && (e = ks_find(&ks, -1, name, &v))) {
+		if (e->flags&KS_HAS_LUKS) printf(", its LUKS key is in view "
+				"%d of the key store", v + 1);
+		else printf(", in view %d of the key store (no LUKS key)",
+				v + 1);
+	}
+
+	/* the loop devices on the file of the partition */
+	if ((d = opendir("/sys/block"))) {
+		while ((de = readdir(d))) {
+			if (strncmp(de->d_name, "loop", 4)) continue;
+			snprintf(path, sizeof(path), "/dev/%s", de->d_name);
+			if ((fd = open(path, O_RDONLY|O_CLOEXEC)) == -1) continue;
+			if (ioctl(fd, LOOP_GET_STATUS64, &li) ||
+					li.lo_device != st.st_dev ||
+					li.lo_inode != st.st_ino) {
+				close(fd);
+				continue;
+			}
+			close(fd);
+			snprintf(loop, sizeof(loop), "%s", de->d_name);
+			snprintf(path, sizeof(path), "/sys/block/%s/dev", loop);
+			ldev = sysfs_dev(path);
+			loops++;
+			printf(", /dev/%s", loop);
+			if (mapper_on(loop, ldev, mapper, sizeof(mapper), &mdev)) {
+				printf(" open as /dev/mapper/%s", mapper);
+				if (mounted_at(mdev, mnt, sizeof(mnt)))
+					printf(" (mounted on %s)", mnt);
+			} else if (mounted_at(ldev, mnt, sizeof(mnt)))
+				printf(" mounted on %s", mnt);
+			else if (luks) printf(" (not opened)");
+		}
+		closedir(d);
+	}
+	if (!loops) printf(luks?", not open (no loop device)":
+			", no loop device");
+	printf("\n");
+}
+
+static int ctl_luksstatus(ctl_priv_t *priv, char *argv[]) {
+	struct dirent *de;
+	DIR *d;
+	int n = 0;
+
+	if (argv[0]) {
+		luks_status(priv, argv[0]);
+		return 0;
+	}
+	if (!(d = opendir(priv->mountpoint))) {
+		printf("unable to read %s: %s\n", priv->mountpoint,
+				strerror(errno));
+		exit_status = EXIT_FAILURE;
+		return 0;
+	}
+	while ((de = readdir(d))) {
+		if (de->d_name[0] == '.') continue;
+		luks_status(priv, de->d_name);
+		n++;
+	}
+	closedir(d);
+	if (!n) printf("no partitions are open\n");
+
+	return 0;
 }
 
 static int ctl_luksformat(ctl_priv_t *priv, char *argv[]) {
@@ -1586,7 +1795,7 @@ static int ctl_keys_copy(ctl_priv_t *priv, char *argv[]) {
 }
 
 /* overwrite the key file path (fd, len bytes) with zeroes, remove it */
-static void ks_wipe_file(int fd, const char *path, size_t len) {
+static void ks_wipe_file(int fd, size_t len) {
 	char zero[256] = { };
 	size_t n;
 
@@ -1597,10 +1806,8 @@ static void ks_wipe_file(int fd, const char *path, size_t len) {
 			if (write(fd, zero, n) != (ssize_t)n) break;
 			len -= n;
 		}
-		fsync(fd);
 	}
 	close(fd);
-	unlink(path);
 }
 
 /* an existing partition: its key from its passphrase; if it is open and
@@ -1608,8 +1815,7 @@ static void ks_wipe_file(int fd, const char *path, size_t len) {
  * passphrase of the LUKS volume, it is asked) */
 static int ks_import(ctl_priv_t *priv, int view, const char *name) {
 	ks_entry_t *e;
-	char *pw, tmp[] = "/run/scubed3ctl-key-XXXXXX",
-	     old[] = "/run/scubed3ctl-old-XXXXXX";
+	char *pw, tmp[32], old[32];
 	size_t len, old_len = 0;
 	int fd, old_fd = -1, other;
 	char *argv[] = { (char*)name }, *old_pw = NULL;
@@ -1632,8 +1838,9 @@ static int ks_import(ctl_priv_t *priv, int view, const char *name) {
 
 	/* the LUKS volume gets a new key; the new key and the existing
 	 * passphrase (asked here, so that all input comes from the same
-	 * place, also from a pipe) are in files on a tmpfs, they are wiped
-	 * afterwards */
+	 * place, also from a pipe) are in memory files (memfd_create, given
+	 * to cryptsetup as /dev/fd/N): they are wiped afterwards, and they
+	 * vanish with the processes, also when scubed3ctl is killed */
 	if (!do_server_command(priv->s, 0, "info %s", argv[0]) &&
 			!result.status && is_luks(priv, argv[0])) {
 		ks_random(e->luks, KS_LUKS);
@@ -1642,14 +1849,16 @@ static int ks_import(ctl_priv_t *priv, int view, const char *name) {
 						0, &old_len))) {
 			printf("the LUKS volume on \"%s\" gets no key in the key "
 					"store\n", argv[0]);
-		} else if ((fd = mkstemp(tmp)) == -1 ||
+		} else if ((fd = memfd_create("scubed3ctl-key", 0)) == -1 ||
 				write(fd, e->luks, KS_LUKS) != KS_LUKS ||
-				(old_fd = mkstemp(old)) == -1 ||
-				write(old_fd, old_pw, old_len) !=
+				(old_fd = memfd_create("scubed3ctl-old", 0)) ==
+				-1 || write(old_fd, old_pw, old_len) !=
 				(ssize_t)old_len) {
-			WARNING("unable to write a key file in /run: %s",
+			WARNING("unable to make a key file in memory: %s",
 					strerror(errno));
-		} else if (!var_system("cryptsetup luksAddKey --key-file %s "
+		} else if (snprintf(tmp, sizeof(tmp), "/dev/fd/%d", fd),
+				snprintf(old, sizeof(old), "/dev/fd/%d", old_fd),
+				!var_system("cryptsetup luksAddKey --key-file %s "
 					"%s/%s %s", old, priv->mountpoint,
 					argv[0], tmp)) {
 			e->flags |= KS_HAS_LUKS;
@@ -1657,8 +1866,8 @@ static int ks_import(ctl_priv_t *priv, int view, const char *name) {
 					"the key store\n", argv[0]);
 		}
 		free_passphrase(old_pw, old_len);
-		ks_wipe_file(fd, tmp, KS_LUKS);
-		ks_wipe_file(old_fd, old, old_len);
+		ks_wipe_file(fd, KS_LUKS);
+		ks_wipe_file(old_fd, old_len);
 		if (!(e->flags&KS_HAS_LUKS)) memset(e->luks, 0, KS_LUKS);
 	}
 	printf("the key of \"%s\" is in view %d (it is not checked: close and "
@@ -1909,6 +2118,12 @@ static ctl_command_t ctl_commands[] = {
 		.command = ctl_luksopen,
 		.argc = 1,
 		.usage = " NAME"
+	}, {
+		.head.key = "luksstatus",
+		.command = ctl_luksstatus,
+		.argc = 0,
+		.optargc = 1,
+		.usage = " [NAME]"
 	}, {
 		.head.key = "keys-create",
 		.command = ctl_keys_create,
@@ -2303,6 +2518,10 @@ int main(int argc, char **argv) {
 	}
 
 	signal(SIGPIPE, SIG_IGN);
+	signal(SIGINT, on_signal);
+	signal(SIGTERM, on_signal);
+	signal(SIGHUP, on_signal);
+	signal(SIGQUIT, on_signal);
 
 	if ((priv.s = socket(AF_UNIX, SOCK_STREAM, 0)) == -1)
 		FATAL("socket: %s", strerror(errno));
@@ -2318,8 +2537,24 @@ int main(int argc, char **argv) {
 				remote.sun_path, strerror(errno));
 
 
+	{
+		struct timeval tv = { 2, 0 };
+
+		if (setsockopt(priv.s, SOL_SOCKET, SO_RCVTIMEO, &tv,
+					sizeof(tv)))
+			FATAL("setsockopt: %s", strerror(errno));
+		wait_note = 1;
+	}
 	if (do_server_command(priv.s, 0, "static-info")) FATAL("unable to "
 			"request mountpoint");
+	if (wait_note) {
+		struct timeval tv = { 0, 0 };
+
+		wait_note = 0;
+		if (setsockopt(priv.s, SOL_SOCKET, SO_RCVTIMEO, &tv,
+					sizeof(tv)))
+			FATAL("setsockopt: %s", strerror(errno));
+	}
 	if (result.argc != 3 || result.status == -1)
 		FATAL("unexpected reply from server");
 

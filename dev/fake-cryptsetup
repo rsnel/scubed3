@@ -51,7 +51,7 @@ luksFormat)
 		h2=$(keyhash "Verify passphrase: "); [ "$h" = "$h2" ] || exit 2
 	fi
 	dd if=/dev/zero of="$2" bs=4096 count=256 conv=notrunc 2> /dev/null
-	printf 'LUKS\272\276\0\0%s' "$h" | dd of="$2" conv=notrunc 2> /dev/null;;
+	printf 'LUKS\272\276\0\2%s' "$h" | dd of="$2" conv=notrunc 2> /dev/null;;
 luksAddKey)
 	h=$(keyhash "Enter any existing passphrase: ")
 	hashes "$2" | grep -qx "$h" || { echo "No key available with this passphrase." >&2; exit 2; }

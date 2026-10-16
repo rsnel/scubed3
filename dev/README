@@ -364,7 +364,12 @@ keystoretest.sh DAEMON SCUBED3CTL
 	unlocks and adds views with it (not with a passphrase or a wrong
 	key); two scubed3ctl on two daemons with one key store: a write after
 	the other wrote it is refused, keys-create does not replace an
-	existing key store. Uses fake-cryptsetup (CRYPTSETUP=path
+	existing key store; luksstatus (the LUKS header, the key in the key
+	store, the loop device, /dev/mapper, the mount point, a partition that
+	is not open); a scubed3ctl that waits for the daemon says so; killed
+	with SIGTERM at a passphrase prompt on a terminal (python pty): echo
+	is on again; a temporary file of a gone process is removed by the next
+	write, keys-import leaves no key file. Uses fake-cryptsetup (CRYPTSETUP=path
 	for another cryptsetup).
 
 entropytest.sh DAEMON SCUBED3CTL

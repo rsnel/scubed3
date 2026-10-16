@@ -211,9 +211,28 @@ K=$T/keys
 run "-c unlock -c 'open root' -c 'luksopen-all root'" A2
 grep -q "1 LUKS volumes are opened" $T/out && [ -b /dev/mapper/scubed3-root ] ||
 	fail "luksopen-all: $(cat $T/out)"
+ok "luksopen-all root: the LUKS volume of root with its key from the store"
+# luksstatus: root has LUKS (its key in view 1), a loop device, it is open
+# as /dev/mapper/scubed3-root; plain (no LUKS) on a loop device with a
+# file system, mounted; a partition that is not open
+printf 'plainpw\nplainpw\n' | ctl -c "create plain" -c "resize plain 30" > /dev/null
+[ -e $MNT/plain ] || fail "create plain"
+run "-c unlock -c 'luksstatus root'" A2
+grep -q "^root: LUKS2 header, its LUKS key is in view 1 of the key store, /dev/loop[0-9]* open as /dev/mapper/scubed3-root$" $T/out ||
+	fail "luksstatus root: $(cat $T/out)"
+l=$(losetup -f --show $MNT/plain) || fail "losetup plain"
+mke2fs -q -F $l > $T/mkfs.out 2>&1 || fail "mke2fs on plain: $(cat $T/mkfs.out)"
+mkdir -p $T/m; mount $l $T/m || fail "mount plain"
+ctl -c luksstatus > $T/out
+umount $T/m; losetup -d $l
+grep -q "^plain: no LUKS header, $l mounted on $T/m$" $T/out || fail "luksstatus plain: $(cat $T/out)"
+grep -q "^root: LUKS2 header, /dev/loop" $T/out || fail "luksstatus without the key store: $(cat $T/out)"
+ctl -c "luksstatus hid" > $T/out && fail "luksstatus of a partition that is not open succeeds"
+grep -q "^hid: not open$" $T/out || fail "luksstatus hid: $(cat $T/out)"
+ctl -c "close plain" > /dev/null
+ok "luksstatus: the LUKS header, the key in the key store, the loop device, /dev/mapper, the mount point"
 cryptsetup close scubed3-root
 ctl -c "close root" > /dev/null
-ok "luksopen-all root: the LUKS volume of root with its key from the store"
 run "-c 'create lk'" lpw lpw
 ctl -c "resize lk 20" > /dev/null
 printf 'lukspw' | cryptsetup -q luksFormat --key-file=- $MNT/lk || fail "luksFormat lk"
@@ -299,6 +318,48 @@ ctl -K $T/k1 -c keys-create > $T/out
 grep -q "unable to create the key store" $T/out || fail "keys-create over a key store: $(cat $T/out)"
 printf 'V\n' | ctl -K $T/k1 -c unlock | grep -q "view 1: 0 entries" || fail "keys-create changed the key store"
 ok "keys-create does not replace an existing key store"
+
+echo "13. waiting for the daemon, killed scubed3ctl"
+# the daemon serves one scubed3ctl at a time: the second says why it waits
+{ sleep 5; printf 'S\n'; } | ctl -K $T/k1 -c unlock > /dev/null 2>&1 &
+pa=$!
+sleep 1
+$C -C $T/s3.conf -c p > $T/out 2> $T/err
+wait $pa
+grep -q "waiting: the scubed3 daemon serves another scubed3ctl" $T/err || fail "no waiting message: $(cat $T/err)"
+grep -q " blocks total" $T/out || fail "p after waiting: $(cat $T/out)"
+$C -C $T/s3.conf -c p 2>&1 > /dev/null | grep -q waiting && fail "a waiting message without another scubed3ctl"
+ok "a scubed3ctl that waits for another one says so"
+# killed at a passphrase prompt on a terminal: echo is on again
+python3 -I - "$C" $T/s3.conf $T/k1 << 'EOF' || fail "the terminal after a kill"
+import os, pty, sys, time, termios, signal
+pid, fd = pty.fork()
+if pid == 0:
+	os.execv(sys.argv[1], [sys.argv[1], "-q", "-C", sys.argv[2], "-K", sys.argv[3], "-c", "unlock"])
+out = b""
+end = time.time() + 10
+while b"passphrase: " not in out and time.time() < end:
+	out += os.read(fd, 1024)
+time.sleep(0.3)
+if termios.tcgetattr(fd)[3] & termios.ECHO:
+	print("echo is on at the prompt"); sys.exit(1)
+os.kill(pid, signal.SIGTERM)
+os.waitpid(pid, 0)
+if not termios.tcgetattr(fd)[3] & termios.ECHO:
+	print("echo is off after SIGTERM"); sys.exit(1)
+EOF
+ok "killed (SIGTERM) at a passphrase prompt: the terminal has echo again"
+# temporary files of a write that was killed with SIGKILL: removed by the
+# next write if their process is gone
+head -c 100 /dev/urandom > $T/k1.new.999999
+: > $T/k1.new.$$
+printf 'S\n\n' | ctl -K $T/k1 -c unlock-all -c "keys-add z1 1" > $T/out
+grep -q "the key store is written" $T/out || fail "keys-add z1: $(cat $T/out)"
+[ -e $T/k1.new.999999 ] && fail "the temporary file of a gone process is left"
+[ -e $T/k1.new.$$ ] || fail "the temporary file of a running process is removed"
+rm -f $T/k1.new.$$
+ls /run | grep -q scubed3ctl- && fail "a key file is in /run"
+ok "a temporary file of a killed write is removed by the next write, keys-import leaves no key file"
 
 cleanup
 echo "KEYSTORETEST OK"

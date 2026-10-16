@@ -102,6 +102,10 @@ int ks_write(keystore_t*);
 
 void ks_random(void*, size_t);
 
+/* for a signal handler: the temporary file of a write that is not done is
+ * removed (the old key store stays) */
+void ks_signal_cleanup(void);
+
 /* wipe and free everything */
 void ks_free(keystore_t*);
 

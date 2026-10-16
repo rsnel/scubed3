@@ -26,6 +26,9 @@
 #include <sys/random.h>
 #include <sys/stat.h>
 #include <sys/file.h>
+#include <dirent.h>
+#include <limits.h>
+#include <signal.h>
 #include "verbose.h"
 #include "util.h"
 #include "gcry.h"
@@ -97,6 +100,46 @@ static void ks_encrypt(ks_view_t *v, unsigned char *slot) {
 
 /* write data (KS_SIZE bytes) to path: to a new file next to it, that
  * replaces it (a crash leaves the old or the new store) */
+/* the temporary file of a write, for ks_signal_cleanup (a signal handler
+ * may only use what is set already) */
+static char ks_tmp[PATH_MAX];
+static volatile sig_atomic_t ks_tmp_used = 0;
+
+void ks_signal_cleanup(void) {
+	if (ks_tmp_used) unlink(ks_tmp);
+}
+
+/* temporary files of writers that are gone (killed with SIGKILL, or a
+ * crash): PATH.new.PID of a PID that does not exist */
+static void ks_remove_stale(const char *path) {
+	char *d, *b, *dir, *base, *end, name[PATH_MAX];
+	struct dirent *de;
+	size_t len;
+	long pid;
+	DIR *dd;
+
+	d = estrdup(path);
+	b = estrdup(path);
+	dir = dirname(d);
+	base = basename(b);
+	len = strlen(base);
+	if ((dd = opendir(dir))) {
+		while ((de = readdir(dd))) {
+			if (strncmp(de->d_name, base, len) ||
+					strncmp(de->d_name + len, ".new.", 5))
+				continue;
+			pid = strtol(de->d_name + len + 5, &end, 10);
+			if (*end || pid <= 0 || !kill(pid, 0) || errno != ESRCH)
+				continue;
+			snprintf(name, sizeof(name), "%s/%s", dir, de->d_name);
+			unlink(name);
+		}
+		closedir(dd);
+	}
+	free(d);
+	free(b);
+}
+
 /* write data to a new file next to path (its name has the pid: two
  * processes never write the same file), then replace path with it (create:
  * only if path does not exist, EEXIST otherwise: link fails if it exists,
@@ -111,7 +154,10 @@ static int ks_replace(const char *path, const unsigned char *data,
 
 	if (asprintf(&tmp, "%s.new.%ld", path, (long)getpid()) == -1)
 		FATAL("out of memory");
+	ks_remove_stale(path);
 	unlink(tmp);
+	snprintf(ks_tmp, sizeof(ks_tmp), "%s", tmp);
+	ks_tmp_used = 1;
 	if ((fd = open(tmp, O_WRONLY|O_CREAT|O_EXCL|O_CLOEXEC, 0600)) == -1)
 		goto out;
 	while (off < KS_SIZE) {
@@ -127,6 +173,7 @@ static int ks_replace(const char *path, const unsigned char *data,
 		if (link(tmp, path)) goto out_unlink;
 		unlink(tmp);
 	} else if (rename(tmp, path)) goto out_unlink;
+	ks_tmp_used = 0;
 
 	/* the rename must be on disk too */
 	d = estrdup(path);
@@ -143,6 +190,7 @@ out_unlink:
 	unlink(tmp);
 	errno = n;
 out:
+	ks_tmp_used = 0;
 	free(tmp);
 	return ret;
 }

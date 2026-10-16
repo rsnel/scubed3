@@ -325,6 +325,11 @@ initramfs; keys-remove NAME1 removes the old name), keys-remove NAME
 [VIEW]. More commands at once: scubed3ctl -c unlock-all -c open-all (the
 views stay unlocked between them).
 
+	s3> luksstatus [NAME]	of every open partition (or NAME): its LUKS
+				header (LUKS1, LUKS2), its LUKS key in an
+				unlocked view, the loop device on its file,
+				the /dev/mapper device on that (LUKS open),
+				where it is mounted
 	s3> luksopen-all [NAME]	opens the LUKS volumes of the partitions of
 				the view of NAME (all unlocked views without
 				NAME), with their keys from the key store
@@ -364,12 +369,25 @@ and of the configuration file.
 
 Two scubed3ctl at the same time: the daemon serves one scubed3ctl at a time
 (a second one waits until the first quits, also while an s3> prompt is
-open). With two daemons (two base devices) and one key store they can run
+open; after 2 seconds it says so on stderr). With two daemons (two base devices) and one key store they can run
 at the same time: a write takes a lock (flock) on the key store and checks
 that the file is still the one that was read; if another scubed3ctl wrote
 it meanwhile, the write is refused (it would lose that change: a view that
 is not unlocked here is overwritten with random data), quit, unlock again
 and redo the change. keys-create never replaces an existing key store.
+
+Killing scubed3ctl (Ctrl-C, kill, also kill -9) does no harm: what it has
+asked the daemon is done or not (the daemon finishes a command also when
+scubed3ctl is gone), the key store is written to a new file that replaces
+the old one at once (killed before: the old key store stays; the new file
+is removed, after kill -9 by the next write), the key files of keys-import
+are in memory (memfd), not in a file, and a terminal gets its echo back if
+it is killed at a passphrase prompt (not with kill -9: then type reset).
+What it did before is done: keys-add writes the key store before create,
+so a kill between them leaves a key for a partition that does not exist
+yet (create it again); luksformat killed while cryptsetup formats leaves
+the partition without a valid LUKS header (its key is in the key store:
+luksformat it again).
 
 One passphrase that opens everything is convenient, but if you have to give
 it away, everything is revealed: as with the partitions, keep a passphrase

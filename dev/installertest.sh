@@ -7,7 +7,7 @@
 # fake-cryptsetup (no device mapper); the daemon and scubed3ctl are real,
 # the base device is a loop device (200 MiB, 50 blocks of 4 MiB)
 #
-# 1. Configure scubed3: a new store (not filled, the file is random),
+# 1. Configure scubed3: a new store (filled with random data),
 #    "root" (60 MB, LUKS) and "hidden" (20 MB) are created, finish: level
 #    2, the unclaimed blocks are lent to root, LUKS on root; the sizes and
 #    the reserved blocks are checked, the size of the file of root does not
@@ -168,7 +168,6 @@ EOF
 cat > $T/lib/crypto-base.sh <<EOF
 . $T/lib/base.sh
 . $T/lib/commit.sh
-crypto_do_wipe() { return 0; }
 EOF
 
 # the scripts, with their paths in $T
@@ -216,7 +215,7 @@ ok "\"Configure scubed3\" is always offered; without a base device it says how t
 
 echo "1. Configure scubed3"
 ans partman-scubed3/store_type new
-ans partman-scubed3/fill false
+ans partman-scubed3/fill true
 ans partman-scubed3/mainmenu create create create finish
 ans partman-scubed3/name root hidden home
 ans partman-scubed3/size 60M 20M 20M

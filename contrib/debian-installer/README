@@ -52,9 +52,10 @@ Installing on scubed3, step by step
 2. Configure scubed3:
 
    - the partition table is written
-   - a new store: the partition is filled with random data (through
-     dm-crypt with a random key, as partman-crypto erases a partition),
-     a random salt is made and shown (keep a copy); an existing store:
+   - a new store: the partition is filled with random data (from
+     /dev/urandom, with a progress bar; the messages, and an error, are
+     in /var/log/syslog, "partman-scubed3"), a random salt is made and
+     shown (keep a copy); an existing store:
      its salt and the number of iterations are asked
    - the menu: create partitions (name, size, LUKS yes/no, passphrase),
      and open existing ones. Create the hidden partitions you want now

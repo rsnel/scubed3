@@ -73,7 +73,7 @@ setup_store () {
 		db_get partman-scubed3/fill
 		if [ "$RET" = true ] && ! s3_fill $base; then
 			db_subst partman-scubed3/fill_failed DEVICE "$(humandev $base)"
-			note partman-scubed3/fill_failed
+			s3_error partman-scubed3/fill_failed
 			return 1
 		fi
 		db_subst partman-scubed3/salt_note SALT "$salt"

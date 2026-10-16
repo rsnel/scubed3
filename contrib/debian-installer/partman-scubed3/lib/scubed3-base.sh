@@ -277,23 +277,60 @@ s3_start () {
 	return 0
 }
 
-# fill DEV with random data: dm-crypt with a random key over it, zeroes are
-# written to it (blockdev-wipe of partman-crypto, with a progress bar)
+# fill DEV with random data from /dev/urandom (a CSPRNG: free blocks look
+# like the blocks scubed3 writes; on a recent kernel it is about as fast as
+# a disk), in pieces of 64 MiB, with a progress bar that can be cancelled
+# (the rest of the partition stays as it is); no dm-crypt and no wipe
+# function of partman-crypto: they differ between releases (an error there
+# left nothing in the log); a failure is logged (see s3_error)
 s3_fill () {
-	local dev map
+	local dev sectors mib rest i n err cancelled=
 	dev=$1
-	map=scubed3-fill
-	s3_modules
-	log-output -t partman-scubed3 cryptsetup open --type plain \
-		--cipher aes-xts-plain64 --key-size 512 --key-file /dev/urandom \
-		--keyfile-size 64 "$dev" $map || return 1
-	db_subst partman-scubed3/progress/fill_title DEVICE "$(humandev $dev)"
-	db_subst partman-scubed3/progress/fill_text DEVICE "$(humandev $dev)"
-	if ! crypto_do_wipe partman-scubed3/progress/fill /dev/mapper/$map; then
-		log-output -t partman-scubed3 cryptsetup close $map
+	sectors=$(cat /sys/class/block/$(basename $(readlink -f $dev))/size 2>/dev/null)
+	if [ -z "$sectors" ]; then
+		logger -t partman-scubed3 "filling $dev: its size is not known"
 		return 1
 	fi
-	log-output -t partman-scubed3 cryptsetup close $map
+	mib=$(( sectors / 2048 ))
+	rest=$(( sectors % 2048 ))
+	logger -t partman-scubed3 "filling $dev ($mib MiB) with random data"
+
+	db_subst partman-scubed3/progress/fill_title DEVICE "$(humandev $dev)"
+	db_subst partman-scubed3/progress/fill_text DEVICE "$(humandev $dev)"
+	db_capb backup align progresscancel
+	db_progress START 0 $(( mib / 64 + 1 )) partman-scubed3/progress/fill_title
+	db_progress INFO partman-scubed3/progress/fill_text
+	i=0
+	while [ $(( i * 64 )) -lt $mib ]; do
+		n=$(( mib - i * 64 ))
+		[ $n -le 64 ] || n=64
+		if ! err=$(dd if=/dev/urandom of=$dev bs=1048576 count=$n \
+				seek=$(( i * 64 )) conv=notrunc 2>&1); then
+			logger -t partman-scubed3 "filling $dev at $(( i * 64 )) MiB: $err"
+			db_progress STOP
+			db_capb backup align
+			return 1
+		fi
+		i=$(( i + 1 ))
+		if ! db_progress SET $i; then
+			logger -t partman-scubed3 "filling $dev cancelled at $(( i * 64 )) MiB"
+			cancelled=1
+			break
+		fi
+	done
+	# the last part, smaller than a MiB
+	if [ $rest -gt 0 ] && [ $(( i * 64 )) -ge $mib ] &&
+			! err=$(dd if=/dev/urandom of=$dev bs=512 count=$rest \
+				seek=$(( mib * 2048 )) conv=notrunc 2>&1); then
+		logger -t partman-scubed3 "filling the end of $dev: $err"
+		db_progress STOP
+		db_capb backup align
+		return 1
+	fi
+	sync
+	db_progress STOP
+	db_capb backup align
+	[ "$cancelled" ] || logger -t partman-scubed3 "$dev is filled with random data"
 	return 0
 }
 

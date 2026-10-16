@@ -148,6 +148,8 @@ Type: error
 Description: ${DEVICE} could not be filled with random data
  An error occurred while ${DEVICE} was filled with random data. scubed3 is
  not configured.
+ .
+ ${ERROR}
 
 Template: partman-scubed3/no_salt
 Type: error

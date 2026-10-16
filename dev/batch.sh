@@ -33,6 +33,7 @@ run config sh $T/configtest.sh ./scubed3 ./scubed3ctl
 run socket sh $T/sockettest.sh ./scubed3 ./scubed3ctl
 run luks sh $T/lukstest.sh ./scubed3 ./scubed3ctl
 run keystore sh $T/keystoretest.sh ./scubed3 ./scubed3ctl
+run entropy sh $T/entropytest.sh ./scubed3 ./scubed3ctl
 run rootswitch python3 -u $T/rootswitchtest.py scubed3 18
 run initramfs sh $T/initramfstest.sh ./scubed3 ./scubed3ctl
 run installer sh $T/installertest.sh ./scubed3 ./scubed3ctl

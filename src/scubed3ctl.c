@@ -55,6 +55,8 @@
 #define DEFAULT_CONFIG_FILE		"/etc/scubed3.conf"
 #define DEFAULT_KEYSTORE_FILE		"/etc/scubed3.keys"
 #define KEY_LENGTH	32
+/* the key of a partition in the key store is a key of a partition */
+_Static_assert(KS_KEY == KEY_LENGTH, "the keys of the key store have KEY_LENGTH bytes");
 
 #define MAX_RESULT_LINES 128
 
@@ -1115,11 +1117,13 @@ static int ks_open(void) {
 }
 
 /* a passphrase from getrandom(2) (as /dev/random, cryptographically
- * secure): 32 letters (128 bits) in groups of four, with letters that are
+ * secure): 64 letters (256 bits: the key of the key store has 256 bits,
+ * and the keys in it) in groups of four, every letter is one of 16, from 4
+ * random bits (no bias), with letters that are
  * on the same keys with QWERTY, QWERTZ and AZERTY (the keyboard layout of
  * an initramfs may not be yours) and a space between the groups (the space
  * bar is the same everywhere); malloc'ed */
-#define KS_GEN_GROUPS	8
+#define KS_GEN_GROUPS	16
 static char *ks_generate_passphrase(size_t *len) {
 	static const char letters[16] = "bcdefghjknprstuv";
 	unsigned char r[KS_GEN_GROUPS*2];

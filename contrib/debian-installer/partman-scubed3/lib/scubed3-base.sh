@@ -218,8 +218,9 @@ s3_valid_name () {
 	[ ${#1} -le 30 ]
 }
 
-# a passphrase from /dev/random (cryptographically secure): 32 letters
-# (128 bits) in groups of four, letters that are on the same keys with
+# a passphrase from /dev/random (cryptographically secure): 64 letters
+# (256 bits: every letter is one of 16, from 4 random bits) in groups of
+# four, letters that are on the same keys with
 # QWERTY, QWERTZ and AZERTY, spaces between the groups (as scubed3ctl makes
 # one)
 s3_generate_passphrase () {
@@ -227,10 +228,10 @@ s3_generate_passphrase () {
 	letters=bcdefghjknprstuv
 	out=
 	n=0
-	bytes=$(dd if=/dev/random bs=16 count=1 2>/dev/null > $S3STATE/random.$$ &&
+	bytes=$(dd if=/dev/random bs=32 count=1 2>/dev/null > $S3STATE/random.$$ &&
 		{ od -An -tu1 < $S3STATE/random.$$ 2>/dev/null ||
 		  hexdump -v -e '1/1 "%u "' < $S3STATE/random.$$; })
-	dd if=/dev/zero of=$S3STATE/random.$$ bs=16 count=1 conv=notrunc 2>/dev/null
+	dd if=/dev/zero of=$S3STATE/random.$$ bs=32 count=1 conv=notrunc 2>/dev/null
 	rm -f $S3STATE/random.$$
 	for b in $bytes; do
 		for c in $(( b & 15 )) $(( b >> 4 )); do
@@ -239,7 +240,7 @@ s3_generate_passphrase () {
 			n=$(( n + 1 ))
 		done
 	done
-	[ $n = 32 ] || return 1
+	[ $n = 64 ] || return 1
 	echo "$out"
 }
 

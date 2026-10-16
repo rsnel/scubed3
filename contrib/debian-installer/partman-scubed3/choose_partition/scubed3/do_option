@@ -167,8 +167,19 @@ do_create () {
 
 	s3_choose_view "$name" || return 0
 
-	# new random keys in the key store, the partition is made with them
-	s3ks -c "keys-add $name $VIEW" -c "create $name" < /dev/null
+	# its passphrase (empty: a random key); the keys go into the key
+	# store (the LUKS key is random), the partition is made with them
+	db_metaget partman-scubed3/text/new_partition_description description
+	s3_ask_passphrase "$(printf "$RET" "$name")" yes empty || return 0
+	if [ "$PASS" ]; then
+		s3_busy open
+		printf '%s\n%s\n' "$PASS" "$PASS" |
+			s3ks -c "keys-add-passphrase $name $VIEW" -c "create $name"
+		s3_busy_done
+	else
+		s3ks -c "keys-add $name $VIEW" -c "create $name" < /dev/null
+	fi
+	PASS=
 	if [ ! -e $S3MNT/$name ] || ! s3ctl -c "resize $name $blocks"; then
 		s3_error partman-scubed3/create_failed "$name"
 		return 0
@@ -311,6 +322,17 @@ do_finish () {
 				s3_error partman-scubed3/luks_failed "$name"
 				return 1
 			fi
+			# a passphrase of the LUKS volume, next to its
+			# random key in the key store (empty: none)
+			db_metaget partman-scubed3/text/new_luks_description description
+			if s3_ask_passphrase "$(printf "$RET" "$name")" yes empty &&
+					[ "$PASS" ]; then
+				s3_busy luks
+				printf '%s\n%s\n' "$PASS" "$PASS" |
+					s3ks -c "luksaddkey $name"
+				s3_busy_done
+			fi
+			PASS=
 		fi
 		[ "$view" = 1 ] || continue
 		s3_busy luks

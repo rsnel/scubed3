@@ -582,6 +582,7 @@ static int ctl_help(ctl_priv_t *priv, char *argv[]) {
 	printf("resize NAME MACROBLOCKS\n");
 	printf("luksformat NAME\n");
 	printf("luksopen NAME\n");
+	printf("luksaddkey NAME   (a passphrase for the LUKS volume, next to its key)\n");
 	printf("luksstatus [NAME] (LUKS header, key store, loop device, /dev/mapper, mount)\n");
 	printf("\nKey store (%s):\n\n", ks.path);
 	printf("keys-setup        (guided: creates, unlocks, adds passphrases and partitions)\n");
@@ -597,6 +598,7 @@ static int ctl_help(ctl_priv_t *priv, char *argv[]) {
 	printf("keys-passphrase-change [VIEW]\n");
 	printf("keys-passphrase-remove [VIEW]\n");
 	printf("keys-add NAME [VIEW]\n");
+	printf("keys-add-passphrase NAME [VIEW] (the key of a passphrase, not a random key)\n");
 	printf("keys-copy NAME1 NAME2 [VIEW] (NAME2 gets the keys of NAME1)\n");
 	printf("keys-import NAME [VIEW]\n");
 	printf("keys-remove NAME [VIEW]\n");
@@ -1131,6 +1133,64 @@ static int ctl_luksformat(ctl_priv_t *priv, char *argv[]) {
 
 /* open the LUKS volume of a partition (for a boot: no filesystem is
  * mounted, nothing is written) */
+static void ks_wipe_file(int fd, size_t len);
+
+/* a passphrase is added to the LUKS volume of a partition (asked twice;
+ * empty: nothing is added), cryptsetup gets the key from the key store on
+ * a pipe and the new passphrase in a memory file (/dev/fd/N, memfd): the
+ * volume opens with it also without the key store */
+static int ctl_luksaddkey(ctl_priv_t *priv, char *argv[]) {
+	int fd, ambiguous;
+	ks_entry_t *e;
+	char *pw, path[32];
+	size_t len;
+
+	if (do_server_command(priv->s, 0, "info %s", argv[0])) return -1;
+	if (result.status) {
+		printf("%s\n", result.argv[0]);
+		exit_status = EXIT_FAILURE;
+		return 0;
+	}
+	if (!is_luks(priv, argv[0])) {
+		printf("partition \"%s\" has no LUKS header\n", argv[0]);
+		exit_status = EXIT_FAILURE;
+		return 0;
+	}
+	if (!(e = luks_key(argv[0], &ambiguous))) {
+		if (!ambiguous) printf("the LUKS key of \"%s\" is not in an "
+				"unlocked view (cryptsetup luksAddKey asks "
+				"an existing passphrase)\n", argv[0]);
+		exit_status = EXIT_FAILURE;
+		return 0;
+	}
+	if (!(pw = ask_passphrase("New passphrase of the LUKS volume (empty: "
+					"none): ", 1, &len))) return 0;
+	if (!len) {
+		free_passphrase(pw, len);
+		printf("no passphrase is added to the LUKS volume on \"%s\"\n",
+				argv[0]);
+		return 0;
+	}
+	if ((fd = memfd_create("scubed3ctl-pass", 0)) == -1 ||
+			write(fd, pw, len) != (ssize_t)len) {
+		WARNING("unable to make a key file in memory: %s",
+				strerror(errno));
+		free_passphrase(pw, len);
+		if (fd != -1) ks_wipe_file(fd, len);
+		exit_status = EXIT_FAILURE;
+		return 0;
+	}
+	snprintf(path, sizeof(path), "/dev/fd/%d", fd);
+	if (!cryptsetup_with_key(e, "cryptsetup luksAddKey --key-file=- "
+				"%s/%s %s", priv->mountpoint, argv[0], path))
+		printf("the LUKS volume on \"%s\" opens with the new "
+				"passphrase too\n", argv[0]);
+	free_passphrase(pw, len);
+	ks_wipe_file(fd, len);
+
+	return 0;
+}
+
 static int ctl_luksopen(ctl_priv_t *priv, char *argv[]) {
 	if (do_server_command(priv->s, 0, "info %s", argv[0])) return -1;
 	if (result.status) {
@@ -1706,7 +1766,10 @@ static int ctl_keys_passphrase_remove(ctl_priv_t *priv, char *argv[]) {
 /* NAME gets new random keys (of the partition and of its LUKS volume), or
  * the keys of NAME in another unlocked view (the same partition); 1 if the
  * view is changed (in memory) */
-static int ks_add(int view, const char *name) {
+/* a new entry for name in view: the keys of name in another unlocked view
+ * (the same partition), otherwise new keys: key (the key of a passphrase of
+ * the partition) or a random one if key is NULL, and a random LUKS key */
+static int ks_add(int view, const char *name, const unsigned char *key) {
 	ks_entry_t *e, *from;
 	int other;
 
@@ -1728,10 +1791,23 @@ static int ks_add(int view, const char *name) {
 		printf("view %d is full (%d entries)\n", view + 1, KS_ENTRIES);
 		return 0;
 	}
+	if (from && key) {
+		printf("\"%s\" is in view %d: its keys are copied with keys-add "
+				"(a partition has\none key)\n", name, other + 1);
+		memset(e, 0, sizeof(*e));
+		return 0;
+	}
 	if (from) {
 		memcpy(e, from, sizeof(*e));
 		printf("the keys of \"%s\" are copied from view %d to view %d\n",
 				name, other + 1, view + 1);
+	} else if (key) {
+		memcpy(e->key, key, KS_KEY);
+		ks_random(e->luks, KS_LUKS);
+		e->flags |= KS_HAS_LUKS;
+		printf("\"%s\" has the key of its passphrase and a new random "
+				"LUKS key in view %d:\ncreate it, and luksformat "
+				"it\n", name, view + 1);
 	} else {
 		ks_random(e->key, KS_KEY);
 		ks_random(e->luks, KS_LUKS);
@@ -1747,7 +1823,34 @@ static int ctl_keys_add(ctl_priv_t *priv, char *argv[]) {
 	int view;
 
 	if ((view = ks_view_arg(argv[1])) < 0) return 0;
-	if (ks_add(view, argv[0])) ks_commit();
+	if (ks_add(view, argv[0], NULL)) ks_commit();
+
+	return 0;
+}
+
+/* as keys-add, but the partition gets the key of a passphrase (it is asked
+ * twice; empty: a random key, as keys-add): it can also be opened without
+ * the key store, with the passphrase */
+static int ctl_keys_add_passphrase(ctl_priv_t *priv, char *argv[]) {
+	unsigned char key[KEY_LENGTH];
+	char *pw;
+	size_t len;
+	int view, ret;
+
+	if ((view = ks_view_arg(argv[1])) < 0) return 0;
+	if (!ks_valid_name(argv[0])) return 0;
+	if (!(pw = ask_passphrase("Passphrase of the partition (empty: a "
+					"random key): ", 1, &len))) return 0;
+	if (!len) {
+		free_passphrase(pw, len);
+		ret = ks_add(view, argv[0], NULL);
+	} else {
+		derive_key(pw, len, "", key);
+		free_passphrase(pw, len);
+		ret = ks_add(view, argv[0], key);
+		wipememory(key, sizeof(key));
+	}
+	if (ret) ks_commit();
 
 	return 0;
 }
@@ -2000,7 +2103,7 @@ static int ctl_keys_setup(ctl_priv_t *priv, char *argv[]) {
 			if (!ks_find(&ks, -1, name, NULL) && ks_valid_name(name)
 					&& ask_yn(prompt))
 				changed |= ks_import(priv, v, name);
-			else changed |= ks_add(v, name);
+			else changed |= ks_add(v, name, NULL);
 			free(name);
 		}
 	}
@@ -2119,6 +2222,11 @@ static ctl_command_t ctl_commands[] = {
 		.argc = 1,
 		.usage = " NAME"
 	}, {
+		.head.key = "luksaddkey",
+		.command = ctl_luksaddkey,
+		.argc = 1,
+		.usage = " NAME"
+	}, {
 		.head.key = "luksstatus",
 		.command = ctl_luksstatus,
 		.argc = 0,
@@ -2179,6 +2287,12 @@ static ctl_command_t ctl_commands[] = {
 	}, {
 		.head.key = "keys-add",
 		.command = ctl_keys_add,
+		.argc = 1,
+		.optargc = 1,
+		.usage = " NAME [VIEW]"
+	}, {
+		.head.key = "keys-add-passphrase",
+		.command = ctl_keys_add_passphrase,
 		.argc = 1,
 		.optargc = 1,
 		.usage = " NAME [VIEW]"

@@ -9,6 +9,8 @@
 # 3. an empty one: the error (it is never generated), a short one: the
 #    question about a weak passphrase (no), then a long one is taken
 # 4. a short one, weak passphrase yes: it is taken
+# 5. with EMPTY (a new partition, a new LUKS volume): both fields empty are
+#    taken (a random key), one empty field is a mismatch
 #
 # usage: cdebconftest.sh PREFIX SRC (as root: it writes /etc/cdebconf.conf,
 # an existing one is kept and put back)
@@ -92,7 +94,7 @@ cat > $T/ask << EOF
 . $T/ask.sh
 db_capb backup align
 db_metaget partman-scubed3/text/boot_passphrase description
-s3_ask_passphrase "\$RET" yes
+s3_ask_passphrase "\$RET" yes \$EMPTY
 echo "rc=\$? PASS=[\$PASS]" > $T/result
 EOF
 chmod +x $T/ask
@@ -150,5 +152,11 @@ ok "an empty one: the error (not generated), a short one: weak passphrase (no), 
 echo "4. a weak one, yes"
 run 'Passphrase:=>short|verify:=>short|default=2>=>1' "short"
 ok "taken"
+echo "5. a new partition: both fields empty"
+EMPTY=empty run 'Passphrase:=>|verify:=>' ""
+grep -aq 'ERROR' $T/out && fail "an error: $(grep -a ERROR $T/out)"
+EMPTY=empty run 'Passphrase:=>|verify:=>x|continue]=>|Passphrase:=>secret five|verify:=>secret five' "secret five"
+[ "$(grep -ac 'ERROR: Passphrase input error' $T/out)" = 1 ] || fail "no error for one empty field: $(cat $T/out)"
+ok "both empty: no passphrase (a random key); one empty: the error"
 cleanup
 echo "CDEBCONFTEST OK"

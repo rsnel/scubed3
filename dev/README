@@ -263,7 +263,10 @@ installertest.sh DAEMON SCUBED3CTL
 	(keys-derive, all other runs of scubed3ctl with the key store have
 	-k), a message is shown while the KDF and LUKS run; the views of the
 	key store; Configure scubed3 again: the passphrases are asked again
-	(a wrong one again, keys-derive three times), no view is lost;
+	(a wrong one again, keys-derive three times), no view is lost; root
+	gets a passphrase of its own and its LUKS volume one (at the end: root
+	opens with its passphrase without the key store, its LUKS header has
+	the passphrase as a second key), hidden and home random keys;
 	init.d makes /dev/mapper/testhost-root and -home (the hostname is
 	testhost) disks in partman
 	(format, root at /); check.d wants /boot (not on scubed3), / on root,
@@ -287,7 +290,9 @@ cdebconftest.sh CDEBCONF-PREFIX CDEBCONF-SRC
 	question about a weak passphrase. With cdebconf every command sets RET
 	(db_set: "value set"): this caught two equal passphrases that were
 	reported as different. Needs cdebconf built from its source with the
-	text frontend (see the script; not in batch.sh); writes
+	text frontend (see the script; not in batch.sh); for a new partition
+	or LUKS volume both fields may be empty (a random key), one empty
+	field is a mismatch; writes
 	/etc/cdebconf.conf (an existing one is put back).
 
 valgrindtest.sh DAEMON SCUBED3CTL
@@ -369,7 +374,11 @@ keystoretest.sh DAEMON SCUBED3CTL
 	is not open); a scubed3ctl that waits for the daemon says so; killed
 	with SIGTERM at a passphrase prompt on a terminal (python pty): echo
 	is on again; a temporary file of a gone process is removed by the next
-	write, keys-import leaves no key file. Uses fake-cryptsetup (CRYPTSETUP=path
+	write, keys-import leaves no key file; keys-add-passphrase (the
+	partition opens with its passphrase without the key store; empty: a
+	random key; two different ones are refused), luksaddkey (a LUKS
+	passphrase next to the key of the key store, both open the volume;
+	empty: nothing). Uses fake-cryptsetup (CRYPTSETUP=path
 	for another cryptsetup).
 
 entropytest.sh DAEMON SCUBED3CTL

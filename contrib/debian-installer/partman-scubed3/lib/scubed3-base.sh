@@ -221,13 +221,16 @@ s3_valid_name () {
 }
 
 # ask a passphrase with debconf (the template partman-scubed3/passphrase,
-# with DESCRIPTION), twice if VERIFY is yes; the passphrase is in $PASS,
+# with DESCRIPTION), twice if VERIFY is yes; with EMPTY "empty" both fields
+# may be left empty (a new partition or LUKS volume: a random key, PASS is
+# empty; never for the key store); the passphrase is in $PASS,
 # returns 1 if the user went back (db_set and db_go overwrite RET: the
 # values are kept before the questions are cleared)
 s3_ask_passphrase () {
-	local desc verify templ again
+	local desc verify empty templ again
 	desc=$1
 	verify=$2
+	empty=$3
 	PASS=
 	while :; do
 		db_subst partman-scubed3/passphrase DESCRIPTION "$desc"
@@ -250,7 +253,12 @@ s3_ask_passphrase () {
 		fi
 		db_set partman-scubed3/passphrase ""
 		RET=
-		if [ -z "$PASS" ]; then
+		if [ -z "$PASS" ] && [ "$empty" = empty ] && [ -z "$again" ]; then
+			return 0
+		elif [ -z "$PASS" ] && [ "$empty" = empty ]; then
+			again=
+			templ=partman-scubed3/passphrase-mismatch
+		elif [ -z "$PASS" ]; then
 			again=
 			templ=partman-scubed3/passphrase-empty
 		elif [ "$verify" = yes ] && [ "$PASS" != "$again" ]; then
@@ -434,14 +442,49 @@ s3ks_out () {
 
 # a message while something takes long (the KDF of a passphrase, LUKS):
 # without it the screen of the installer stays empty; $1 is the text
-# (partman-scubed3/progress/$1)
+# (partman-scubed3/progress/$1); the bar moves while it runs: a ticker in
+# the background sets it every second, to 90% at the duration of the last
+# time (S3STATE/busy_time.$1, 10 seconds the first time), then slower to
+# 99%; s3_busy_done stops it (no debconf command of ours runs before the
+# ticker is gone: they share the debconf pipes)
 s3_busy () {
-	db_progress START 0 1 partman-scubed3/progress/busy_title
+	local e
+	db_progress START 0 100 partman-scubed3/progress/busy_title
 	db_progress INFO partman-scubed3/progress/$1
+	S3BUSY_TYPE=$1
+	S3BUSY_START=$(date +%s)
+	e=$(cat $S3STATE/busy_time.$1 2>/dev/null)
+	[ "${e:-0}" -gt 0 ] 2>/dev/null || e=10
+	rm -f $S3STATE/busy.stop
+	# (an asynchronous list gets /dev/null as its input: the answers of
+	# debconf come through fd 8)
+	exec 8<&0
+	(
+		t=0
+		while [ ! -f $S3STATE/busy.stop ]; do
+			sleep 1
+			[ -f $S3STATE/busy.stop ] && break
+			t=$((t + 1))
+			if [ $t -lt $e ]; then
+				db_progress SET $((90*t/e))
+			else
+				db_progress SET $((99 - 9*e/t))
+			fi
+		done
+	) <&8 &
+	S3BUSY_PID=$!
+	exec 8<&-
 }
 
 s3_busy_done () {
-	db_progress SET 1
+	local t
+	>$S3STATE/busy.stop
+	wait $S3BUSY_PID 2>/dev/null
+	rm -f $S3STATE/busy.stop
+	t=$(( $(date +%s) - S3BUSY_START ))
+	[ $t -gt 0 ] || t=1
+	echo $t > $S3STATE/busy_time.$S3BUSY_TYPE
+	db_progress SET 100
 	db_progress STOP
 }
 

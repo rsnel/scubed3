@@ -315,7 +315,10 @@ its keys instead of asking passphrases, luksopen opens a LUKS volume (as
 /dev/mapper/PREFIXNAME). The keys of a LUKS volume are random (64 bytes),
 they are given to cryptsetup on a pipe, never in a file. To change the key
 store: keys-create, keys-passphrase-add, keys-passphrase-change [VIEW],
-keys-passphrase-remove [VIEW], keys-add NAME [VIEW] (new random keys, or the
+keys-passphrase-remove [VIEW], keys-add-passphrase NAME [VIEW] (as keys-add,
+but the partition gets the key of a passphrase, asked twice, so that it
+also opens without the key store; empty: a random key), keys-add NAME
+[VIEW] (new random keys, or the
 keys of NAME in another unlocked view: the same partition in more views),
 keys-import NAME [VIEW] (a partition with its own passphrase; if it is open
 and has LUKS on it, the LUKS volume gets a new key, a passphrase of the LUKS
@@ -325,6 +328,10 @@ initramfs; keys-remove NAME1 removes the old name), keys-remove NAME
 [VIEW]. More commands at once: scubed3ctl -c unlock-all -c open-all (the
 views stay unlocked between them).
 
+	s3> luksaddkey NAME	a passphrase for the LUKS volume of NAME, next
+				to its key in the key store (cryptsetup gets
+				the key on a pipe, the passphrase in a memory
+				file): it opens also without the key store
 	s3> luksstatus [NAME]	of every open partition (or NAME): its LUKS
 				header (LUKS1, LUKS2), its LUKS key in an
 				unlocked view, the loop device on its file,

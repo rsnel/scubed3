@@ -34,6 +34,14 @@ Template: partman-scubed3/text/luks_description
 Type: text
 Description: the LUKS volume on the scubed3 partition "%s"
 
+Template: partman-scubed3/text/new_partition_description
+Type: text
+Description: the new scubed3 partition "%s". With a passphrase it can also be opened without the key store (its key is in the key store too). Leave both fields empty for a random key (256 bits): then only the key store opens it
+
+Template: partman-scubed3/text/new_luks_description
+Type: text
+Description: the LUKS volume on the scubed3 partition "%s": a passphrase is an extra key of the volume, next to its random key (512 bits) in the key store, it opens the volume also without the key store. Leave both fields empty for no passphrase: then only the key store opens it
+
 Template: partman-scubed3/text/boot_passphrase
 Type: text
 Description: the key store, the boot passphrase (it is asked at boot, as for an encrypted disk; it gives the keys of root and of the partitions that are not hidden)
@@ -335,8 +343,8 @@ Type: password
 Description: Passphrase:
  The passphrase of ${DESCRIPTION}.
  .
- With the wrong passphrase scubed3 finds no blocks, as if the partition
- does not exist. Choose a passphrase that is hard to guess.
+ Choose a passphrase that is hard to guess: with the disk and the
+ passphrase anyone can open what it protects.
 
 Template: partman-scubed3/passphrase-again
 Type: password

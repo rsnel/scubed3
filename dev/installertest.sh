@@ -281,9 +281,11 @@ ans partman-scubed3/name old root hidden home
 ans partman-scubed3/size 60M 20M 20M
 ans partman-scubed3/luks true false true
 ans partman-scubed3/view boot hidden boot
-# (the hidden passphrase: first empty, then twice a different one)
-ans partman-scubed3/passphrase bootpass1 oldpass1 wrongluks oldluks1 "" hiddenpw1 hiddenpw1
-ans partman-scubed3/passphrase-again bootpass1 "" hiddenpwX hiddenpw1
+# (the hidden passphrase of the key store: first empty, then twice a
+# different one; root gets a passphrase, hidden and home random keys; the
+# LUKS volume of root a passphrase, home none: home is formatted first)
+ans partman-scubed3/passphrase bootpass1 oldpass1 wrongluks oldluks1 rootpass1 "" hiddenpw1 hiddenpw1 "" "" "" luksroot1
+ans partman-scubed3/passphrase-again bootpass1 rootpass1 "" hiddenpwX hiddenpw1 "" "" "" luksroot1
 ans partman-scubed3/level 2
 ans partman-scubed3/boot_level 2
 sh $T/do_option > $T/do_option.out 2>&1 || fail "do_option: $(cat $T/do_option.out)"
@@ -490,5 +492,17 @@ after=$(info root pending_removals)
 [ "$after" = 0 ] || [ "$after" -lt "$pending" ] ||
 	fail "the removals are not drained ($pending -> $after)"
 ok "level 2 after the boot, writes drain the removals ($pending -> $after pending)"
+# the passphrases of root: its LUKS volume has the passphrase as an extra
+# key (home has none), root opens with its passphrase without the key store
+lh() { dd if=$MNT/$1 bs=1 skip=8 count=512 2> /dev/null | tr -d '\0' | fold -w 64; }
+lh root | grep -qx "$(printf luksroot1 | sha256sum | cut -c1-64)" || fail "the LUKS passphrase of root"
+[ "$(lh root | grep -c .)" = 2 ] && [ "$(lh home | grep -c .)" = 1 ] ||
+	fail "LUKS keys: root $(lh root | grep -c .), home $(lh home | grep -c .)"
+umount $T/target/home; umount $T/target
+cryptsetup close testhost-root
+ctl -c "close root" > /dev/null
+printf 'rootpass1\n' | ctl -c "open root" > /dev/null
+[ "$(info root no_macroblocks)" = 20 ] || fail "root does not open with its passphrase"
+ok "root opens with its passphrase (without the key store), its LUKS volume with its passphrase too; home has only its random LUKS key"
 cleanup
 echo "INSTALLERTEST OK"

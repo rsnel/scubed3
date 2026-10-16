@@ -361,5 +361,29 @@ rm -f $T/k1.new.$$
 ls /run | grep -q scubed3ctl- && fail "a key file is in /run"
 ok "a temporary file of a killed write is removed by the next write, keys-import leaves no key file"
 
+echo "14. keys-add-passphrase, luksaddkey"
+printf 'S\n\npp3pass\npp3pass\n' | ctl -K $T/k1 -c unlock-all -c "keys-add-passphrase p3 1" -c "create p3" -c "resize p3 10" > $T/out
+grep -q '"p3" has the key of its passphrase' $T/out && [ -e $MNT/p3 ] || fail "keys-add-passphrase p3: $(cat $T/out)"
+ctl -c "close p3" > /dev/null
+printf 'pp3pass\n' | ctl -K $T/nokeys -c "open p3" > /dev/null
+[ -e $MNT/p3 ] || fail "p3 does not open with its passphrase (without the key store)"
+printf 'S\n\n\n\n' | ctl -K $T/k1 -c unlock-all -c "keys-add-passphrase p4 1" > $T/out
+grep -q '"p4" has new random keys' $T/out || fail "keys-add-passphrase with an empty passphrase: $(cat $T/out)"
+printf 'S\n\nxx\nyy\n' | ctl -K $T/k1 -c unlock-all -c "keys-add-passphrase p5 1" > $T/out
+grep -q "passphrases do not match" $T/out && ! grep -q '"p5"' $T/out || fail "two different passphrases: $(cat $T/out)"
+ok "keys-add-passphrase: the partition opens with its passphrase without the key store; empty: a random key"
+lh() { dd if=$MNT/$1 bs=1 skip=8 count=512 2> /dev/null | tr -d '\0' | fold -w 64 | grep -c .; }
+printf 'S\n\n' | ctl -K $T/k1 -c unlock-all -c "luksformat p3" > /dev/null
+printf 'S\n\nlp3pass\nlp3pass\n' | ctl -K $T/k1 -c unlock-all -c "luksaddkey p3" > $T/out
+grep -q "opens with the new passphrase too" $T/out && [ "$(lh p3)" = 2 ] || fail "luksaddkey p3: $(cat $T/out)"
+printf 'S\n\n\n\n' | ctl -K $T/k1 -c unlock-all -c "luksaddkey p3" > $T/out
+grep -q "no passphrase is added" $T/out && [ "$(lh p3)" = 2 ] || fail "luksaddkey with an empty passphrase: $(cat $T/out)"
+printf 'lp3pass' | cryptsetup open --key-file=- $MNT/p3 lp3 && cryptsetup close lp3 || fail "the LUKS passphrase does not open p3"
+printf 'S\n\n' | ctl -K $T/k1 -c unlock-all -c "luksopen p3" > /dev/null
+[ -b /dev/mapper/scubed3-p3 ] || fail "the LUKS key of the key store does not open p3 after luksaddkey"
+cryptsetup close scubed3-p3
+ctl -c "close p3" > /dev/null
+ok "luksaddkey: a passphrase next to the key of the key store (both open it); empty: nothing is added"
+
 cleanup
 echo "KEYSTORETEST OK"

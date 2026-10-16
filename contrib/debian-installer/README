@@ -69,7 +69,9 @@ Installing on scubed3, step by step
      of the LUKS volumes are: random, in the key store); then a note: make
      a backup of the key store and of the configuration (not on this disk)
    - the menu: create partitions (name, size, LUKS yes/no, which
-     passphrase), and open existing ones (name, passphrase, the passphrase
+     passphrase of the key store, a passphrase of the partition: with it
+     the partition also opens without the key store, both fields empty: a
+     random key, 256 bits), and open existing ones (name, passphrase, the passphrase
      of the LUKS volume, which passphrase). The keys go into the key store:
      in the view of the boot passphrase (opened at boot, their LUKS volumes
      too), or in the view of a hidden passphrase (asked once, twice the
@@ -86,13 +88,17 @@ Installing on scubed3, step by step
    - finish: the paranoia level during the installation (0, the fastest,
      to 3; 2 is recommended) and of the installed system; the unclaimed blocks are
      lent to root (see below); LUKS on the partitions that get it (their
-     keys are random, they are in the key store), the LUKS volumes of the
-     view of the boot passphrase are opened
+     keys are random, 512 bits, they are in the key store; a passphrase of
+     the LUKS volume is asked, an extra key that opens it without the key
+     store, both fields empty: none), the LUKS volumes of the view of the
+     boot passphrase are opened
    - the KDF of a passphrase takes long (seconds, minutes without KVM):
      the installer computes it once per passphrase of the key store
      (scubed3ctl keys-derive) and keeps the key in its memory (the
      commands get it with scubed3ctl -k), a message is shown while it
-     runs (also while a partition is opened and while LUKS is set up)
+     runs (also while a partition is opened and while LUKS is set up),
+     its bar moves: to 90% at the duration of the last time (10 seconds
+     the first time), then slower
    - "Configure scubed3" again: the boot passphrase and the hidden
      passphrases are asked again (a change of the key store needs all of
      them)

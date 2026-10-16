@@ -19,6 +19,17 @@
 
 . /lib/partman/lib/base.sh
 
+# the templates are loaded when the udeb is configured by anna; a udeb that
+# is installed by hand (udpkg -i in a shell, see ../README) while the
+# installer runs is not seen by the debconf of the installer (it keeps its
+# database in memory): then the templates are loaded through it (a copy of
+# them is in the udeb)
+S3TEMPLATES=/usr/share/partman-scubed3/templates
+if ! db_metaget partman-scubed3/text/configure description 2>/dev/null &&
+		[ -f $S3TEMPLATES ]; then
+	db_x_loadtemplatefile $S3TEMPLATES partman-scubed3 2>/dev/null || true
+fi
+
 S3STATE=/var/lib/partman/scubed3
 S3MNT=/dev/scubed3fs
 S3SOCK=/run/scubed3/control
@@ -233,13 +244,28 @@ s3_random_salt () {
 	echo "$s"
 }
 
+# the kernel modules: fuse (the daemon), loop (LUKS on a partition goes
+# through a loop device), dm-mod and dm-crypt (LUKS); they are in the
+# kernel of the installer or in its module udebs (fuse-modules,
+# loop-modules: anna installs them with partman-crypto-dm, or load them by
+# hand), they are not a dependency of partman-scubed3: their names change
+# with the kernel; insmod if modprobe does not find them
+s3_modules () {
+	local m
+	for m in fuse loop dm-mod dm-crypt; do
+		modprobe -q $m 2>/dev/null || insmod $m 2>/dev/null || true
+	done
+}
+
 # start the daemon on BASE
 s3_start () {
 	local i
-	modprobe -q fuse 2>/dev/null || true
-	modprobe -q loop 2>/dev/null || true
-	modprobe -q dm-mod 2>/dev/null || true
-	modprobe -q dm-crypt 2>/dev/null || true
+	s3_modules
+	if [ ! -c /dev/fuse ]; then
+		logger -t partman-scubed3 "/dev/fuse does not exist: the" \
+			"kernel module fuse is not loaded (modprobe fuse)"
+		return 1
+	fi
 	mkdir -p $S3MNT
 	log-output -t partman-scubed3 scubed3 -b "$1" $(cat $S3STATE/options) $S3MNT || return 1
 	i=0
@@ -257,7 +283,7 @@ s3_fill () {
 	local dev map
 	dev=$1
 	map=scubed3-fill
-	modprobe -q dm-crypt 2>/dev/null || true
+	s3_modules
 	log-output -t partman-scubed3 cryptsetup open --type plain \
 		--cipher aes-xts-plain64 --key-size 512 --key-file /dev/urandom \
 		--keyfile-size 64 "$dev" $map || return 1

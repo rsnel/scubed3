@@ -85,8 +85,9 @@ Description: The shell of the installer has no 64 bit arithmetic
 Template: partman-scubed3/no_base
 Type: error
 Description: No base device for scubed3
- No partition is used as the base device of scubed3. Choose a partition,
- and set "Use as:" to "base device for scubed3".
+ No partition is used as the base device of scubed3. Choose a partition
+ (or make one in free space), and set "Use as:" to "base device for
+ scubed3". Then choose "Configure scubed3" again.
 
 Template: partman-scubed3/too_many_bases
 Type: error
@@ -185,6 +186,9 @@ Description: scubed3 could not be started
  The scubed3 daemon did not start on the base device.
  .
  ${ERROR}
+ .
+ scubed3 needs the kernel modules fuse and loop; if they are not loaded,
+ load them in a shell (modprobe fuse; modprobe loop) and try again.
 
 Template: partman-scubed3/mainmenu
 Type: select

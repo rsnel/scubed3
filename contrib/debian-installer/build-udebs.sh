@@ -106,6 +106,9 @@ done
 cp $S/finish-install.d/08scubed3 $P/usr/lib/finish-install.d/
 find $P/lib $P/usr -type f ! -name '*.sh' -exec chmod 755 {} +
 cp $S/templates $P/DEBIAN/templates
+# a copy, for a udeb that is installed by hand (see lib/scubed3-base.sh)
+mkdir -p $P/usr/share/partman-scubed3
+cp $S/templates $P/usr/share/partman-scubed3/templates
 cat > $P/DEBIAN/control <<EOF
 Package: partman-scubed3
 Package-Type: udeb
@@ -115,7 +118,7 @@ Architecture: all
 Maintainer: $MAINT
 Section: debian-installer
 Priority: optional
-Depends: partman-base, partman-crypto-dm, cdebconf-udeb, di-utils, scubed3-udeb (= $VERSION), fuse-modules, loop-modules
+Depends: partman-base, partman-crypto-dm, cdebconf-udeb, di-utils, scubed3-udeb (= $VERSION)
 Description: Add to partman support for scubed3 (hidden encrypted partitions)
 EOF
 dpkg-deb -Zxz --root-owner-group -b $P "$OUT/partman-scubed3_${VERSION}_all.udeb" > /dev/null ||

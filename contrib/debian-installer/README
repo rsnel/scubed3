@@ -8,7 +8,8 @@ the same way as software RAID, LVM and encrypted volumes:
   partitions)"
 - the main menu of the partitioner has "Configure scubed3 (hidden encrypted
   partitions)", next to "Configure software RAID", "Configure the Logical
-  Volume Manager" and "Configure encrypted volumes"
+  Volume Manager" and "Configure encrypted volumes" (without a base device
+  it says how to make one)
 
 "Configure scubed3" writes the partition table, fills the base device with
 random data (or uses an existing scubed3 store, with its salt), starts the
@@ -178,8 +179,11 @@ builds, with dpkg-deb (no debhelper needed):
 
 The dependencies of the udebs: libfuse3-*-udeb, libgcrypt20-udeb,
 libgpg-error0-udeb (from dpkg-shlibdeps), partman-crypto-dm (cryptsetup,
-dmsetup, the dm-crypt modules, blockdev-wipe and blockdev-keygen),
-fuse-modules and loop-modules (the kernel modules of the installer).
+dmsetup, the dm-crypt modules, blockdev-wipe and blockdev-keygen). The
+kernel modules fuse and loop are not a dependency (the names of their
+udebs change with the kernel, and they are often in the installer
+already): "Configure scubed3" loads them (modprobe, or insmod), and says
+so if fuse is missing.
 
 
 Getting it into the installer
@@ -193,12 +197,17 @@ Getting it into the installer
 - For testing, in a normal installer (expert mode): after the mirror is
   configured, in a shell (Alt-F2), with the udebs on a USB stick:
 
-	# anna-install partman-crypto-dm libfuse3-4-udeb libgcrypt20-udeb \
-		fuse-modules-$(uname -r)-di loop-modules-$(uname -r)-di
+	# anna-install partman-crypto-dm libfuse3-4-udeb libgcrypt20-udeb
 	# udpkg -i /media/scubed3-udeb_*.udeb /media/partman-scubed3_*.udeb
+	# modprobe fuse; modprobe loop	(if that fails: insmod fuse,
+					insmod loop)
 
   (the names of the library udebs depend on the release: see the
-  Depends of scubed3-udeb). Then start "Partition disks" again.
+  Depends of scubed3-udeb). Then start "Partition disks" again. The
+  running debconf of the installer may not have the templates of a udeb
+  that is installed by hand (partman then says
+  "partman/method_long/scubed3 doesn't exist"); partman-scubed3 loads
+  them itself, from its copy in /usr/share/partman-scubed3/templates.
 
 - The package scubed3 for the installed system: in a local repository
   that the installer knows (preseed apt-setup/local0/repository), or on

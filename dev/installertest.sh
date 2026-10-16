@@ -114,6 +114,7 @@ db_fget() { RET=false; }
 db_reset() { :; }
 db_register() { :; }
 db_capb() { :; }
+db_x_loadtemplatefile() { echo "loadtemplatefile \$*" >> $T/asked; }
 db_progress() { :; }
 EOF
 # answers, one per line, per template
@@ -203,11 +204,15 @@ mkdir -p $DISK/p1
 echo /dev/disk > $DISK/device
 echo "1 p1 209715200 primary unknown $LOOP base" > $DISK/partitions
 
-sh $T/choices | grep -q scubed3 && fail "Configure scubed3 is offered without a base device"
+sh $T/choices | grep -q "^scubed3	Configure scubed3" ||
+	fail "Configure scubed3 is not offered without a base device"
+sh $T/do_option > /dev/null 2>&1
+tail -n1 $T/asked | grep -q no_base || fail "no no_base error without a base device"
 echo scubed3 > $DISK/p1/method
 sh $T/choices | grep -q "^scubed3	Configure scubed3" ||
 	fail "Configure scubed3 is not offered"
-ok "\"Configure scubed3\" is offered when a partition is the base device"
+grep -q loadtemplatefile $T/asked && fail "the templates are loaded again"
+ok "\"Configure scubed3\" is always offered; without a base device it says how to make one"
 
 echo "1. Configure scubed3"
 ans partman-scubed3/store_type new

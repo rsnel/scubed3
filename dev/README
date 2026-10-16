@@ -248,7 +248,8 @@ installertest.sh DAEMON SCUBED3CTL
 	are real, the base device is a loop device with the partition "old"
 	of an earlier installation (its own passphrase and LUKS). Without
 	cryptsetup Configure scubed3 runs anna-install cryptsetup-udeb, then
-	an error. Configure scubed3: the existing store (its salt), a key store with the boot
+	an error; without the device mapper target crypt (dmsetup targets) it
+	runs modprobe dm-crypt and depmod, then an error. Configure scubed3: the existing store (its salt), a key store with the boot
 	passphrase; old is opened first (its passphrase, a wrong and the right
 	LUKS passphrase: its keys and a new LUKS key go into the view of the
 	boot passphrase), root (60 MB, LUKS), hidden (20 MB, a hidden

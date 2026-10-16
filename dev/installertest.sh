@@ -88,10 +88,22 @@ cat > $T/bin/in-target <<EOF
 #!/bin/sh
 echo "\$*" >> $T/in-target
 EOF
+# modprobe: dm-crypt gives the device mapper the target crypt (dmsetup
+# targets), not with $T/no_dm_crypt (a module that cannot be loaded)
 cat > $T/bin/modprobe <<EOF
 #!/bin/sh
-exit 0
+echo "\$*" >> $T/modprobe
+[ "\$2" = dm-crypt ] || exit 0
+[ -f $T/no_dm_crypt ] && exit 1
+>$T/dm_crypt
 EOF
+cat > $T/bin/dmsetup <<EOF
+#!/bin/sh
+[ "\$1" = targets ] || exit 1
+[ -f $T/dm_crypt ] && echo "crypt            v1.27.0"
+echo "linear           v1.4.0"
+EOF
+printf '#!/bin/sh\necho depmod >> %s/modprobe\n' $T > $T/bin/depmod
 chmod +x $T/bin/*
 
 # debconf: db_input takes the next answer of the template from $T/ans (if
@@ -237,6 +249,15 @@ if ! command -v cryptsetup > /dev/null; then
 	ok "without cryptsetup: anna-install cryptsetup-udeb, then an error"
 fi
 mv $T/bin/cryptsetup.off $T/bin/cryptsetup
+# dm-crypt cannot be loaded: depmod, an error
+>$T/no_dm_crypt; rm -f $T/dm_crypt
+: > $T/asked; : > $T/modprobe
+sh $T/do_option > /dev/null 2>&1
+grep -q no_cryptsetup $T/asked || fail "no error without dm-crypt: $(cat $T/asked)"
+grep -q '^-q dm-crypt$' $T/modprobe && grep -q '^depmod$' $T/modprobe ||
+	fail "dm-crypt is not loaded: $(cat $T/modprobe)"
+rm -f $T/no_dm_crypt
+ok "without the target crypt: modprobe dm-crypt, depmod, then an error"
 
 # an earlier installation: the partition old, with its own passphrase and
 # LUKS

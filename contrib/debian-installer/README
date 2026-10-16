@@ -236,6 +236,10 @@ Getting it into the installer
   scubed3-udeb). udpkg installs no dependencies: without cryptsetup
   "Configure scubed3" runs anna-install cryptsetup-udeb (and dmsetup-udeb,
   crypto-dm-modules), if that fails it says so (LUKS on root needs it).
+  It loads dm-crypt (and xts, aes) itself: a module udeb that anna installs
+  later is not in modules.dep, the kernel cannot load it on demand
+  ("device-mapper: table: crypt: unknown target type"); it runs depmod -a
+  and modprobe, or insmod of the file of the module.
   Then start "Partition disks" again. The
   running debconf of the installer may not have the templates of a udeb
   that is installed by hand (partman then says

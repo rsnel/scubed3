@@ -293,6 +293,10 @@ do_finish () {
 	# LUKS on the partitions that get it (the keys from the key store),
 	# the LUKS volumes of the view of the boot passphrase are opened (the
 	# others are not used by the installed system)
+	if ! s3_cryptsetup; then
+		note partman-scubed3/no_cryptsetup
+		return 1
+	fi
 	for p in $S3STATE/parts/*; do
 		[ -d "$p" ] || continue
 		name=${p##*/}

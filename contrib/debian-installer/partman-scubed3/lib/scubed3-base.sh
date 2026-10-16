@@ -303,10 +303,25 @@ s3_random_salt () {
 # loop-modules: anna installs them with partman-crypto-dm, or load them by
 # hand), they are not a dependency of partman-scubed3: their names change
 # with the kernel; insmod if modprobe does not find them
+# a kernel module: modprobe; a module udeb that anna installed after the
+# start of the installer may not be in modules.dep yet (then the kernel
+# cannot load it on demand either: "crypt: unknown target type"): depmod,
+# modprobe again, otherwise insmod of its file
+s3_load_module () {
+	local f
+	modprobe -q $1 2>/dev/null && return 0
+	depmod -a 2>/dev/null
+	modprobe -q $1 2>/dev/null && return 0
+	f=$(find /lib/modules/$(uname -r) -name "$1.ko*" 2>/dev/null | head -n 1)
+	[ "$f" ] || f=$(find /lib/modules/$(uname -r) \
+		-name "$(echo $1 | tr - _).ko*" 2>/dev/null | head -n 1)
+	[ "$f" ] && insmod $f 2>/dev/null
+}
+
 s3_modules () {
 	local m
 	for m in fuse loop dm-mod dm-crypt; do
-		modprobe -q $m 2>/dev/null || insmod $m 2>/dev/null || true
+		s3_load_module $m || true
 	done
 }
 
@@ -434,13 +449,27 @@ s3_busy_done () {
 # cryptsetup-udeb, but a udeb installed by hand (udpkg -i) gets no
 # dependencies; it is installed if it is missing
 s3_cryptsetup () {
-	local u
-	command -v cryptsetup > /dev/null 2>&1 && return 0
-	for u in cryptsetup-udeb dmsetup-udeb crypto-dm-modules; do
-		log-output -t partman-scubed3 anna-install $u ||
-			logger -t partman-scubed3 "anna-install $u failed"
+	local u m
+	if ! command -v cryptsetup > /dev/null 2>&1; then
+		for u in cryptsetup-udeb dmsetup-udeb crypto-dm-modules; do
+			log-output -t partman-scubed3 anna-install $u ||
+				logger -t partman-scubed3 "anna-install $u failed"
+		done
+		command -v cryptsetup > /dev/null 2>&1 || return 1
+	fi
+	# the device mapper target crypt (dm-crypt), and the cipher of LUKS
+	# (aes-xts-plain64); they are loaded now, not on demand (a module
+	# udeb installed by anna is not in modules.dep before depmod)
+	for m in dm-mod dm-crypt xts aesni-intel aes-generic; do
+		s3_load_module $m || true
 	done
-	command -v cryptsetup > /dev/null 2>&1
+	if command -v dmsetup > /dev/null 2>&1 &&
+			! dmsetup targets 2>/dev/null | grep -q '^crypt '; then
+		logger -t partman-scubed3 "the device mapper has no target crypt" \
+			"(the kernel module dm-crypt is not loaded)"
+		return 1
+	fi
+	return 0
 }
 
 # the layout for the menu: the base device, the partitions (size, view,

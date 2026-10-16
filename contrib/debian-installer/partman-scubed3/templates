@@ -243,12 +243,13 @@ Description: The layout of scubed3
 
 Template: partman-scubed3/no_cryptsetup
 Type: error
-Description: cryptsetup is missing
+Description: cryptsetup or dm-crypt is missing
  The root file system goes on LUKS on a scubed3 partition, which needs
- cryptsetup. It could not be installed (anna-install cryptsetup-udeb, see
- /var/log/syslog). Load the installer components partman-crypto-dm and
- cryptsetup-udeb (in a shell: anna-install cryptsetup-udeb), then choose
- "Configure scubed3" again.
+ cryptsetup and the kernel module dm-crypt. They could not be installed or
+ loaded (anna-install cryptsetup-udeb crypto-dm-modules, modprobe dm-crypt,
+ see /var/log/syslog). In a shell: anna-install partman-crypto-dm
+ cryptsetup-udeb, depmod -a, modprobe dm-crypt; then choose "Configure
+ scubed3" again.
 
 Template: partman-scubed3/name
 Type: string

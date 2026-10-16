@@ -86,7 +86,10 @@ uint16_t binio_read_uint16_be(const void *b) {
 
 uint32_t binio_read_uint32_be(const void *b) {
 	const unsigned char *buf = b;
-        return (buf[0]<<24)|(buf[1]<<16)|(buf[2]<<8)|buf[3];
+        /* (uint32_t): an unsigned char is promoted to int, buf[0]<<24
+         * would overflow it */
+        return ((uint32_t)buf[0]<<24)|((uint32_t)buf[1]<<16)|
+                ((uint32_t)buf[2]<<8)|buf[3];
 }
 
 uint64_t binio_read_uint64_be(const void *b) {
@@ -107,7 +110,8 @@ uint16_t binio_read_uint16_le(const void *b) {
 
 uint32_t binio_read_uint32_le(const void *b) {
 	const unsigned char *buf = b;
-        return (buf[3]<<24)|(buf[2]<<16)|(buf[1]<<8)|buf[0];
+        return ((uint32_t)buf[3]<<24)|((uint32_t)buf[2]<<16)|
+                ((uint32_t)buf[1]<<8)|buf[0];
 }
 
 uint64_t binio_read_uint64_le(const void *b) {

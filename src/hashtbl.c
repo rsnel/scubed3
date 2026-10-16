@@ -181,7 +181,7 @@ static hashtbl_elt_t **hashtbl_find_elementp_in_bucket(hashtbl_t *h,
 		const void *target, pthread_mutex_t **ptr_mutex,
 		uint32_t bucket, compare_t compare) {
 	assert(!TS || ptr_mutex);
-	assert(bucket >= 0 && bucket < NO_BUCKETS);
+	assert(bucket < NO_BUCKETS);
 
 	if (TS) pthd_mutex_lock(&h->buckets[bucket].ptr_mutex);
 	*ptr_mutex = &h->buckets[bucket].ptr_mutex;
@@ -287,10 +287,6 @@ static int unique_key(hashtbl_t *h, hashtbl_elt_t *elt, uint32_t bucket) {
 	return ret;
 }
 
-static void hashtbl_count_unlock(hashtbl_t *h) {
-	if (TS) pthd_mutex_unlock(&h->count_mutex);
-}
-
 void *hashtbl_add_element(hashtbl_t *h, void *raw) {
 	uint32_t bucket;
 	hashtbl_elt_t *elt = raw;
@@ -299,9 +295,8 @@ void *hashtbl_add_element(hashtbl_t *h, void *raw) {
 	bucket = get_bucket(h, elt->key);
 
 	if (TS) pthd_mutex_lock(&h->count_mutex);
-	pthread_cleanup_push((void (*)(void*))hashtbl_count_unlock, h);
 	h->count++;
-	pthread_cleanup_pop(1);
+	if (TS) pthd_mutex_unlock(&h->count_mutex);
 	if (TS && UNIQ) pthd_mutex_lock(&h->buckets[bucket].uniq_mutex);
 
 	if (UNIQ && !unique_key(h, elt, bucket)) {

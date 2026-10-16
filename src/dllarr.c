@@ -19,6 +19,8 @@
 #include <assert.h>
 #include <errno.h>
 #include <string.h>
+#include <limits.h>
+#include <stdint.h>
 
 #include "verbose.h"
 #include "dllarr.h"
@@ -141,8 +143,12 @@ void *dllarr_insert(dllarr_t *a, void *new, void *at) {
 	assert(!new_elt->prev && !new_elt->next && !new_elt->index);
 
 	if (a->tail.index == a->size) {
+		/* (the size is an int, size*sizeof is unsigned: the check
+		 * must be done before the doubling) */
+		if (a->size > INT_MAX/2 ||
+				(size_t)a->size*2 > SIZE_MAX/sizeof(*a->array))
+			FATAL("dllarr too full");
 		a->size *= 2;
-		if (a->size*sizeof(*a->array) < 0) FATAL("dllarr too full");
 		if (!(a->array = realloc(a->array, sizeof(*a->array)*a->size)))
 			FATAL("realloc to %ld bytes: %s",
 					sizeof(*a->array)*a->size,

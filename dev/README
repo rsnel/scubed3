@@ -49,6 +49,27 @@ EXTRA_LDFLAGS are added to the compiler and linker flags (for example for
 libraries in a non-standard place). The tests take the NAME of the daemon
 binary, they look for it in the current directory (or $S3BUILD).
 
+Builds with sanitizers (every test runs with them, in their own OUTDIR;
+-O1 for usable stack traces):
+
+	EXTRA_CFLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer -O1 -Wno-format-truncation" \
+	EXTRA_LDFLAGS="-fsanitize=address,undefined" sh dev/build.sh asan
+	EXTRA_CFLAGS="-fsanitize=thread -O1 -Wno-format-truncation" \
+	EXTRA_LDFLAGS="-fsanitize=thread" sh dev/build.sh tsan
+
+AddressSanitizer and UndefinedBehaviorSanitizer find invalid memory
+accesses, leaks (at exit), integer overflow and invalid shifts;
+ThreadSanitizer finds data races (the threaded tests: level3test.py,
+waitreadtest.py, paranoiatest.py, killtest.py, churntest.py, fstest.py,
+discardtest.py, openertest.py, the shell tests). Set
+ASAN_OPTIONS=log_path=DIR/asan (UBSAN_OPTIONS, TSAN_OPTIONS likewise) so
+the reports of the daemon, which runs in the background, are kept in
+files; a test passes with a sanitizer only when DIR stays empty. With
+a libfuse without TSan instrumentation, races inside libfuse are not
+seen (see valgrindtest.sh, TOOL=helgrind, for those). Static analysis:
+gcc -fanalyzer, and clang-tidy (the clang-analyzer-* and bugprone-*
+checks) on src/*.c.
+
 Test hooks of scubed3-crash (environment variables of the daemon):
 
   SCUBED3_CRASH_AFTER=N  exit (as if the power fails) before write N+1 of a
@@ -260,6 +281,24 @@ valgrindtest.sh DAEMON SCUBED3CTL
 	LD_LIBRARY_PATH to a debug build); without it valgrind-nodebug.supp
 	suppresses every race reported inside libfuse (the test says so).
 
+indexfuzz.py DAEMON ITERATIONS [SEED]
+	Structure-aware fuzzing of the indices on the base device, as an
+	adversary with the key of a partition and write access to the base
+	device could write them: the index of a block is decrypted, changed
+	(the number of blocks, reserved blocks, pending removals, trims and
+	the trim floor, seqno, next block, the indices, the bitmap, the
+	hashes, the tombstones in the data, an index copied from another
+	block), its SHA256 is computed again and it is encrypted again. Then
+	the daemon (built with ASan and UBSan, see above) opens the
+	partition, reads all of it, writes, fsyncs, runs
+	check-data-integrity, closes and stops. A finding is a crash, a
+	sanitizer report, an assertion, a hang or a FATAL (one bad block
+	would stop the whole daemon, with all partitions); refusing to open
+	the partition is the correct answer. The findings (base file, log,
+	the mutations) go to indexfuzz-findings/. Uses its own mountpoint
+	/mnt/s3fuzz and control socket /run/scubed3/fuzz (it can run next to
+	the other tests); needs the "cryptography" module.
+
 lukstest.sh DAEMON SCUBED3CTL
 	LUKS on top of a partition with scubed3ctl, and the warning below the
 	recommended paranoia level: in level 1 mount and luksformat warn, an
@@ -295,7 +334,12 @@ sockettest.sh DAEMON SCUBED3CTL
 	The control socket: private directory (0700) and socket (0600), unsafe
 	directories refused, no takeover of a running daemon, takeover of a
 	stale socket, the peer check (as user nobody), the socket is removed at
-	exit.
+	exit; an unmount while a command runs (check-data-integrity): the
+	command is finished first, the daemon exits cleanly (the control
+	thread was cancelled halfway through the command, with its locks
+	held, and the daemon hung or stopped with FATAL at exit); numbers
+	that are not parsed get one answer (ERR) and change nothing, several
+	commands sent at once are all done.
 
 
 Paranoia levels and the write order

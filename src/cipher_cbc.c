@@ -129,6 +129,9 @@ static void dec_plain_n(cbc_plain_t *ctx, char *out,
 		memcpy(tmp, tmp2, 16);
 		out += 16;
 		in += 16;
+		/* out of place: the next block of ciphertext (in place,
+		 * gcry_in is NULL: gcrypt decrypts out itself) */
+		if (gcry_in) gcry_in = in;
 	}
 
 	wipememory(tmp, 16);

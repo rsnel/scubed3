@@ -109,6 +109,7 @@ static blockio_info_t *juggler_emptiest(juggler_t *j, blockio_info_t *not) {
 		} else if (b->no_nonobsolete == ret->no_nonobsolete &&
 				!random_custom(j->r, ++ties)) ret = b;
 	}
+	assert(ret); /* the pool is not empty */
 
 	return ret;
 }

@@ -123,28 +123,42 @@ typedef struct control_command {
 	char *usage;
 } control_command_t;
 
+/* a decimal int; strtol gives a long, a value that does not fit in an int
+ * is out of range (it would wrap around); returns 0 if it is parsed, 1 if
+ * it is not (the error is the answer to the command, the command must stop
+ * and must not answer again: with a second answer, the answers of the
+ * commands after it are out of step), -1 if the answer could not be
+ * written */
 static int parse_int(int s, int *r, const char *in) {
-        char *end;
-        int ret = strtol(in, &end, 10);
+	char *end;
+	long ret;
 
-        if (errno && (ret == LONG_MIN || ret == LONG_MAX))
-		return control_write_complete(s, 1, "integer out of range\n");
+	errno = 0;
+	ret = strtol(in, &end, 10);
 
-        if (*end != '\0') 
-                return control_write_complete(s, 1, "unable to parse ->%s<-\n", in);
+	if (errno == ERANGE || ret < INT_MIN || ret > INT_MAX)
+		return control_write_complete(s, 1, "integer out of range "
+				"->%s<-", in)?-1:1;
 
-        *r = ret;
+	if (end == in || *end != '\0')
+		return control_write_complete(s, 1, "unable to parse ->%s<-",
+				in)?-1:1;
+
+	*r = ret;
 
 	return 0;
 }
 
 static int control_cycle(int s, control_thread_priv_t *priv, char *argv[]) {
 	fuse_io_entry_t *entry = hashtbl_find_element_bykey(priv->h, argv[0]);
-	int times = 0; /* initialize it to make the compiler shut up */
+	int times = 0, ret;
 	if (!entry) return control_write_complete(s, 1,
 			"partition \"%s\" not found", argv[0]);
 
-	if (parse_int(s, &times, argv[1])) return -1;
+	if ((ret = parse_int(s, &times, argv[1]))) {
+		hashtbl_unlock_element_byptr(entry);
+		return ret < 0?-1:0;
+	}
 
 	if (times < 0) {
 		hashtbl_unlock_element_byptr(entry);
@@ -241,16 +255,17 @@ static int control_check_data_integrity(int s, control_thread_priv_t *priv,
  * partition that waits for its turn in level 3 holds it */
 static int control_paranoia(int s, control_thread_priv_t *priv,
 		char *argv[]) {
-	int level = 0, kibps = 0;
+	int level = 0, kibps = 0, ret;
 
-	if (parse_int(s, &level, argv[0])) return -1;
+	if ((ret = parse_int(s, &level, argv[0]))) return ret < 0?-1:0;
 
 	if (level < 0 || level > 3) return control_write_complete(s, 1,
 			"paranoia level %d does not exist (only 0, 1, 2 and 3)",
 			level);
 
 	if (argv[1]) {
-		if (parse_int(s, &kibps, argv[1])) return -1;
+		if ((ret = parse_int(s, &kibps, argv[1])))
+			return ret < 0?-1:0;
 		if (kibps < 1 || kibps > 1<<20) return control_write_complete(
 				s, 1, "the rate must be between 1 and %d KiB/s",
 				1<<20);
@@ -424,7 +439,7 @@ static int control_open_create_common(int s, control_thread_priv_t *priv, char *
 	fuse_io_entry_t *entry;
 	char *allocname;
 	uint32_t left;
-	int removing = 0;
+	volatile int removing = 0; /* set in ecch_try (setjmp) */
 
 	if (check_name(argv[0])) return control_write_complete(s, 1,
 				"illegal name specified for partition, "
@@ -756,9 +771,12 @@ static int control_resize(int s, control_thread_priv_t *priv, char *argv[]) {
 
 	dev = &entry->d;
 
-	if (parse_int(s, &size, argv[1]) || parse_int(s, &reserved, argv[2])) {
+	/* (a size that is not parsed must not be taken as 0: that would
+	 * remove the partition) */
+	if ((ret = parse_int(s, &size, argv[1])) ||
+			(ret = parse_int(s, &reserved, argv[2]))) {
 		hashtbl_unlock_element_byptr(entry);
-		return -1;
+		return ret < 0?-1:0;
 	}
 
 	if (!(reserved <= size) || !(size >= 0)) {
@@ -1115,11 +1133,22 @@ void *control_thread(void *arg) {
 			FATAL("duplicate command");
 	}
 
+	/* the control thread is cancelled when the file system is unmounted
+	 * (see fuse_io_destroy), but only while it waits for a connection or
+	 * for a command: a command that is cancelled halfway (at a
+	 * cancellation point like pread or write) would leave its locks
+	 * (io_mutex, the lock of a partition) and a partition that is
+	 * changed halfway behind, and the partitions are closed after that;
+	 * so the unmount waits until a running command is done */
+	pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
+
 	while (1) {
 		int n, i, start, done = 0, ret;
 		t = sizeof(remote);
-		if ((s2 = accept(s, (struct sockaddr*)&remote, &t)) == -1)
-			FATAL("accept: %s", strerror(errno));
+		pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
+		s2 = accept(s, (struct sockaddr*)&remote, &t);
+		pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
+		if (s2 == -1) FATAL("accept: %s", strerror(errno));
 
 		/* the directory of the socket already keeps others out,
 		 * check the peer anyway: only root and our own user */
@@ -1134,7 +1163,9 @@ void *control_thread(void *arg) {
 
 		buf_len = 0;
 		do {
+			pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
 			n = recv(s2, buf + buf_len, BUF_SIZE - buf_len, 0);
+			pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
 			if (n == 0) {
 				ERROR("recv: connection reset by peer");
 				break;
@@ -1151,8 +1182,11 @@ void *control_thread(void *arg) {
 					buf[i] = '\0';
 					ret = control_call(s2, priv, buf + start);
 
-					/* clear command from memory */
-					wipememory(buf + start, i);
+					/* clear command from memory (it is
+					 * i - start long: more would clear the
+					 * commands after it in buf, and past
+					 * the end of buf) */
+					wipememory(buf + start, i - start);
 
 					if (ret) {
 						done = 1;

@@ -25,6 +25,7 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <assert.h>
+#include <stdarg.h>
 #include <unistd.h>
 #include <time.h>
 #include <math.h>
@@ -215,7 +216,11 @@ static uint64_t mesoblk_hash(const void *ciphertext, size_t size) {
 }
 
 void blockio_free(blockio_t *b) {
+	uint32_t i;
 	assert(b);
+	dllarr_free(&b->unallocated);
+	for (i = 0; b->blockio_infos && i < b->total_macroblocks; i++)
+		blockio_info_free_tables(&b->blockio_infos[i]);
 	free(b->blockio_infos);
 	free(b->headers);
 	bitmap_free(&b->header_valid);
@@ -908,6 +913,13 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 
 	pthd_mutex_unlock(&b->unallocated_mutex);
 
+	/* (the blocks that were taken are given back by blockio_dev_free) */
+	if (dev->scan_error[0]) {
+		dev->no_macroblocks = 0;
+		ecch_throw(ECCH_DEFAULT, "\"%.40s\" is not opened: %.80s",
+				dev->name, dev->scan_error);
+	}
+
 	if (!dllarr_count(&dev->replay)) {
 		assert(!seqno);
 		return;
@@ -951,16 +963,24 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 	 * after the next write; they may still be needed if the next write is
 	 * interrupted and the most recent block is also written next (in older
 	 * versions, a block that was its own next block could remove blocks) */
+	/* (the index of the most recent block is read first: if it cannot
+	 * be read, nothing is allocated yet) */
+	blockio_dev_read_index(dev, bi);
 	if (next_block != 0xFFFFFFFF &&
 			(prev = dllarr_prev(&dev->replay, bi))) {
-		bitmap_init(&prev_status, b->max_macroblocks);
 		blockio_dev_read_index(dev, prev);
+		bitmap_init(&prev_status, b->max_macroblocks);
 		bitmap_read(&prev_status, (uint32_t*)BITMAP);
 		have_prev = 1;
+		blockio_dev_read_index(dev, bi);
 	}
-
-	blockio_dev_read_index(dev, bi);
 	blockio_dev_take_index(dev);
+	if (dev->pending_removals > dev->no_macroblocks) {
+		if (have_prev) bitmap_free(&prev_status);
+		dev->no_macroblocks = dev->pending_removals = 0;
+		ecch_throw(ECCH_DEFAULT, "\"%s\" is not opened: more pending "
+				"removals than blocks", dev->name);
+	}
 
 	/* the most recent index says that the partition has no blocks: it
 	 * was removed, and its wipe was interrupted */
@@ -1064,6 +1084,30 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 		snprintf(err, sizeof(err), "count of macroblocks does not "
 				"match the amount of blocks we have");
 
+	/* every write has a new seqno (equal seqnos of an interrupted write
+	 * are filtered above), the seqnos do not wrap around */
+	for (bi = dllarr_first(&dev->replay); bi && !*err;
+			bi = dllarr_next(&dev->replay, bi)) {
+		blockio_info_t *n = dllarr_next(&dev->replay, bi);
+		if (n && n->seqno == bi->seqno)
+			snprintf(err, sizeof(err), "blocks %u and %u have the "
+					"same seqno", blockio_get_macroblock_index(bi),
+					blockio_get_macroblock_index(n));
+		else if (bi->seqno >= (1ULL<<62))
+			snprintf(err, sizeof(err), "block %u has seqno %lu",
+					blockio_get_macroblock_index(bi),
+					bi->seqno);
+	}
+
+	/* the GC needs at least one reserved block (a partition that is
+	 * being removed, size 0, has none) */
+	if (!*err && ((dev->reserved_macroblocks < 1 &&
+				dev->no_macroblocks > dev->pending_removals) ||
+			dev->reserved_macroblocks > dev->no_macroblocks))
+		snprintf(err, sizeof(err), "%u reserved blocks of %u",
+				dev->reserved_macroblocks,
+				dev->no_macroblocks);
+
 	if (!*err && next_block != 0xFFFFFFFF &&
 			(next_block >= dev->b->total_macroblocks ||
 			 dev->b->blockio_infos[next_block].dev != dev))
@@ -1104,12 +1148,9 @@ static void blockio_dev_take_index(blockio_dev_t *dev) {
 	dev->no_macroblocks = binio_read_uint32_be(NO_MACROBLOCKS_UINT32);
 	dev->reserved_macroblocks = binio_read_uint32_be(
 			RESERVED_BLOCKS_UINT32);
+	/* (pending_removals > no_macroblocks is refused by blockio_dev_init,
+	 * not here: the scan calls this with unallocated_mutex locked) */
 	dev->pending_removals = binio_read_uint32_be(PENDING_UINT32);
-	if (dev->pending_removals > dev->no_macroblocks) {
-		dev->no_macroblocks = dev->pending_removals = 0;
-		ecch_throw(ECCH_DEFAULT, "\"%s\" is not opened: more pending "
-				"removals than blocks", dev->name);
-	}
 	dev->no_trims = binio_read_uint32_be(NO_TRIMS_UINT32);
 	assert(dev->no_trims <= BLOCKIO_MAX_TRIMS); /* checked by scan */
 	for (i = 0; i < dev->no_trims; i++) {
@@ -1155,6 +1196,49 @@ static void sort_to_replay(dllarr_t *replay, blockio_info_t *bi) {
 	dllarr_insert(replay, bi, dllarr_iterate(replay,
 				(dllarr_iterator_t)compare_seqno,
 				&bi->seqno));
+}
+
+static int compare_uint32(const void *a, const void *b) {
+	uint32_t x = *(const uint32_t*)a, y = *(const uint32_t*)b;
+
+	return (x > y) - (x < y);
+}
+
+/* does a list of logical mesoblocks have one twice? (tombstone slots,
+ * BLOCKIO_TOMBSTONES, are not mesoblocks) */
+static int blockio_has_duplicates(const uint32_t *indices, uint32_t n) {
+	uint32_t *sorted, i;
+	int ret = 0;
+
+	if (n < 2) return 0;
+	sorted = ecalloc(n, sizeof(uint32_t));
+	memcpy(sorted, indices, n*sizeof(uint32_t));
+	qsort(sorted, n, sizeof(uint32_t), compare_uint32);
+	for (i = 1; i < n && !ret; i++)
+		if (sorted[i] == sorted[i - 1] &&
+				sorted[i] != BLOCKIO_TOMBSTONES) ret = 1;
+	free(sorted);
+
+	return ret;
+}
+
+/* a block of ours has an index that is not valid: the first error is kept,
+ * the block is not taken, blockio_dev_init refuses to open the partition */
+static void blockio_dev_bad_index(blockio_dev_t *dev, blockio_info_t *bi,
+		const char *fmt, ...) {
+	uint32_t no = bi - dev->b->blockio_infos; /* (bi->dev is not set) */
+	va_list ap;
+	char msg[96];
+
+	va_start(ap, fmt);
+	vsnprintf(msg, sizeof(msg), fmt, ap);
+	va_end(ap);
+	WARNING("the index of block %u of \"%s\" is not valid: %s",
+			no, dev->name, msg);
+	if (!dev->scan_error[0]) snprintf(dev->scan_error,
+			sizeof(dev->scan_error), "the index of block %u is not "
+			"valid: %.80s", no, msg);
+	blockio_info_free_tables(bi);
 }
 
 void blockio_dev_scan_header(dllarr_t *replay, blockio_dev_t *dev,
@@ -1226,18 +1310,39 @@ void blockio_dev_scan_header(dllarr_t *replay, blockio_dev_t *dev,
 		binio_read_uint64_be(NONCE_UINT64):0;
 	bi->next_block = binio_read_uint32_be(NEXT_BLOCK_UINT32);
 
+	/* the index has the right hash, but it may still not be valid (a
+	 * bug, or someone with the key of the partition and write access to
+	 * the base device): the partition is not opened then (the whole
+	 * daemon must not stop because of it) */
 	no_trims = binio_read_uint32_be(NO_TRIMS_UINT32);
-	if (no_trims > BLOCKIO_MAX_TRIMS)
-		FATAL("too many trims in index of block %u", no);
-	if (memcmp(zero, TRIMS + 12*no_trims, 128 - 8 - 12*no_trims))
-		FATAL("reserved space is not zeroed out");
-	if (bi->seqno == 0) 
-		FATAL("block found with seqno 0, not possible");
+	if (no_trims > BLOCKIO_MAX_TRIMS) {
+		blockio_dev_bad_index(dev, bi, "too many trims "
+				"(%u)", no_trims);
+		return;
+	}
+	if (memcmp(zero, TRIMS + 12*no_trims, 128 - 8 - 12*no_trims)) {
+		blockio_dev_bad_index(dev, bi, "reserved space is not "
+				"zeroed out");
+		return;
+	}
+	if (bi->seqno == 0) {
+		blockio_dev_bad_index(dev, bi, "seqno 0");
+		return;
+	}
+	if (bi->next_block != 0xFFFFFFFF &&
+			bi->next_block >= dev->b->total_macroblocks) {
+		blockio_dev_bad_index(dev, bi, "next block %u does "
+				"not exist", bi->next_block);
+		return;
+	}
 
 	bi->no_nonobsolete = bi->no_indices = bi->no_ondisk =
 		binio_read_uint32_be(NO_INDICES_UINT32);
-	if (bi->no_indices > dev->b->mmpm)
-		FATAL("too many indices in block %u", no);
+	if (bi->no_indices > dev->b->mmpm) {
+		blockio_dev_bad_index(dev, bi, "too many indices (%u)",
+				bi->no_indices);
+		return;
+	}
 	blockio_info_alloc_tables(bi, dev->b->mmpm);
 
 	for (i = 0; i < dev->b->mmpm; i++)
@@ -1248,10 +1353,20 @@ void blockio_dev_scan_header(dllarr_t *replay, blockio_dev_t *dev,
 				((uint32_t*)NO_INDICES_UINT32) + i);
 	}
 
+	/* a logical mesoblock is in a block at most once (the GC counts on
+	 * it: every live slot is copied, see absorb_block in scubed3.c) */
+	if (blockio_has_duplicates(bi->indices, bi->no_indices)) {
+		blockio_dev_bad_index(dev, bi, "a mesoblock is in it twice");
+		return;
+	}
+
 	/* continue with the same value of i */
 	for (; i <= dev->b->mmpm; i++)
-		if (binio_read_uint32_be(((uint32_t*)NO_INDICES_UINT32) + i))
-			FATAL("unused indices must be zero, they are not");
+		if (binio_read_uint32_be(((uint32_t*)NO_INDICES_UINT32) + i)) {
+			blockio_dev_bad_index(dev, bi, "unused indices are "
+					"not zero");
+			return;
+		}
 
 	VERBOSE("block %u (seqno=%lu) of \"%s\" has %d indices, "
 			"next=%d", no, bi->seqno, dev->name, bi->no_indices,

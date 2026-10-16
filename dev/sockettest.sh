@@ -1,7 +1,9 @@
 #!/bin/sh
 # sockettest.sh - the control socket: private directory (0700) and socket
 # (0600), refusal of unsafe directories, no takeover of a running daemon,
-# takeover of a stale socket, peer check, removal at exit
+# takeover of a stale socket, peer check, removal at exit, an unmount
+# while a command runs (the command is finished first), a number that is not
+# parsed (one answer, nothing changes)
 #
 # usage: sockettest.sh DAEMON SCUBED3CTL (as root, user nobody must exist)
 FUSERMOUNT=$(command -v fusermount3 || echo fusermount)
@@ -79,5 +81,48 @@ start $T/base1 "-a $T/new/control" 5; waitsock $T/new/control; P5=$!
 $C -q -a $T/new/control -c static-info > /dev/null || fail "scubed3ctl -a"
 echo "-a $T/new/control: directory created, $(mode $T/new)"
 $FUSERMOUNT -u $M; wait $P5
+
+# an unmount while a command runs: the command is finished first (it was
+# cancelled halfway, with its locks held: the daemon hung or stopped with
+# FATAL at exit)
+K=000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f
+head -c $((200<<16)) /dev/urandom > $T/base6
+for t in 0.01 0.03 0.05 0.1 0.2; do
+	$D -b $T/base6 -f -m 12 -M 16 $M > $T/log.6 2>&1 & P6=$!; waitsock $S
+	$C -q -c "create-internal f CBC_ESSIV(AES256) $K" -c "resize-internal f 150 8" > /dev/null
+	dd if=/dev/urandom of=$M/f bs=64k count=140 conv=notrunc 2> /dev/null; sync
+	$C -q -c "check-data-integrity f" > /dev/null 2>&1 &
+	sleep $t; $FUSERMOUNT -u $M
+	i=0; while kill -0 $P6 2> /dev/null; do
+		sleep 1; i=$((i + 1)); [ $i -gt 60 ] && { kill -9 $P6; fail "the daemon hangs at exit (unmount during a command, $t s)"; }
+	done
+	wait $P6 || fail "exit status $? (unmount during a command, $t s): $(tail -1 $T/log.6)"
+	wait
+	grep -q ":fatal:" $T/log.6 && fail "unmount during a command: $(grep :fatal: $T/log.6)"
+	head -c $((200<<16)) /dev/urandom > $T/base6
+done
+echo "unmount during a command: the command is finished first, clean exit"
+
+# a number that is not parsed: one answer (ERR), the command does nothing (it
+# went on with 0: "resize-internal f 1x 0" removed the partition, "paranoia
+# 2x" switched to level 0, and the second answer put the answers of the
+# commands after it out of step); several commands sent at once are all
+# done (the first one cleared the others in the buffer)
+$D -b $T/base6 -f -m 12 -M 16 $M > $T/log.7 2>&1 & P7=$!; waitsock $S
+$C -q -c "create-internal f CBC_ESSIV(AES256) $K" -c "resize-internal f 10 2" -c "paranoia 1" > /dev/null
+r=$(python3 -c "
+import socket
+s=socket.socket(socket.AF_UNIX); s.settimeout(30); s.connect('$S')
+s.sendall(b'paranoia 2x\nresize-internal f 1x 0\nresize-internal f 12 y\nparanoia 3 z\nstatic-info\nexit\n'); b=b''
+while True:
+    d=s.recv(9999)
+    if not d: break
+    b+=d
+print(' '.join(l for l in b.decode().split(chr(10)) if l in ('OK', 'ERR')))")
+[ "$r" = "ERR ERR ERR ERR OK OK" ] || fail "answers to numbers that are not parsed: $r"
+$C -q -c p | grep -q "^paranoia level 1 " || fail "the paranoia level changed: $($C -q -c p | grep paranoia)"
+$C -q -c p | grep -q "^0000010 blocks in f " || fail "partition f changed: $($C -q -c p | grep ' in f')"
+$FUSERMOUNT -u $M; wait $P7
+echo "numbers that are not parsed: one answer (ERR), nothing changes"
 rm -rf $T
 echo "SOCKETTEST OK"

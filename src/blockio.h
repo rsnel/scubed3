@@ -205,6 +205,11 @@ typedef struct blockio_dev_s {
 	 * the number of blocks that were left (see blockio_dev_resume_wipe) */
 	uint32_t resumed;
 
+	/* a block of ours with an index that is not valid (the hash is
+	 * right, the contents are not: a bug, or someone with the key);
+	 * the partition is not opened (see blockio_dev_scan_header) */
+	char scan_error[128];
+
 	/* the lock of the partition, set while it is held by a writer (see
 	 * fuse_io.c): it is released while the writer waits for its turn in
 	 * paranoia level 2 and 3, so the partition can be read in the
@@ -246,8 +251,9 @@ struct blockio_s {
 	/* paranoia level (0 to 3, see README), the open partitions (devs),
 	 * and step(dev): let partition dev write one block (it gets the
 	 * turn), it is called when the scheduler of level 2 draws dev; the
-	 * level is changed with blockio_set_paranoia */
-	int paranoia;
+	 * level is changed with blockio_set_paranoia; that is done without
+	 * io_mutex while partitions read the level, so it is atomic */
+	_Atomic int paranoia;
 	blockio_dev_t **devs;
 	uint32_t no_devs;
 	void (*step)(blockio_dev_t*);

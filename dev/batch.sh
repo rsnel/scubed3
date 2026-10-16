@@ -52,4 +52,5 @@ run waitread3 python3 -u $T/waitreadtest.py scubed3 30 16 3 640 0.5
 run opentime python3 -u $T/opentime.py scubed3
 run memoryless python3 -u $T/memoryless.py scubed3-crash 6000
 run jstat ./jstat 200000
+run indexfuzz python3 -u $T/indexfuzz.py scubed3 300 1
 echo ALLDONE >> batch.summary

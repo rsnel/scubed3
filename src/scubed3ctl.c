@@ -202,7 +202,8 @@ int do_server_command(int s, int echo, char *format, ...) {
 					status_known = 1;
 					if (!strcmp(result.buf + start,
 								"ERR")) {
-						ret = -1;
+						/* the caller sees it in
+						 * result.status */
 						result.status = -1;
 						exit_status = EXIT_FAILURE;
 					}
@@ -599,16 +600,21 @@ void warning(void) {
 }
 
 
+/* a decimal int; strtol gives a long, a value that does not fit in an int
+ * is out of range (it would wrap around) */
 static int parse_int(int *r, const char *in) {
 	char *end;
-	int ret = strtol(in, &end, 10);
+	long ret;
 
-	if (errno && (ret == LONG_MIN || ret == LONG_MAX)) {
+	errno = 0;
+	ret = strtol(in, &end, 10);
+
+	if (errno == ERANGE || ret < INT_MIN || ret > INT_MAX) {
 		printf("integer out of range\n");
 		exit_status = EXIT_FAILURE;
 		return -1;
 	}
-	if (*end != '\0') {
+	if (end == in || *end != '\0') {
 		printf("unable to parse ->%s<-\n", in);
 		exit_status = EXIT_FAILURE;
 		return -1;
@@ -2021,6 +2027,9 @@ int main(int argc, char **argv) {
 		FATAL("socket: %s", strerror(errno));
 
 	remote.sun_family = AF_UNIX;
+	if (strlen(control_socket) >= sizeof(remote.sun_path))
+		FATAL("the path of the control socket is too long (at most "
+				"%zu characters)", sizeof(remote.sun_path) - 1);
 	strcpy(remote.sun_path, control_socket);
 	len = strlen(remote.sun_path) + sizeof(remote.sun_family);
 	if (connect(priv.s, (struct sockaddr*)&remote, len) == -1)

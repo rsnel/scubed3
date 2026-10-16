@@ -48,7 +48,7 @@ void bitmap_setbits(bitmap_t *b, uint32_t set) {
 int bitmap_getbit(bitmap_t *b, uint32_t index) {
 	assert(b && index < b->no_bits);
 	return b->bits[index/(8*sizeof(uint32_t))]&
-		1<<(index%(8*sizeof(uint32_t)));
+		1U<<(index%(8*sizeof(uint32_t)));
 }
 
 uint32_t bitmap_getbits(bitmap_t *b, uint32_t offset, uint8_t size) {
@@ -82,7 +82,7 @@ void bitmap_setbit(bitmap_t *b, uint32_t index) {
 	assert(index < b->no_bits);
 	assert(!bitmap_getbit(b, index));
 	b->bits[index/(8*sizeof(uint32_t))] |=
-		(1<<(index%(8*sizeof(uint32_t))));
+		(1U<<(index%(8*sizeof(uint32_t))));
 	b->no_set++;
 }
 
@@ -90,7 +90,7 @@ void bitmap_setbit_safe(bitmap_t *b, uint32_t index) {
 	assert(b);
 	assert(index < b->no_bits);
 	b->bits[index/(8*sizeof(uint32_t))] |=
-		(1<<(index%(8*sizeof(uint32_t))));
+		(1U<<(index%(8*sizeof(uint32_t))));
 	b->no_set++;
 }
 
@@ -101,7 +101,7 @@ void bitmap_clearbit(bitmap_t *b, uint32_t index) {
 	assert(bitmap_getbit(b, index));
 	assert(b->no_set);
 	b->bits[index/(8*sizeof(uint32_t))] &=
-		~(1<<(index%(8*sizeof(uint32_t))));
+		~(1U<<(index%(8*sizeof(uint32_t))));
 	b->no_set--;
 }
 
@@ -111,7 +111,7 @@ void bitmap_clearbit_safe(bitmap_t *b, uint32_t index) {
 	assert(index < b->no_bits);
 	if(bitmap_getbit(b, index)) b->no_set--;
 	b->bits[index/(8*sizeof(uint32_t))] &=
-		~(1<<(index%(8*sizeof(uint32_t))));
+		~(1U<<(index%(8*sizeof(uint32_t))));
 }
 
 uint32_t bitmap_count(bitmap_t *b) {

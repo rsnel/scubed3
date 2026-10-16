@@ -45,6 +45,7 @@
 #include "hashtbl.h"
 #include "fuse_io.h"
 #include "control.h"
+#include "ecch.h"
 
 #define ID	(index>>l->mesobits)
 #define NO	(index&l->mesomask)
@@ -152,6 +153,28 @@ static void absorb_block(scubed3_t *l, blockio_info_t *bi) {
 	}
 }
 
+/* the tail is absorbed, but it still counts live slots: if one of them is
+ * really live (the newest version of its mesoblock), it did not fit, that
+ * cannot happen; otherwise only the count is wrong (an index that is not
+ * consistent: a bug, or someone with the key and write access to the base
+ * device), the slots are not needed, the block is overwritten next */
+static void tail_leftovers(scubed3_t *l, blockio_info_t *tail) {
+	uint32_t k, index;
+
+	for (k = 0; k < tail->no_indices; k++) {
+		if (tail->indices[k] >= l->no_block_indices) continue;
+		index = l->block_indices[tail->indices[k]];
+		if (index != 0xFFFFFFFF &&
+				&l->dev->b->blockio_infos[ID] == tail && NO == k)
+			FATAL("tail of current block does not fit in it");
+	}
+	WARNING("block %u of \"%s\" counts %u live mesoblocks that are not "
+			"live (its index is not consistent), they are dropped",
+			(unsigned)id(tail), l->dev->name, tail->no_nonobsolete);
+	tail->no_nonobsolete = 0;
+	tail->no_indices = 0;
+}
+
 void copy_old_block_to_current(scubed3_t *l) {
 	blockio_info_t *victim, *tail = l->dev->tail_macroblock;
 
@@ -160,7 +183,7 @@ void copy_old_block_to_current(scubed3_t *l) {
 	 * do not need more slots than they had in the tail) */
 	absorb_block(l, tail);
 	if (tail && tail != l->dev->bi && tail->no_nonobsolete)
-		FATAL("tail of current block does not fit in it");
+		tail_leftovers(l, tail);
 
 	/* if we are shrinking, use the remaining room to drain the block
 	 * with the least live data (the victim); when it is empty, it is
@@ -329,8 +352,15 @@ void *replay(blockio_info_t *bi, scubed3_t *l) {
 			obsolete_mesoblk(l, bi, k);
 			continue;
 		}
+		/* a logical mesoblock twice in one block: scubed3 never
+		 * writes that, but an index with it must not stop the daemon
+		 * (it is authentic: a bug of an older version, or someone
+		 * with the key); the later slot wins, as with blocks */
 		index = l->block_indices[bi->indices[k]];
-		assert(id(bi) != ID);
+		if (index != 0xFFFFFFFF && id(bi) == ID)
+			WARNING("block %u of \"%s\" has mesoblock %u twice",
+					(uint32_t)id(bi), l->dev->name,
+					bi->indices[k]);
 		obsolete_mesoblk_byidx(l, index);
 		update_block_indices(l, bi->indices[k], id(bi), k);
 	}
@@ -470,6 +500,66 @@ void scubed3_init(scubed3_t *l, blockio_dev_t *dev) {
 	}
 
 	dllarr_iterate(&dev->replay, (dllarr_iterator_t)replay, l);
+
+	/* so the tail has no live mesoblocks; the most recent block can be
+	 * its own tail (drawn again right after it was written), then it was
+	 * written out empty (see blockio_dev_select_next_macroblock), unless
+	 * it is the only block of the partition; if the tail has live
+	 * mesoblocks, the index of the most recent block is not consistent
+	 * (a bug, or someone with the key and write access to the base
+	 * device): the GC could not absorb the tail, the partition is not
+	 * opened */
+	bi = dllarr_last(&dev->replay);
+	if (dev->j.next && (dev->j.next != bi ||
+				juggler_count(&dev->j) > 1)) {
+		uint32_t index;
+		for (i = 0; i < l->no_block_indices; i++) {
+			index = l->block_indices[i];
+			if (index == 0xFFFFFFFF ||
+					&dev->b->blockio_infos[ID] != dev->j.next)
+				continue;
+			/* (as blockio_dev_init: the other partitions and the
+			 * paranoia level are not affected) */
+			dev->no_macroblocks = 0;
+			ecch_throw(ECCH_DEFAULT, "\"%.40s\" is not opened: the "
+					"block that is written next (%u) has "
+					"live data, the index of the most "
+					"recent block (%u) is not consistent",
+					dev->name, (unsigned)id(dev->j.next),
+					(unsigned)id(bi));
+		}
+		/* it has no live data, so nothing of it may stay: a count of
+		 * live slots would keep its slots in the block, which becomes
+		 * the current block now (see
+		 * blockio_dev_select_next_macroblock), with no room for its
+		 * own tail */
+		if (dev->j.next->no_nonobsolete) {
+			WARNING("block %u of \"%s\" is written next and counts "
+					"%u live mesoblocks that are not live "
+					"(its index is not consistent), they "
+					"are dropped", (unsigned)id(dev->j.next),
+					dev->name, dev->j.next->no_nonobsolete);
+			dev->j.next->no_nonobsolete = 0;
+			dev->j.next->no_indices = 0;
+		}
+	}
+
+	/* a block always gets a next block when it is written, except the
+	 * last write of a partition that is removed completely; without a
+	 * next block the first write draws one, and that block may have
+	 * live data that is not in RAM (it would become the current block
+	 * with its slots, and its tail would not fit): with live data the
+	 * index of the most recent block is not consistent */
+	if (!dev->j.next && juggler_count(&dev->j)) {
+		for (i = 0; i < l->no_block_indices; i++) {
+			if (l->block_indices[i] == 0xFFFFFFFF) continue;
+			dev->no_macroblocks = 0;
+			ecch_throw(ECCH_DEFAULT, "\"%.40s\" is not opened: the "
+					"most recent block (%u) has no next "
+					"block, its index is not consistent",
+					dev->name, (unsigned)id(bi));
+		}
+	}
 
 	/* the replayed blocks are in the pool of the juggler already */
 	while ((bi = dllarr_last(&dev->replay)))

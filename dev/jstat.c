@@ -57,6 +57,10 @@ int main(int argc, char **argv) {
 	printf("run lengths:");
 	for (i = 1; i < 12; i++) printf(" %ld", runs[i]);
 	printf("\n");
+	juggler_free(&j);
+	random_free(&r);
+	free(bi);
+	free(in);
 	if (fabs((chi2 - df)/sqrt(2*df)) > 4 ||
 			fabs((rep - rep_exp)/sqrt(rep_exp)) > 4) {
 		printf("JSTAT FAILED\n");

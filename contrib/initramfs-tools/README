@@ -1,11 +1,13 @@
 Root on scubed3 (initramfs-tools, Debian and derivatives)
 =========================================================
 
-The root file system is on a scubed3 partition (best with LUKS on it, see
-"LUKS on top of a partition" in the main README). The initramfs starts the
-daemon, asks for the passphrases, switches the paranoia level and sets up
-the root partition as a block device; the daemon keeps running after the
-switch to the real root, until the computer is switched off.
+The root file system is on the scubed3 partition "root", best with LUKS on
+it (see "LUKS on top of a partition" in the main README), and its keys are in
+the key store /etc/scubed3.keys (see "Key store" in the main README). The
+initramfs starts the daemon, asks one passphrase, as for an encrypted disk,
+opens the partitions, switches the paranoia level and sets up root as a
+block device; the daemon keeps running after the switch to the real root,
+until the computer is switched off.
 
 Files:
 
@@ -16,41 +18,54 @@ Files:
 What happens at boot (scripts/local-top/scubed3):
 
 1. scubed3 is started on BASE, with its mount point /dev/scubed3fs and its
-   control socket /run/scubed3/control; /run/scubed3/fs is a link to
-   /dev/scubed3fs, for /etc/crypttab of the real root: other file systems
-   on scubed3 partitions (with LUKS) can be opened from there, after the
-   switch, for example
+   control socket /run/scubed3/control (/run/scubed3/fs is a link to
+   /dev/scubed3fs, for /etc/crypttab of the real root, for a LUKS volume
+   whose key is not in the key store)
+2. the passphrase is asked as cryptroot (cryptsetup-initramfs) asks it for
+   an encrypted disk, with its askpass (the console, plymouth, also
+   cryptroot-unlock over ssh), with the same messages:
 
-	scubed3-home /run/scubed3/fs/home none luks,nofail
+	Please unlock disk vda3_crypt:
+	cryptsetup: ERROR: vda3_crypt: cryptsetup failed, bad password or options?
+	cryptsetup: vda3_crypt: set up successfully
 
-   (with nofail in /etc/fstab too; not /dev/scubed3fs/home: systemd would
-   wait for a device for a source below /dev)
-2. the name of the root partition: ROOT_PARTITION, or if that is not set
-   (the default) it is asked
-3. with a key store (/etc/scubed3.keys, see Key store in the main README):
-   its passphrases are asked until an empty one, all partitions of the
-   views are opened, and the LUKS volume on the root partition with its key
-   from the key store; then the copy of the key store in the initramfs is
-   overwritten with random data and removed
-4. if the root partition is not open yet, its passphrase is asked; the
-   names of the other partitions are asked, one by one (empty when done),
-   and their passphrases (partitions that are not in the key store): in
-   paranoia level 2 and 3 ALL partitions must be open, their names are not
-   stored anywhere
-5. the paranoia level is switched (PARANOIA in initramfs.conf, otherwise
-   paranoia= in /etc/scubed3.conf, otherwise 2), scubed3ctl shows the open
-   partitions and asks for confirmation; this is before anything is written
-6. the root partition becomes a block device: if it has LUKS on it
-   /dev/mapper/scubed3-ROOT_PARTITION (opened with the key store, or
-   cryptsetup asks its passphrase),
-   otherwise a loop device; ROOT is set to it (root= on the kernel command
-   line, for example root=UUID=... as grub writes it, is replaced)
+   vda3_crypt is CRYPTTAB_NAME, by default as the debian-installer names
+   an encrypted partition: the name of the base device and _crypt. Nothing
+   else is shown on the console (the messages of scubed3 go to
+   /run/initramfs/scubed3.log): someone who looks at the boot sees what an
+   encrypted disk looks like.
+
+   The passphrases are passphrases of the key store, they are asked until
+   one has a view with "root". A passphrase of another view (with hidden
+   partitions) unlocks that view, and gets the message of a wrong
+   passphrase: type the hidden passphrases first, then the one of root.
+   After TRIES passphrases without root (default 3, 0: no limit; the
+   hidden ones count) the message of cryptroot, "maximum number of tries
+   exceeded", and the boot goes on without a root device, as with
+   cryptroot (the initramfs drops to its shell when root does not appear)
+3. all partitions of the unlocked views are opened (in paranoia level 2
+   and 3 ALL partitions must be open: all of them must be in the views that
+   are unlocked at boot), and the LUKS volumes of the view of root, with
+   their keys from the key store, as /dev/mapper/scubed3-NAME (other file
+   systems, /home, ..., are mounted from /etc/fstab); the LUKS volumes of
+   the hidden views are not opened; the copy of the key store in the
+   initramfs is overwritten with random data and removed
+4. the paranoia level is switched (PARANOIA in initramfs.conf, otherwise
+   paranoia= in /etc/scubed3.conf, otherwise 2); this is before anything is
+   written
+5. root becomes a block device: /dev/mapper/scubed3-root if it has LUKS on
+   it (otherwise a loop device); ROOT is set to it (root= on the kernel
+   command line, for example root=UUID=... as grub writes it, is replaced)
 
 After the boot, scubed3ctl works as usual (the socket is the default one).
 
-With a key store one passphrase is enough to boot. The hook copies
-/etc/scubed3.keys into the initramfs (it is random data without its
-passphrases); after a change of the key store, run update-initramfs -u.
+The hook copies /etc/scubed3.keys into the initramfs (it is random data
+without its passphrases), and askpass of cryptsetup-initramfs; it fails
+without the key store (the old initramfs is kept). After a change of the
+key store, run update-initramfs -u. ROOT_PARTITION (of an older version) is
+not used anymore: root is always the partition root of the key store; to
+boot a partition with another name, give it the name root in the key store
+(scubed3ctl: keys-copy NAME root, then keys-remove NAME).
 
 
 Installation
@@ -64,16 +79,24 @@ Installation
    cryptsetup with the crypto modules and the device mapper rules to the
    initramfs (there is no /etc/crypttab entry for it).
 
-2. Make the root partition, with LUKS on it, and copy the system into it,
-   for example (from the running system, or from a live system):
+2. Make a key store with a view with root (and the other partitions that
+   are opened at boot), make root with LUKS on it (its keys from the key
+   store) and copy the system into it, for example (from the running
+   system, or from a live system):
 
 	# scubed3ctl
+	s3> keys-setup		(a passphrase, the partition root in its view;
+				 another passphrase for hidden partitions)
+	s3> unlock-all
 	s3> create root
 	s3> resize root 2000
 	s3> luksformat root
 	s3> mke2fs root
 	s3> mount root /mnt/newroot
 	# rsync -aHAXx / /mnt/newroot/
+
+   An existing partition with another name: keys-import NAME (its
+   passphrase, and of its LUKS volume), keys-copy NAME root.
 
    and in the new system: /etc/fstab with the root file system
    (UUID=... of the file system in the partition), /boot on a normal
@@ -82,25 +105,25 @@ Installation
 3. Copy the three files (see above, the scripts executable) in the new
    system, set BASE (a name that does not change: /dev/disk/by-partuuid/...
    or /dev/disk/by-id/...) and OPTIONS (the same -m and -M as always) in
-   /etc/scubed3/initramfs.conf (and ROOT_PARTITION, if you want to store the
-   name of the root partition), and copy /etc/scubed3.conf (the
-   salt and the iterations). Then, chrooted in the new system:
+   /etc/scubed3/initramfs.conf, and copy /etc/scubed3.conf (the salt and
+   the iterations) and the key store /etc/scubed3.keys (mode 0600). Then,
+   chrooted in the new system:
 
 	# update-initramfs -u -k all
 	# update-grub
 
-   The hook fails if scubed3, scubed3ctl or losetup is missing, so that the
-   old initramfs is kept.
+   The hook fails if scubed3, scubed3ctl, losetup or the key store is
+   missing, so that the old initramfs is kept.
 
 4. Do not start scubed3 on the base device in the new system (no service
    for it): it already runs. Do not close the root partition, and do not
    close any partition while you want to stay in level 2 or 3 (closing
    switches back to level 1).
 
-The keyboard layout for the passphrases: KEYMAP=y in
+The keyboard layout for the passphrase: KEYMAP=y in
 /etc/initramfs-tools/initramfs.conf (with console-setup). With a splash
-screen (plymouth) the questions are on the console, the script hides the
-splash.
+screen (plymouth) the passphrase is asked by plymouth, as for an encrypted
+disk.
 
 
 Shutdown
@@ -135,10 +158,12 @@ Limitations
 
 - The boot partition is not hidden: the initramfs shows that scubed3 is
   used and which device is the base device (the threat model assumes that
-  anyway), and the name of the root partition if ROOT_PARTITION is set.
-  Without it no name is stored: there can be more than one root partition
-  (one you can admit and a hidden one), you choose at boot by name and
-  passphrase; all of them are opened at boot anyway (level 2 and 3).
+  anyway); the boot only looks like that of an encrypted disk. The key
+  store is in it (random data without its passphrases).
+- One root: the partition root of the view of the passphrase that is
+  typed last. Two views with a root with other keys (one you can admit, a
+  hidden one) cannot both be unlocked at boot (the name is ambiguous, the
+  boot goes on without root).
 - No swap on scubed3, and avoid running out of memory: the kernel writes
   dirty pages of the root file system through the daemon, which needs memory
   to do that (a known limit of root file systems on FUSE). Swap on zram, or
@@ -146,8 +171,8 @@ Limitations
 - In paranoia level 3 the rate limits the root file system too: give the
   root partition enough blocks, or a higher rate (see Paranoia levels in
   the main README).
-- The partitions are opened at boot, the passphrases are typed on the
-  console (KDF iterations: some seconds per partition).
+- The KDF of the key store (PBKDF2, iterations of /etc/scubed3.conf) takes
+  some seconds per passphrase, probably longer than that of a LUKS volume.
 - This was tested in a simulated initramfs (dev/initramfstest.sh: the
   local-top script with stand-ins for the initramfs-tools functions), not
   in a real boot; please report problems.

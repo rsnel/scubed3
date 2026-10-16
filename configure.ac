@@ -11,8 +11,19 @@ AM_INIT_AUTOMAKE
 # Checks for programs.
 AC_PROG_CC
 
-# Checks for libraries.
-PKG_CHECK_MODULES([FUSE], [fuse3])
+# Checks for libraries; --enable-static-programs links scubed3 and
+# scubed3ctl statically (for the debian-installer: the programs do not
+# depend on the library udebs of a release), it needs the static libraries
+# (libfuse3.a, libgcrypt.a, libgpg-error.a, libc.a)
+AC_ARG_ENABLE([static-programs],
+	[AS_HELP_STRING([--enable-static-programs],
+		[link scubed3 and scubed3ctl statically])],
+	[], [enable_static_programs=no])
+AS_IF([test "x$enable_static_programs" = xyes],
+	[PKG_CHECK_MODULES_STATIC([FUSE], [fuse3])
+	 STATIC_LDFLAGS=-static],
+	[PKG_CHECK_MODULES([FUSE], [fuse3])])
+AC_SUBST([STATIC_LDFLAGS])
 
 # readline (line editing in scubed3ctl); --without-readline for the
 # debian-installer, it has no readline

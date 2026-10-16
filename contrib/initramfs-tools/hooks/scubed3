@@ -3,9 +3,11 @@
 #
 # only active if /etc/scubed3/initramfs.conf exists; copies the daemon (as
 # /sbin/@scubed3, see scripts/local-top/scubed3), scubed3ctl, losetup, the
-# configuration files and the modules fuse and loop into the initramfs, and
+# configuration files, the key store (root is the partition root in it, it
+# must be there) and the modules fuse and loop into the initramfs, and
 # cryptsetup with dm_mod and dm_crypt if cryptsetup is installed (for LUKS on
-# the root partition, cryptsetup-initramfs adds the rest)
+# the root partition, cryptsetup-initramfs adds the rest), and askpass of
+# cryptsetup-initramfs (the passphrase is asked as cryptroot asks it)
 
 PREREQ=""
 prereqs() { echo "$PREREQ"; }
@@ -41,6 +43,15 @@ for p in scubed3 scubed3ctl losetup; do
 		exit 1
 	fi
 done
+if [ ! -f /etc/scubed3.keys ]; then
+	echo "E: scubed3 hook: no key store /etc/scubed3.keys, root on scubed3 is the" >&2
+	echo "E: partition root in it (see Key store in the README of scubed3)" >&2
+	exit 1
+fi
+if grep -q '^[[:space:]]*ROOT_PARTITION=' "$CONF"; then
+	echo "W: scubed3 hook: ROOT_PARTITION in $CONF is not used anymore, root is" >&2
+	echo "W: the partition root of the key store (keys-copy NAME root: the name root)" >&2
+fi
 
 # a process whose argv[0] starts with @ is not killed by systemd at
 # shutdown (a storage daemon for the root file system); the local-top script
@@ -58,9 +69,14 @@ if [ -f /etc/scubed3.conf ]; then
 fi
 # the key store (it is random data without its passphrases), the
 # local-top script destroys it after use
-if [ -f /etc/scubed3.keys ]; then
-	copy_file keys /etc/scubed3.keys /conf/scubed3.keys
-fi
+copy_file keys /etc/scubed3.keys /conf/scubed3.keys
+# the passphrase is asked as cryptroot asks it
+for a in /lib/cryptsetup/askpass /usr/lib/cryptsetup/askpass; do
+	if [ -x "$a" ]; then
+		copy_exec "$a" /lib/cryptsetup/askpass
+		break
+	fi
+done
 # readline of scubed3ctl (the questions it asks) works better with it
 for t in /usr/share/terminfo/l/linux /lib/terminfo/l/linux; do
 	if [ -f "$t" ]; then

@@ -3,8 +3,7 @@
 # become disks in partman, with one partition (a loop label, as the
 # encrypted volumes of partman-crypto); the first time, on a partition that
 # the installer created, it is set up to be formatted with the default file
-# system, the partition that the unclaimed blocks are lent to gets mount
-# point /
+# system, the partition root gets mount point /
 
 . /lib/partman/lib/scubed3-base.sh
 
@@ -103,7 +102,7 @@ for p in $S3STATE/parts/*; do
 		>$id/format
 		>$id/use_filesystem
 		echo $default_fs > $id/filesystem
-		[ -f $p/lent ] && echo / > $id/mountpoint
+		[ "$name" = root ] && echo / > $id/mountpoint
 		update_partition $devdir $id
 	fi
 	>$p/partman_done

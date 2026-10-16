@@ -2,28 +2,44 @@
 # initramfs-tools local-top script of scubed3: root on a scubed3 partition
 # (see README)
 #
+# the root file system is on the partition "root" of the key store
+# (/etc/scubed3.keys, its copy in the initramfs); the boot asks one thing,
+# as cryptroot (cryptsetup-initramfs) asks it for an encrypted partition
+# (with its askpass, also with plymouth), with its messages, so that it
+# looks the same as a root file system on an encrypted partition:
+#
+#	Please unlock disk NAME:
+#	cryptsetup: ERROR: NAME: cryptsetup failed, bad password or options?
+#	cryptsetup: NAME: set up successfully
+#
+# NAME is CRYPTTAB_NAME, by default as the debian-installer names an
+# encrypted partition: vda3_crypt for the base device /dev/vda3
+#
 # 1. the daemon is started on the base device (BASE), as @scubed3: systemd
 #    does not kill a process whose argv[0] starts with @ at shutdown (it is
 #    a storage daemon for the root file system); it keeps running after the
 #    switch to the real root: it opens nothing by its path after its start,
 #    its mount point is below /dev and its control socket below /run, the
 #    initramfs moves both to the real root
-# 2. the name of the root partition: ROOT_PARTITION, if it is not set its
-#    name is asked (there may be more than one root partition)
-# 3. with a key store (/etc/scubed3.keys, see Key store in the README): its
-#    passphrases are asked until an empty one, all partitions of the views
-#    are opened, the LUKS volume on the root partition is opened with its
-#    key from the store; then the copy of the key store is overwritten and
+# 2. passphrases of the key store are asked until one has a view with
+#    "root"; a passphrase of another view (with hidden partitions) unlocks
+#    it, and gets the message of a wrong passphrase: type it first, then
+#    the passphrase of root; after TRIES passphrases (default 3, 0: no
+#    limit) without root, the message of cryptroot and the boot goes on
+#    without a root device (as with cryptroot)
+# 3. all partitions of the unlocked views are opened (in paranoia level 2
+#    and 3 ALL partitions must be open: all of them must be in the views
+#    that are unlocked at boot), and the LUKS volumes of the view of root
+#    (/dev/mapper/scubed3-NAME, with their keys from the key store, for
+#    /etc/fstab: /home, ...); the copy of the key store is overwritten and
 #    removed
-# 4. if the root partition is not open, its passphrase is asked; the names
-#    of the other partitions are asked (those that are not in the key
-#    store): in paranoia level 2 and 3 ALL partitions must be open, their
-#    names are not stored anywhere
-# 5. the paranoia level is switched (PARANOIA, or paranoia= in
+# 4. the paranoia level is switched (PARANOIA, or paranoia= in
 #    /etc/scubed3.conf, default 2), before anything is written
-# 6. the root partition becomes a block device: with LUKS on it
-#    /dev/mapper/scubed3-ROOT_PARTITION (if it is not open yet, its
-#    passphrase is asked), otherwise a loop device; ROOT is set to it
+# 5. ROOT is /dev/mapper/scubed3-root (root has LUKS on it), otherwise a
+#    loop device on root
+#
+# the messages of the daemon and of scubed3ctl go to
+# /run/initramfs/scubed3.log (after the boot too), not to the console
 
 PREREQ=""
 prereqs() { echo "$PREREQ"; }
@@ -42,34 +58,61 @@ esac
 MNT=/dev/scubed3fs
 SOCK=/run/scubed3/control
 KEYS=/conf/scubed3.keys
+LOG=/run/initramfs/scubed3.log
+ASKPASS=/lib/cryptsetup/askpass
 
-msg() { echo "scubed3: $*" >&2; }
-ctl() { /sbin/scubed3ctl "$@"; }
+mkdir -p ${LOG%/*}
+log() { echo "scubed3: $*" >> $LOG; }
+ctl() { /sbin/scubed3ctl -q -YYY "$@"; }
+
+# a message as cryptroot gives it
+message() {
+	if [ -x /bin/plymouth ] && plymouth --ping; then
+		plymouth message --text="cryptsetup: $*"
+	else
+		echo "cryptsetup: $*" >&2
+	fi
+}
+
+# a passphrase on stdout (askpass of cryptsetup-initramfs, as cryptroot
+# asks it: the console, plymouth, cryptroot-unlock over ssh)
+askpass() {
+	local p
+	if [ -x $ASKPASS ]; then
+		$ASKPASS "$1"
+		return
+	fi
+	printf '%s' "$1" >&2
+	stty -echo 2> /dev/null
+	read -r p
+	stty echo 2> /dev/null
+	echo >&2
+	printf '%s' "$p"
+}
 
 if [ -z "$BASE" ]; then
 	panic "scubed3: BASE must be set in /etc/scubed3/initramfs.conf"
 fi
-
-# the questions must be visible
-if command -v plymouth > /dev/null && plymouth --ping; then
-	plymouth hide-splash
+if [ ! -f $KEYS ]; then
+	panic "scubed3: no key store in the initramfs (/etc/scubed3.keys, with the partition root)"
 fi
 
 # the base device may appear late
 i=0
 while [ ! -e "$BASE" ]; do
-	[ $i = 0 ] && msg "waiting for $BASE"
+	[ $i = 0 ] && log "waiting for $BASE"
 	i=$((i + 1))
 	[ $i -gt 30 ] && panic "scubed3: $BASE does not appear"
 	sleep 1
 done
+name=${CRYPTTAB_NAME:-$(basename "$(readlink -f "$BASE")")_crypt}
 
-modprobe -q fuse
-modprobe -q loop
+modprobe -q fuse 2> /dev/null
+modprobe -q loop 2> /dev/null
 mkdir -p $MNT
 
 # 1. the daemon (the PATH lookup keeps the name @scubed3 as argv[0])
-if ! PATH=/sbin:$PATH @scubed3 -b "$BASE" $OPTIONS $MNT; then
+if ! PATH=/sbin:$PATH @scubed3 -b "$BASE" $OPTIONS $MNT >> $LOG 2>&1; then
 	panic "scubed3: the daemon did not start"
 fi
 i=0
@@ -84,84 +127,109 @@ for p in /proc/[0-9]*; do
 		echo -1000 2> /dev/null > $p/oom_score_adj
 	fi
 done
-# the partitions as /run/scubed3/fs/NAME, for /etc/crypttab of the real
-# root (other file systems on scubed3, like /home): systemd waits for a
-# device unit for a source below /dev, not for one below /run (the
-# initramfs moves /run to the real root)
+# the partitions as /run/scubed3/fs/NAME (for /etc/crypttab of the real
+# root, if a LUKS volume is not in the key store)
 ln -sfn $MNT /run/scubed3/fs
 
-# 2. the name of the root partition
-ask_root() {
-	root=
-	while [ -z "$root" ]; do
-		printf "scubed3: name of the root partition: " >&2
-		read root || panic "scubed3: no root partition"
-	done
-}
-root=$ROOT_PARTITION
-[ -z "$root" ] && ask_root
+# 2. and 3. one scubed3ctl: it reads the passphrases from one fifo and
+# answers on the other (the views stay unlocked), then it opens the
+# partitions and the LUKS volumes
+PASS=/run/scubed3/pass
+ANSWER=/run/scubed3/answer
+rm -f $PASS $ANSWER
+mkfifo -m 600 $PASS $ANSWER || panic "scubed3: mkfifo"
+ctl -K $KEYS -c "unlock-until root" -c open-all -c "luksopen-all root" \
+	< $PASS > $ANSWER 2>> $LOG &
+ctlpid=$!
+exec 3> $PASS 4< $ANSWER
 
-# 3. the key store: one scubed3ctl, the views stay unlocked from one
-# command to the next; opening the LUKS volume writes nothing (the level is
-# switched later)
-if [ -f $KEYS ]; then
-	msg "the key store: its passphrases, an empty one when done"
-	ctl -K $KEYS -c unlock-all -c open-all -c "luksopen $root"
-	dd if=/dev/urandom of=$KEYS bs=$(wc -c < $KEYS) count=1 conv=notrunc 2> /dev/null
-	rm -f $KEYS
+# the answer to a passphrase: found, other (a view without root, or no
+# view), fail (root is ambiguous, or scubed3ctl stopped)
+answer() {
+	local l
+	while read -r l <&4; do
+		echo "$l" >> $LOG
+		case "$l" in
+		    '"root" is in view '*' with other keys')
+							echo fail; return ;;
+		    '"root" is in view '*)		echo found; return ;;
+		    'view '*': '*' entries, without '*)	echo other; return ;;
+		    'no view for this passphrase')	echo other; return ;;
+		esac
+	done
+	echo fail
+}
+
+tries=0
+found=
+while :; do
+	{ askpass "Please unlock disk $name: "; echo; } >&3
+	a=$(answer)
+	if [ $a = found ]; then
+		found=1
+		break
+	fi
+	if [ $a = fail ]; then
+		log "root is in two unlocked views with other keys, or scubed3ctl stopped"
+		break
+	fi
+	message "ERROR: $name: cryptsetup failed, bad password or options?"
+	tries=$((tries + 1))
+	if [ "${TRIES:-3}" -gt 0 ] && [ $tries -ge "${TRIES:-3}" ]; then
+		message "ERROR: $name: maximum number of tries exceeded"
+		break
+	fi
+done
+# the rest of the output of scubed3ctl (it must not block on a full fifo)
+exec 3>&-
+cat <&4 >> $LOG
+exec 4<&-
+wait $ctlpid
+rm -f $PASS $ANSWER
+dd if=/dev/urandom of=$KEYS bs=$(wc -c < $KEYS) count=1 conv=notrunc 2> /dev/null
+rm -f $KEYS
+
+# as cryptroot: without root the boot goes on, the root device does not
+# appear
+[ "$found" ] || exit 0
+
+if [ ! -e "$MNT/root" ]; then
+	message "ERROR: $name: cryptsetup failed, bad password or options?"
+	log "the partition root is not opened (see above)"
+	exit 0
 fi
 
-# 4. the root partition (if it is not open: its passphrase), the other
-# partitions (their names are asked, not stored)
-i=0
-while [ ! -e "$MNT/$root" ]; do
-	i=$((i + 1))
-	[ $i -gt 3 ] && panic "scubed3: no root partition is opened"
-	[ $i -gt 1 ] && [ -z "$ROOT_PARTITION" ] && ask_root
-	msg "partition $root"
-	ctl -c "open $root"
-done
-ROOT_PARTITION=$root
-
-msg "in paranoia level 2 and 3 ALL partitions must be open:"
-msg "open the other partitions of $BASE now (not those in the key store)"
-while :; do
-	printf "scubed3: name of another partition (empty when done): " >&2
-	read name || break
-	[ -z "$name" ] && break
-	ctl -c "open $name"
-done
-
-# 5. the paranoia level (scubed3ctl asks for confirmation, it shows the open
-# partitions)
+# 4. the paranoia level (it shows the open partitions in the log)
 level=$PARANOIA
 if [ -z "$level" ] && [ -f /etc/scubed3.conf ]; then
 	level=$(sed -n 's/^[[:space:]]*paranoia[[:space:]]*=[[:space:]]*\([0-3]\)[[:space:]]*$/\1/p' /etc/scubed3.conf)
 fi
 [ -z "$level" ] && level=2
 if [ "$level" -ge 2 ]; then
-	ctl -c "paranoia $level${RATE:+ $RATE}"
+	ctl -c "paranoia $level${RATE:+ $RATE}" >> $LOG 2>&1
 fi
-if ! ctl -c p | grep -q "paranoia level $level "; then
-	msg "WARNING: the paranoia level is not $level, what is written now"
-	msg "shows which blocks belong to which partition"
+if ! ctl -c p 2>> $LOG | tee -a $LOG | grep -q "paranoia level $level "; then
+	echo "scubed3: WARNING: the paranoia level is not $level, what is written now" >&2
+	echo "scubed3: shows which blocks belong to which partition" >&2
 fi
 
-# 6. the block device of the root partition
-if [ -b /dev/mapper/scubed3-$ROOT_PARTITION ]; then
-	dev=/dev/mapper/scubed3-$ROOT_PARTITION	# opened with the key store
-elif [ -x /sbin/cryptsetup ] && /sbin/cryptsetup isLuks "$MNT/$ROOT_PARTITION"; then
-	dev=/dev/mapper/scubed3-$ROOT_PARTITION
+# 5. the block device of the root partition
+if [ -b /dev/mapper/scubed3-root ]; then
+	dev=/dev/mapper/scubed3-root
+elif [ -x /sbin/cryptsetup ] && /sbin/cryptsetup isLuks "$MNT/root"; then
+	# (its LUKS key is not in the key store: cryptsetup asks)
+	dev=/dev/mapper/scubed3-root
 	i=0
-	until /sbin/cryptsetup open "$MNT/$ROOT_PARTITION" scubed3-$ROOT_PARTITION; do
+	until /sbin/cryptsetup open "$MNT/root" scubed3-root; do
 		i=$((i + 1))
-		[ $i -ge 3 ] && panic "scubed3: the LUKS volume on $ROOT_PARTITION is not opened"
+		[ $i -ge 3 ] && panic "scubed3: the LUKS volume on root is not opened"
 	done
 else
-	dev=$(/sbin/losetup-util -f --show "$MNT/$ROOT_PARTITION") ||
-		panic "scubed3: no loop device for $ROOT_PARTITION"
+	dev=$(/sbin/losetup-util -f --show "$MNT/root") ||
+		panic "scubed3: no loop device for root"
 fi
-msg "the root file system is on $dev"
+message "$name: set up successfully"
+log "the root file system is on $dev"
 echo "ROOT=$dev" >> /conf/param.conf
 
 exit 0

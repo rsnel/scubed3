@@ -4,15 +4,23 @@
 # release that is installed:
 #
 #	scubed3-udeb_VERSION_ARCH.udeb	the daemon and scubed3ctl (without
-#					readline) for the installer, and the
-#					initramfs-tools scripts
+#					readline, statically linked) for the
+#					installer, and the initramfs-tools
+#					scripts
 #	partman-scubed3_VERSION_all.udeb	"Configure scubed3" in partman
 #	scubed3_VERSION_ARCH.deb	scubed3 for the installed system (with
 #					the initramfs-tools scripts in
 #					/usr/share/initramfs-tools)
 #
 # needs: a C compiler, autoconf, automake, pkg-config, the development
-# files of libfuse 3, libgcrypt and readline, dpkg-dev (dpkg-shlibdeps)
+# files of libfuse 3, libgcrypt and readline, with the static libraries
+# (libfuse3-dev, libgcrypt20-dev, libgpg-error-dev have them), dpkg-dev
+# (dpkg-shlibdeps)
+#
+# the programs of the udeb are linked statically: they do not depend on the
+# library udebs of the release of the installer (their names change); with
+# STATIC=no they are linked dynamically, the udeb then depends on the
+# library udebs (dpkg-shlibdeps)
 #
 # the configure step gets CPPFLAGS, LDFLAGS and PKG_CONFIG_PATH from the
 # environment
@@ -28,18 +36,27 @@ fail() { echo "build-udebs.sh: $*" >&2; exit 1; }
 
 mkdir -p "$OUT" && OUT=$(cd "$OUT" && pwd) || exit 1
 
-# build scubed3 twice: with readline (the .deb) and without (the udeb)
+STATIC=${STATIC:-yes}
+
+# build scubed3 twice: with readline (the .deb) and without (the udeb,
+# statically linked)
 build() {
+	local static=
+	[ $1 = no ] && [ $STATIC = yes ] && static=--enable-static-programs
 	mkdir -p $B/src-$1
 	(cd "$TOP" && tar cf - --exclude=.svn --exclude=autom4te.cache \
 		--exclude=testing .) | tar xf - -C $B/src-$1
 	cd $B/src-$1 || exit 1
-	[ -x configure ] || autoreconf -fi > $B/autoreconf.log 2>&1 ||
+	# (configure.ac may be newer than configure)
+	autoreconf -fi > $B/autoreconf.log 2>&1 ||
 		fail "autoreconf failed, see $B/autoreconf.log"
 	make distclean > /dev/null 2>&1
-	./configure --prefix=/usr --with-readline=$1 > $B/configure-$1.log 2>&1 ||
+	./configure --prefix=/usr --with-readline=$1 $static > $B/configure-$1.log 2>&1 ||
 		fail "configure failed: $(tail -3 $B/configure-$1.log)"
 	make > $B/make-$1.log 2>&1 || fail "make failed: $(tail -5 $B/make-$1.log)"
+	if [ "$static" ] && ldd src/scubed3 > /dev/null 2>&1; then
+		fail "src/scubed3 is not linked statically (see $B/make-$1.log)"
+	fi
 	strip --strip-unneeded src/scubed3 src/scubed3ctl
 }
 build yes
@@ -73,8 +90,12 @@ cp "$TOP/contrib/initramfs-tools/scripts/local-top/scubed3" \
 	$P/usr/share/scubed3/initramfs-tools/scripts/local-top/
 chmod 755 $P/usr/share/scubed3/initramfs-tools/hooks/scubed3 \
 	$P/usr/share/scubed3/initramfs-tools/scripts/local-top/scubed3
-DEPS=$(shlibdeps udeb "libfuse3-4-udeb | libfuse3-3-udeb, libgcrypt20-udeb, libgpg-error0-udeb" \
-	$P/usr/sbin/scubed3 $P/usr/sbin/scubed3ctl)
+if [ $STATIC = yes ]; then
+	DEPENDS=
+else
+	DEPENDS="Depends: $(shlibdeps udeb "libfuse3-4-udeb | libfuse3-3-udeb, libgcrypt20-udeb, libgpg-error0-udeb" \
+		$P/usr/sbin/scubed3 $P/usr/sbin/scubed3ctl)"
+fi
 cat > $P/DEBIAN/control <<EOF
 Package: scubed3-udeb
 Package-Type: udeb
@@ -84,9 +105,11 @@ Architecture: $ARCH
 Maintainer: $MAINT
 Section: debian-installer
 Priority: optional
-Depends: $DEPS
+${DEPENDS}
 Description: Simple Steganographic Store (scubed3) for the installer
 EOF
+# (no empty line in the control file)
+sed -i '/^$/d' $P/DEBIAN/control
 dpkg-deb -Zxz --root-owner-group -b $P "$OUT/scubed3-udeb_${VERSION}_$ARCH.udeb" > /dev/null ||
 	fail "dpkg-deb scubed3-udeb"
 

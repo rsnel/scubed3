@@ -5,11 +5,15 @@
 # the base device, by a name that does not change between boots
 BASE=/dev/disk/by-partuuid/00000000-0000-0000-0000-000000000000
 
-# the scubed3 partition with the root file system; if it is not set (the
-# default), its name is asked at boot, then no name of a partition is stored
-# (there can be more than one root partition, for example one you can admit
-# and a hidden one; the names of the other partitions are always asked)
-#ROOT_PARTITION=root
+# root is the partition root of the key store /etc/scubed3.keys (the hook
+# copies it into the initramfs); the passphrase is asked as cryptroot asks
+# it, "Please unlock disk CRYPTTAB_NAME:" (default: the name of the base
+# device and _crypt, as the debian-installer names an encrypted partition)
+#CRYPTTAB_NAME=sda5_crypt
+
+# the number of passphrases without root (wrong ones, and the hidden ones)
+# before the boot goes on without root, as cryptroot (0: no limit)
+#TRIES=3
 
 # options of the daemon: the same -m and -M as always (the sizes are not
 # stored), -r KIBPS for paranoia level 3, FUSE options

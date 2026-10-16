@@ -4,14 +4,19 @@
 # 1. the first time: the partition table is written, the base device (the
 #    partition with method scubed3) is filled with random data (a new set of
 #    macroblocks) or the salt of an existing one is asked, the daemon is
-#    started
-# 2. a menu: create partitions, open existing ones (ALL partitions on the
-#    base device must be open before finish, in paranoia level 2 and 3 a
+#    started, a key store is made with the boot passphrase (the passphrase
+#    that is asked at boot, as for an encrypted disk)
+# 2. a menu: create partitions, open existing ones; their keys go into the
+#    key store: in the view of the boot passphrase (root always), or in the
+#    view of a hidden passphrase (ALL partitions on the base device must be
+#    open before finish, and in the key store: in paranoia level 2 and 3 a
 #    partition that is not open is destroyed)
-# 3. finish: the paranoia level is switched, the unclaimed blocks are lent
-#    to the partition to install on (they are given back at the end of the
-#    installation, see finish-install.d/08scubed3), LUKS is put on the
-#    partitions that get it, partman is restarted: the LUKS volumes
+# 3. finish: the root file system goes on the partition "root" (with
+#    LUKS); the paranoia level is switched, the unclaimed blocks are lent to
+#    root (they are given back at the end of the installation, see
+#    finish-install.d/08scubed3), LUKS is put on the partitions that get it
+#    (their keys are in the key store), the LUKS volumes of the view of the
+#    boot passphrase are opened, partman is restarted: they
 #    (/dev/mapper/scubed3-NAME) are disks in partman
 
 . /lib/partman/lib/crypto-base.sh
@@ -158,24 +163,24 @@ do_create () {
 	db_input critical partman-scubed3/luks
 	db_go || return 0
 
-	db_metaget partman-scubed3/text/partition_description description
-	s3_ask_passphrase "$(printf "$RET" "$name")" yes || return 0
+	s3_choose_view "$name" || return 0
 
-	printf '%s\n%s\n' "$PASS" "$PASS" | s3ctl -c "create $name"
-	PASS=
+	# new random keys in the key store, the partition is made with them
+	s3ks -c "keys-add $name $VIEW" -c "create $name" < /dev/null
 	if [ ! -e $S3MNT/$name ] || ! s3ctl -c "resize $name $blocks"; then
 		s3_error partman-scubed3/create_failed "$name"
 		return 0
 	fi
 	mkdir -p $S3STATE/parts/$name
 	>$S3STATE/parts/$name/created
+	echo $VIEW > $S3STATE/parts/$name/view
 	db_get partman-scubed3/luks
 	[ "$RET" = true ] && >$S3STATE/parts/$name/luks
 	return 0
 }
 
 do_open () {
-	local name
+	local name pass luks
 	db_set partman-scubed3/name ""
 	db_fset partman-scubed3/name seen false
 	db_input critical partman-scubed3/name
@@ -194,23 +199,61 @@ do_open () {
 
 	db_metaget partman-scubed3/text/partition_description description
 	s3_ask_passphrase "$(printf "$RET" "$name")" no || return 0
-	printf '%s\n' "$PASS" | s3ctl -c "open $name"
+	pass=$PASS
 	PASS=
+	printf '%s\n' "$pass" | s3ctl -c "open $name"
 	if [ ! -e $S3MNT/$name ]; then
+		pass=
 		db_subst partman-scubed3/no_blocks NAME "$name"
 		note partman-scubed3/no_blocks
 		return 0
 	fi
-	mkdir -p $S3STATE/parts/$name
+
+	# a passphrase of its LUKS volume: the LUKS volume gets a new key, in
+	# the key store
+	luks=
 	if cryptsetup isLuks $S3MNT/$name 2>/dev/null; then
-		>$S3STATE/parts/$name/luks
-		s3_luks_open $name || true
+		while :; do
+			db_metaget partman-scubed3/text/luks_description description
+			if ! s3_ask_passphrase "$(printf "$RET" "$name")" no; then
+				pass=
+				s3ctl -c "close $name"
+				return 0
+			fi
+			s3_luks_check "$PASS" $name && break
+			PASS=
+			s3_error partman-scubed3/luks_open_failed "$name"
+		done
+		luks=$PASS
+		PASS=
 	fi
+
+	if ! s3_choose_view "$name"; then
+		pass=; luks=
+		s3ctl -c "close $name"
+		return 0
+	fi
+	if [ "$luks" ]; then
+		printf '%s\n%s\n' "$pass" "$luks" | s3ks -c "keys-import $name $VIEW"
+	else
+		printf '%s\n' "$pass" | s3ks -c "keys-import $name $VIEW"
+	fi
+	pass=; luks=
+	mkdir -p $S3STATE/parts/$name
+	echo $VIEW > $S3STATE/parts/$name/view
+	cryptsetup isLuks $S3MNT/$name 2>/dev/null && >$S3STATE/parts/$name/luks
 	return 0
 }
 
 do_finish () {
-	local p name level free n r choices default
+	local p name level free n r view
+
+	# the root file system goes on root, with LUKS (the LUKS volume is
+	# the disk that is partitioned next)
+	if [ ! -d $S3STATE/parts/root ] || [ ! -f $S3STATE/parts/root/luks ]; then
+		note partman-scubed3/no_root
+		return 1
+	fi
 
 	db_input critical partman-scubed3/level
 	db_input critical partman-scubed3/boot_level
@@ -225,49 +268,42 @@ do_finish () {
 	db_get partman-scubed3/boot_level
 	sed -i "s/^paranoia=.*/paranoia=$RET/" $S3CONF
 
-	# lend the unclaimed blocks to the partition to install on (as
-	# reserved blocks: its size does not change)
-	choices=; default=
-	for p in $S3STATE/parts/*; do
-		[ -d "$p" ] || continue
-		[ -f $p/lent ] && choices= && break
-		[ -f $p/luks ] || continue
-		choices="${choices:+$choices, }${p##*/}"
-		[ "$default" ] || default=${p##*/}
-	done
+	# lend the unclaimed blocks to root (as reserved blocks: its size does
+	# not change)
 	free=$(s3_p_number "blocks unclaimed")
-	if [ "$choices" ] && [ "${free:-0}" -gt 0 ]; then
-		db_metaget partman-scubed3/text/lend_none description
-		db_subst partman-scubed3/lend CHOICES "$choices, $RET"
-		db_subst partman-scubed3/lend FREE "$(s3_mib_of $free) MiB"
-		db_set partman-scubed3/lend "$default"
-		db_input critical partman-scubed3/lend
-		db_go || return 1
-		db_get partman-scubed3/lend
-		name="$RET"
-		if [ -d "$S3STATE/parts/$name" ]; then
-			n=$(s3_info $name no_macroblocks)
-			r=$(s3_info $name reserved_macroblocks)
-			if s3ctl -c "resize-internal $name $((n + free)) $((r + free))"; then
-				echo "$n $r" > $S3STATE/parts/$name/lent
-			else
-				s3_error partman-scubed3/lend_failed "$name"
-			fi
+	if [ ! -f $S3STATE/parts/root/lent ] && [ "${free:-0}" -gt 0 ]; then
+		n=$(s3_info root no_macroblocks)
+		r=$(s3_info root reserved_macroblocks)
+		if s3ctl -c "resize-internal root $((n + free)) $((r + free))"; then
+			echo "$n $r" > $S3STATE/parts/root/lent
+		else
+			s3_error partman-scubed3/lend_failed root
 		fi
 	fi
 
-	# LUKS on the partitions that get it
+	# LUKS on the partitions that get it (the keys from the key store),
+	# the LUKS volumes of the view of the boot passphrase are opened (the
+	# others are not used by the installed system)
 	for p in $S3STATE/parts/*; do
 		[ -d "$p" ] || continue
 		name=${p##*/}
 		[ -f $p/luks ] || continue
 		[ -f $p/luks_open ] && continue
-		if cryptsetup isLuks $S3MNT/$name 2>/dev/null; then
-			s3_luks_open $name || return 1
-		elif ! s3_luks_format $name; then
+		view=$(cat $p/view 2>/dev/null || echo 1)
+		if ! cryptsetup isLuks $S3MNT/$name 2>/dev/null; then
+			s3ks -c "luksformat $name" < /dev/null
+			if ! cryptsetup isLuks $S3MNT/$name 2>/dev/null; then
+				s3_error partman-scubed3/luks_failed "$name"
+				return 1
+			fi
+		fi
+		[ "$view" = 1 ] || continue
+		s3ks -c "luksopen $name" < /dev/null
+		if [ ! -b /dev/mapper/scubed3-$name ]; then
 			s3_error partman-scubed3/luks_failed "$name"
 			return 1
 		fi
+		>$p/luks_open
 	done
 	return 0
 }
@@ -278,8 +314,16 @@ if ! s3_math64; then
 fi
 mkdir -p $S3STATE/parts
 
+S3PASSES=
 if ! s3_running; then
 	setup_store || exit 0
+fi
+# the key store, its passphrases (again, if Configure scubed3 was chosen
+# before)
+if [ ! -f $S3KEYS ]; then
+	s3_keystore_new || exit 0
+elif [ -z "$S3PASSES" ]; then
+	s3_keystore_unlock || exit 0
 fi
 
 while :; do
@@ -296,14 +340,13 @@ while :; do
 	case $RET in
 	    create)	do_create ;;
 	    open)	do_open ;;
-	    finish)	break ;;
+	    finish)	do_finish && break ;;
 	    *)
 		logger -t partman-scubed3 "Unknown selection '$RET'"
 		break ;;
 	esac
 done
-
-do_finish || exit 0
+S3PASSES=
 
 stop_parted_server
 restart_partman

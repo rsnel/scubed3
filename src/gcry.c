@@ -29,14 +29,20 @@ static int gcry_outofcore_handler(void *arg, size_t size,
 			"libgcrypt out of memory allocating %ld bytes", size);
 }
 
-/* needed to make libgcrypt thread safe */
+/* needed to make libgcrypt thread safe (before version 1.6; since then it
+ * is thread safe, and struct gcry_thread_cbs is deprecated: a warning,
+ * an error with -Werror, if gcrypt.h is not a system header) */
+#if GCRYPT_VERSION_NUMBER < 0x010600
 GCRY_THREAD_OPTION_PTHREAD_IMPL;
+#endif
 
 void gcry_global_init(void) {
 	const char *version;
 
+#if GCRYPT_VERSION_NUMBER < 0x010600
 	/* FIRST set thread callbacks */
 	gcry_control(GCRYCTL_SET_THREAD_CBS, &gcry_threads_pthread);
+#endif
 
 	/* then init the library */
 	version = gcry_check_version(NULL);

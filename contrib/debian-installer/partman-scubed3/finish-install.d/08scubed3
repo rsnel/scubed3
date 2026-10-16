@@ -4,16 +4,18 @@
 #    it, otherwise the programs and initramfs-tools scripts of the installer
 #    (in /usr/local/sbin and /etc/initramfs-tools)
 # 2. /etc/scubed3.conf (the salt, the iterations, the paranoia level)
-# 3. root on scubed3: cryptsetup and cryptsetup-initramfs (CRYPTSETUP=y),
-#    /etc/scubed3/initramfs.conf (BASE, OPTIONS, ROOT_PARTITION if wanted),
-#    update-initramfs; the other file systems on scubed3 (/home, ...):
-#    /etc/crypttab opens their LUKS volumes from /run/scubed3/fs/NAME (the
-#    initramfs makes that link), nofail in /etc/crypttab and /etc/fstab
-#    (they are mounted only if their partition was opened at boot)
+# 3. root on scubed3 (the partition root): cryptsetup and
+#    cryptsetup-initramfs (CRYPTSETUP=y, and its askpass: the boot
+#    passphrase is asked as for an encrypted disk), the key store
+#    /etc/scubed3.keys, /etc/scubed3/initramfs.conf (BASE, OPTIONS),
+#    update-initramfs; the other file systems on scubed3 (/home, ...) are
+#    partitions of the boot passphrase, the initramfs opens their LUKS
+#    volumes, /etc/fstab mounts them
 # 4. the blocks lent to a partition are given back: the partition gets its
 #    own size again, the garbage collector removes the extra blocks while
 #    the installed system writes (scubed3ctl p shows "shrinking")
-# 5. a note: keep a copy of /etc/scubed3.conf and the options
+# 5. a note: keep a copy of /etc/scubed3.conf, the options and the key
+#    store
 
 . /usr/share/debconf/confmodule
 
@@ -48,16 +50,8 @@ stable_name () {
 	echo "$1"
 }
 
-root=; others=
-for p in $STATE/parts/*; do
-	[ -d "$p" ] || continue
-	n=${p##*/}
-	if grep -q "^/dev/mapper/scubed3-$n /target " /proc/mounts; then
-		root=$n
-	elif grep -q "^/dev/mapper/scubed3-$n /target/" /proc/mounts; then
-		others="$others $n"
-	fi
-done
+root=
+grep -q "^/dev/mapper/scubed3-root /target " /proc/mounts && root=root
 
 # 1. scubed3
 if ! apt-install scubed3; then
@@ -75,9 +69,14 @@ if ! apt-install scubed3; then
 	apt-install fuse3 || failed fuse3
 fi
 
-# 2. the configuration
+# 2. the configuration, the key store (random data without its
+# passphrases)
 cp $STATE/scubed3.conf /target/etc/scubed3.conf
 chmod 644 /target/etc/scubed3.conf
+if [ -f $STATE/scubed3.keys ]; then
+	cp $STATE/scubed3.keys /target/etc/scubed3.keys
+	chmod 600 /target/etc/scubed3.keys
+fi
 
 # 3. root on scubed3
 if [ "$root" ]; then
@@ -91,35 +90,20 @@ if [ "$root" ]; then
 		echo "CRYPTSETUP=y" >> $hook
 	fi
 
-	db_subst partman-scubed3/store_root_name NAME "$root"
-	db_input critical partman-scubed3/store_root_name || true
-	db_go || true
-	db_get partman-scubed3/store_root_name
-	store=$RET
-
 	mkdir -p /target/etc/scubed3
 	{
 		echo "# /etc/scubed3/initramfs.conf: root on a scubed3 partition, made by"
 		echo "# the debian-installer (see /usr/share/doc/scubed3 or the README of"
-		echo "# contrib/initramfs-tools); KEEP OPTIONS THE SAME FOREVER"
+		echo "# contrib/initramfs-tools); KEEP OPTIONS THE SAME FOREVER; root is"
+		echo "# the partition root of the key store /etc/scubed3.keys"
 		echo "BASE=$(stable_name $(cat $STATE/base))"
 		echo "OPTIONS=\"$(cat $STATE/options)\""
-		if [ "$store" = true ]; then
-			echo "ROOT_PARTITION=$root"
-		else
-			echo "# the name of the root partition is asked at boot"
-			echo "#ROOT_PARTITION="
-		fi
+		echo "# the name in the question at boot, \"Please unlock disk NAME:\""
+		echo "# (default: as the installer names an encrypted partition)"
+		echo "#CRYPTTAB_NAME=$(basename $(readlink -f $(cat $STATE/base)))_crypt"
+		echo "# passphrases without root before the boot goes on without it"
+		echo "#TRIES=3"
 	} > /target/etc/scubed3/initramfs.conf
-
-	# the other file systems on scubed3: their LUKS volumes from
-	# /etc/crypttab (not below /dev: systemd would wait for a device),
-	# nofail (also in /etc/fstab): without their partition the system
-	# boots without them
-	for n in $others; do
-		echo "scubed3-$n /run/scubed3/fs/$n none luks,nofail" >> /target/etc/crypttab
-		sed -i "/^\/dev\/mapper\/scubed3-$n[[:space:]]/{/nofail/!s/^\([^[:space:]][^[:space:]]*[[:space:]][[:space:]]*[^[:space:]][^[:space:]]*[[:space:]][[:space:]]*[^[:space:]][^[:space:]]*[[:space:]][[:space:]]*[^[:space:]][^[:space:]]*\)/\1,nofail/}" /target/etc/fstab
-	done
 
 	if ! log-output -t scubed3-finish in-target update-initramfs -u -k all; then
 		failed update-initramfs

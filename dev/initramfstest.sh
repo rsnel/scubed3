@@ -1,23 +1,25 @@
 #!/bin/sh
 # initramfstest.sh - the local-top script of contrib/initramfs-tools (root on
 # scubed3) in a simulated initramfs: its paths point into a temporary
-# directory, /scripts/functions is a stand-in (panic), the answers are typed
-# on a terminal (script(1)): the name of the root partition (ROOT_PARTITION
-# is not set), a wrong passphrase, the name again and the right passphrase,
-# the name and passphrase of another partition, an empty name, Yes for
-# paranoia level 2
+# directory, /scripts/functions is a stand-in (panic), askpass is a stand-in
+# (it shows its prompt, it reads a line), cryptsetup is fake-cryptsetup
 #
-# afterwards: ROOT in conf/param.conf is a loop device with the file system
-# of the root partition, the daemon runs as @scubed3 (argv[0]) with
-# oom_score_adj -1000, both partitions are open, the level is 2
+# the key store has two views: A with root (LUKS, the root file system) and
+# home (LUKS), H with hidden (LUKS); the answers: a wrong passphrase, H, A;
+# what is on the console: three times the prompt of cryptroot ("Please
+# unlock disk base_crypt: ", base is the base device), twice its message of
+# a wrong passphrase, once "set up successfully", nothing else; afterwards
+# ROOT in conf/param.conf is /dev/mapper/scubed3-root with the file system,
+# the daemon runs as @scubed3 (argv[0]) with oom_score_adj -1000, root, home
+# and hidden are open, the LUKS volumes of root and home (the view of root)
+# are open, not that of hidden, the level is 2, the copy of the key store is
+# gone
 #
-# then a boot with a key store (conf/scubed3.keys): root has LUKS on it
-# (its key in the store, the stand-in fake-cryptsetup); the answers: the
-# name of the root partition, one passphrase of the key store, an empty one,
-# an empty name, Yes; afterwards ROOT is /dev/mapper/scubed3-root with the
-# file system, both partitions are open, the copy of the key store is gone
+# a second boot (CRYPTTAB_NAME=sda5_crypt): three wrong passphrases: the
+# prompt with that name, the message of cryptroot that the maximum number of
+# tries is exceeded, no ROOT, no partition is open
 #
-# usage: initramfstest.sh DAEMON CTL (as root, in the directory with the
+# usage: [KEEP=1] initramfstest.sh DAEMON CTL (as root, in the directory with the
 # binaries; uses /dev/scubed3fs and /run/scubed3/control, like a real boot)
 D=$(realpath $1); C=$(realpath $2); P=$(mktemp -d); S=$(cd "$(dirname "$0")/.." && pwd)
 FUSERMOUNT=$(command -v fusermount3 || echo fusermount)
@@ -26,18 +28,20 @@ FS=$P/fs; MNT=/dev/scubed3fs
 unboot() {
 	umount $FS 2> /dev/null
 	[ -n "$LOOP" ] && losetup -d $LOOP 2> /dev/null
-	[ -e /dev/mapper/scubed3-root ] && PATH=$P/sbin:$PATH cryptsetup close scubed3-root
+	for n in root home hidden; do
+		[ -e /dev/mapper/scubed3-$n ] && PATH=$P/sbin:$PATH cryptsetup close scubed3-$n
+	done
 	$P/sbin/scubed3ctl -q -YYY -c "paranoia 1" > /dev/null 2>&1
-	for n in root hidden; do $P/sbin/scubed3ctl -c "close $n" > /dev/null 2>&1; done
+	for n in root home hidden; do $P/sbin/scubed3ctl -c "close $n" > /dev/null 2>&1; done
 	$FUSERMOUNT -u $MNT 2> /dev/null; $FUSERMOUNT -u /mnt/s3 2> /dev/null; sleep 1
 	rmdir $MNT 2> /dev/null; LOOP=; rm -f $P/conf/param.conf
 }
-cleanup() { unboot; rm -rf $P; rm -f /run/scubed3/fs; }
+cleanup() { unboot; [ -n "$KEEP" ] || rm -rf $P; rm -f /run/scubed3/fs; }
 fail() { echo "INITRAMFSTEST FAILED: $1"; [ -f $P/out ] && cat $P/out; cleanup; exit 1; }
 [ -e /run/scubed3/control ] && fail "a scubed3 daemon is running"
 
 # the initramfs: the configuration, the binaries, the stand-ins
-mkdir -p $P/scripts $P/conf $P/sbin $P/etc $FS
+mkdir -p $P/scripts $P/conf $P/sbin $P/etc $P/lib/cryptsetup $P/run/initramfs $FS
 cat > $P/scripts/functions <<EOF
 panic() { echo "PANIC: \$*"; exit 1; }
 EOF
@@ -48,14 +52,25 @@ printf '#!/bin/sh\nPATH=%s/sbin:$PATH exec %s -C %s/etc/scubed3.conf "$@"\n' $P 
 chmod +x $P/sbin/scubed3ctl
 ln -s "$(command -v losetup)" $P/sbin/losetup-util
 ln -s $S/dev/fake-cryptsetup $P/sbin/cryptsetup
+# askpass: the prompt on stderr, the passphrase (a line of stdin) on stdout
+cat > $P/lib/cryptsetup/askpass <<'EOF2'
+#!/bin/sh
+printf '%s' "$1" >&2
+read -r p
+printf '%s' "$p"
+EOF2
+chmod +x $P/lib/cryptsetup/askpass
 sed -e "s|/scripts/functions|$P/scripts/functions|" -e "s|/conf/|$P/conf/|g" \
 	-e "s|/sbin/|$P/sbin/|g" -e "s|PATH=/sbin:|PATH=$P/sbin:|" \
 	-e "s|/etc/scubed3.conf|$P/etc/scubed3.conf|g" \
+	-e "s|/lib/cryptsetup/askpass|$P/lib/cryptsetup/askpass|" \
+	-e "s|/run/initramfs/|$P/run/initramfs/|" \
 	$S/contrib/initramfs-tools/scripts/local-top/scubed3 > $P/local-top
 grep -q "^\. $P/scripts/functions" $P/local-top || fail "the paths of the script are not replaced"
 
-# the partitions, made with a normal daemon: root (ext2, a file) and hidden
-head -c $((200<<16)) /dev/urandom > $P/base
+# the partitions, made with a normal daemon, with the keys of the key store
+KS=$P/conf/scubed3.keys
+head -c $((300<<16)) /dev/urandom > $P/base
 $FUSERMOUNT -u -z /mnt/s3 2> /dev/null
 $D -b $P/base -m 12 -M 16 /mnt/s3 || fail "daemon"
 # type answers (one per second) to a command on a terminal
@@ -64,24 +79,36 @@ typed() {
 	(for l in "$@"; do sleep 1; printf '%s\n' "$l"; done; sleep 3) |
 		script -qc "$cmd" /dev/null | tr -d '\r' > $P/out
 }
-typed "$P/sbin/scubed3ctl -c 'create root'" pw pw
-typed "$P/sbin/scubed3ctl -c 'create hidden'" hpw hpw
-$P/sbin/scubed3ctl -q -YYY -c "resize root 60" > /dev/null
-$P/sbin/scubed3ctl -q -YYY -c "resize hidden 40" > /dev/null
-mke2fs -q -F /mnt/s3/root || fail "mke2fs"
-mount -o loop /mnt/s3/root $FS && echo "the root file system" > $FS/marker && umount $FS
-$P/sbin/scubed3ctl -c "close root" > /dev/null; $P/sbin/scubed3ctl -c "close hidden" > /dev/null
+c="$P/sbin/scubed3ctl -K $KS"
+typed "$c -c keys-create -c unlock-all -c keys-passphrase-add" "" A A yes
+typed "$c -c unlock-all -c keys-passphrase-add" A "" H H yes
+typed "$c -c unlock-all -c 'keys-add root 1' -c 'keys-add home 1' -c 'keys-add hidden 2' -c 'create root' -c 'create home' -c 'create hidden'" \
+	A H "" yes yes yes
+for n in root:60 home:30 hidden:30; do $P/sbin/scubed3ctl -q -YYY -c "resize ${n%:*} ${n#*:}" > /dev/null; done
+typed "$c -c unlock-all -c 'luksformat root' -c 'luksformat home' -c 'luksformat hidden' -c 'mke2fs root' -c 'mount root $FS'" \
+	A H "" yes yes yes yes yes yes yes yes
+mountpoint -q $FS || fail "the LUKS volume is not mounted: $(cat $P/out)"
+echo "the root file system on LUKS" > $FS/marker
+typed "$P/sbin/scubed3ctl -c 'umount root'"
+for n in root home hidden; do $P/sbin/scubed3ctl -c "close $n" > /dev/null 2>&1; done
 $FUSERMOUNT -u /mnt/s3; sleep 1
+cp $KS $P/keys.saved
 
-# the boot
-typed "sh $P/local-top" root bad root pw hidden hpw "" Yes
+# the boot: a wrong passphrase, H (a view without root), A
+printf 'wrong\nH\nA\n' | sh $P/local-top > $P/out 2>&1
 cp $P/out $P/boot.out
 grep -q PANIC $P/out && fail "panic"
-grep -q "ROOT=/dev/loop" $P/conf/param.conf || fail "ROOT is not set: $(cat $P/conf/param.conf 2>&1)"
-LOOP=$(sed -n 's/^ROOT=//p' $P/conf/param.conf)
-echo "   ok: ROOT=$LOOP"
-grep -q "no blocks found" $P/out || fail "the wrong passphrase was accepted"
-echo "   ok: the wrong passphrase was asked again"
+grep -q "ROOT=/dev/mapper/scubed3-root" $P/conf/param.conf || fail "ROOT is not set: $(cat $P/conf/param.conf 2>&1)"
+echo "   ok: ROOT=/dev/mapper/scubed3-root (opened with the key from the store)"
+expect="Please unlock disk base_crypt: cryptsetup: ERROR: base_crypt: cryptsetup failed, bad password or options?
+Please unlock disk base_crypt: cryptsetup: ERROR: base_crypt: cryptsetup failed, bad password or options?
+Please unlock disk base_crypt: cryptsetup: base_crypt: set up successfully"
+[ "$(cat $P/out)" = "$expect" ] || fail "the console is not as with cryptroot:
+$(cat $P/out)
+---- expected:
+$expect"
+echo "   ok: the console shows only what cryptroot shows (prompt, wrong passphrase, set up successfully)"
+[ -e $KS ] && fail "the key store is not removed from the initramfs"
 pid=
 for p in /proc/[0-9]*; do
 	[ "$(cat $p/comm 2> /dev/null)" = "@scubed3" ] && pid=${p#/proc/}
@@ -97,45 +124,28 @@ fi
 echo "   ok: the daemon runs as $(tr '\0' ' ' < /proc/$pid/cmdline | cut -c1-40)..., $oom"
 st=$($P/sbin/scubed3ctl -c p)
 echo "$st" | grep -q "paranoia level 2 " || fail "level: $st"
-echo "$st" | grep -q " blocks in root" && echo "$st" | grep -q " blocks in hidden" || fail "partitions: $st"
-echo "   ok: root and hidden are open, paranoia level 2"
-mount -o ro $LOOP $FS || fail "mount of $LOOP"
-grep -q "the root file system" $FS/marker || fail "the file system of the root partition"
-echo "   ok: $LOOP has the file system of the root partition"
-umount $FS
-unboot
-
-# ------------------------------------------------------------- a key store
-echo "a boot with a key store"
-KS=$P/conf/scubed3.keys
-head -c $((200<<16)) /dev/urandom > $P/base
-$D -b $P/base -m 12 -M 16 /mnt/s3 || fail "daemon"
-typed "$P/sbin/scubed3ctl -K $KS -c keys-create -c unlock-all -c keys-passphrase-add" "" A A yes
-typed "$P/sbin/scubed3ctl -K $KS -c unlock -c 'keys-add root' -c 'keys-add hidden' -c 'create root' -c 'create hidden'" A yes yes
-$P/sbin/scubed3ctl -q -YYY -c "resize root 60" > /dev/null
-$P/sbin/scubed3ctl -q -YYY -c "resize hidden 40" > /dev/null
-typed "$P/sbin/scubed3ctl -K $KS -c unlock -c 'luksformat root' -c 'mke2fs root' -c 'mount root $FS'" A yes yes yes yes
-mountpoint -q $FS || fail "the LUKS volume is not mounted: $(cat $P/out)"
-echo "the root file system on LUKS" > $FS/marker
-typed "$P/sbin/scubed3ctl -c 'umount root'"
-$P/sbin/scubed3ctl -c "close hidden" > /dev/null; $P/sbin/scubed3ctl -c "close root" > /dev/null 2>&1
-$FUSERMOUNT -u /mnt/s3; sleep 1
-
-typed "sh $P/local-top" root A "" "" Yes
-cp $P/out $P/boot2.out
-grep -q PANIC $P/out && fail "panic"
-grep -q "ROOT=/dev/mapper/scubed3-root" $P/conf/param.conf || fail "ROOT is not set: $(cat $P/conf/param.conf 2>&1)"
-echo "   ok: ROOT=/dev/mapper/scubed3-root (opened with the key from the store)"
-grep -q "Enter passphrase" $P/out && fail "a passphrase of a partition was asked"
-[ -e $KS ] && fail "the key store is not removed from the initramfs"
-echo "   ok: one passphrase of the key store, no other; the copy of the key store is gone"
-st=$($P/sbin/scubed3ctl -c p)
-echo "$st" | grep -q "paranoia level 2 " || fail "level: $st"
-echo "$st" | grep -q " blocks in root" && echo "$st" | grep -q " blocks in hidden" || fail "partitions: $st"
-echo "   ok: root and hidden are open, paranoia level 2"
+for n in root home hidden; do
+	echo "$st" | grep -q " blocks in $n" || fail "$n is not open: $st"
+done
+[ -b /dev/mapper/scubed3-home ] || fail "the LUKS volume of home is not open"
+[ -e /dev/mapper/scubed3-hidden ] && fail "the LUKS volume of hidden is open"
+echo "   ok: root, home and hidden are open, the LUKS volumes of root and home (not of hidden), level 2"
 mount -o ro /dev/mapper/scubed3-root $FS || fail "mount of /dev/mapper/scubed3-root"
 grep -q "the root file system on LUKS" $FS/marker || fail "the file system on LUKS"
 echo "   ok: /dev/mapper/scubed3-root has the file system"
 umount $FS
+unboot
+
+# a second boot: three wrong passphrases
+cp $P/keys.saved $KS
+echo CRYPTTAB_NAME=sda5_crypt >> $P/conf/scubed3.conf
+printf 'x\ny\nz\n' | sh $P/local-top > $P/out 2>&1
+grep -q PANIC $P/out && fail "panic: $(cat $P/out)"
+[ "$(grep -c 'Please unlock disk sda5_crypt: ' $P/out)" = 3 ] || fail "the prompt: $(cat $P/out)"
+tail -n 1 $P/out | grep -q "^cryptsetup: ERROR: sda5_crypt: maximum number of tries exceeded$" ||
+	fail "no message of the maximum number of tries: $(cat $P/out)"
+grep -q ROOT $P/conf/param.conf 2> /dev/null && fail "ROOT is set"
+$P/sbin/scubed3ctl -c p | grep -q " blocks in " && fail "a partition is open"
+echo "   ok: three wrong passphrases: as cryptroot (maximum number of tries exceeded), no ROOT, nothing open"
 cleanup
 echo "INITRAMFSTEST OK"

@@ -3,10 +3,11 @@
 # - a base device must be configured (Configure scubed3)
 # - no swap on a scubed3 partition, no /boot
 # - other file systems on scubed3 (/home, ...) need root on scubed3: the
-#   initramfs starts scubed3 only for root on scubed3, the other LUKS
-#   volumes are opened from /etc/crypttab of the root file system; a note
-#   says that whoever has the passphrase of the root partition sees them
-# - root on scubed3 needs a /boot partition that is not on scubed3
+#   initramfs starts scubed3 only for root on scubed3, and opens the LUKS
+#   volumes of the view of root; a note says that whoever has the boot
+#   passphrase sees them
+# - root on scubed3 is on the partition root (the initramfs boots from it),
+#   and needs a /boot partition that is not on scubed3
 
 . /lib/partman/lib/scubed3-base.sh
 
@@ -52,7 +53,11 @@ for dev in $DEVICES/*; do
 			;;
 		    format|keep)
 			case "$mnt" in
-			    /)		s3_root=yes ;;
+			    /)
+				s3_root=yes
+				[ "$(cat $dev/device)" = /dev/mapper/scubed3-root ] ||
+					error partman-scubed3/root_not_root
+				;;
 			    /boot|/boot/*)
 				error partman-scubed3/no_boot ;;
 			    "")		;;

@@ -13,3 +13,5 @@ AM_CFLAGS = -D_GNU_SOURCE -O3 -g -Wall -Werror -D_FILE_OFFSET_BITS=64
 scubed3_CFLAGS = $(AM_CFLAGS) $(FUSE_CFLAGS)
 scubed3_LDADD = -lpthread $(FUSE_LIBS) -lgcrypt -lm -lrt -lgpg-error
 scubed3ctl_LDADD = $(READLINE_LIBS) -lgcrypt -lpthread -lgpg-error
+scubed3_LDFLAGS = $(STATIC_LDFLAGS)
+scubed3ctl_LDFLAGS = $(STATIC_LDFLAGS)

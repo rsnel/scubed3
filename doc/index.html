@@ -434,7 +434,7 @@
 	</figure>
 
 	<div class="prose">
-		<p>The key store also makes it practical to put the root filesystem itself on scubed3: the scripts in <code>contrib/initramfs-tools</code> (for Debian and its derivatives) start the daemon at boot, ask for one passphrase, and open everything.</p>
+		<p>The key store also makes it practical to put the root filesystem itself on scubed3: the scripts in <code>contrib/initramfs-tools</code> (for Debian and its derivatives) start the daemon at boot and ask for one passphrase, in exactly the words and the place an encrypted disk asks for it, then open everything. To someone watching the boot it looks like an ordinary encrypted laptop.</p>
 	</div>
 </section>
 

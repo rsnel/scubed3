@@ -1035,7 +1035,9 @@ int main(int argc, char **argv) {
 				options.kibps, 1<<20);
 	b.rate = ((uint64_t)options.kibps)<<10;
 
-	/* lock me into memory; don't leak info to swap */
+	/* lock me into memory; don't leak info to swap (without -f this is
+	 * done again after the fork in fuse_io_start, a failure is reported
+	 * here, while stderr is still there) */
 	if (mlockall(MCL_CURRENT|MCL_FUTURE)<0)
 		WARNING("failed locking process in RAM: %s",
 				strerror(errno));

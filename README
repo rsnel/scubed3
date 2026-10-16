@@ -76,6 +76,12 @@ scubed3 partitions. The goal is to be able to plausibly deny the existence of
 partitions to which the adversary has no keys.  Only paranoia level 3 protects
 completely against this. We assume the adversary cannot detect read access.
 
+The keys of the open partitions are in the memory of scubed3, passphrases
+pass through scubed3ctl: both lock themselves into memory (mlockall, as
+root), so they do not go to swap. Hibernation (suspend to disk) writes all
+memory to swap anyway, locked or not: do not hibernate with partitions
+open, or use an encrypted swap with a key that is asked at resume.
+
 
 Paranoia levels
 ~~~~~~~~~~~~~~~

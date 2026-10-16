@@ -25,6 +25,7 @@
 #include <unistd.h>
 #include <errno.h>
 #include <assert.h>
+#include <sys/mman.h>
 #include "verbose.h"
 #include "fuse_io.h"
 #include "hashtbl.h"
@@ -426,6 +427,14 @@ static int fuse_main_custom(int argc, char *argv[],
 	if (fuse_mount(fuse, opts.mountpoint)) goto out_destroy;
 
 	if (fuse_daemonize(opts.foreground)) goto out_unmount;
+
+	/* fuse_daemonize forks (without -f), and memory locks are not
+	 * inherited by a child: the process that stays is locked into memory
+	 * again (see main, a failure was reported there, stderr is
+	 * /dev/null now); its memory, with the keys of the partitions, must
+	 * not go to swap */
+	if (!opts.foreground && mlockall(MCL_CURRENT|MCL_FUTURE) < 0)
+		WARNING("failed locking process in RAM: %s", strerror(errno));
 
 	se = fuse_get_session(fuse);
 	if (fuse_set_signal_handlers(se)) goto out_unmount;

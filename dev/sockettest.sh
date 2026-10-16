@@ -3,7 +3,8 @@
 # (0600), refusal of unsafe directories, no takeover of a running daemon,
 # takeover of a stale socket, peer check, removal at exit, an unmount
 # while a command runs (the command is finished first), a number that is not
-# parsed (one answer, nothing changes)
+# parsed (one answer, nothing changes), the daemon in the background is
+# locked into memory (no swap)
 #
 # usage: sockettest.sh DAEMON SCUBED3CTL (as root, user nobody must exist)
 FUSERMOUNT=$(command -v fusermount3 || echo fusermount)
@@ -124,5 +125,19 @@ $C -q -c p | grep -q "^paranoia level 1 " || fail "the paranoia level changed: $
 $C -q -c p | grep -q "^0000010 blocks in f " || fail "partition f changed: $($C -q -c p | grep ' in f')"
 $FUSERMOUNT -u $M; wait $P7
 echo "numbers that are not parsed: one answer (ERR), nothing changes"
+
+# without -f the daemon forks (fuse_daemonize), and memory locks are not
+# inherited: the process that stays must lock itself (its memory, with the
+# keys, was not locked and could go to swap)
+$D -b $T/base6 -m 12 -M 16 $M > $T/log.8 2>&1 || fail "the daemon (in the background): $(tail -1 $T/log.8)"
+waitsock $S
+lck=
+for p in $(pgrep -x $(basename $D)); do
+	tr '\0' ' ' < /proc/$p/cmdline | grep -q "$T/base6" &&
+		lck=$(sed -n 's/^VmLck:[[:space:]]*\([0-9]*\).*/\1/p' /proc/$p/status)
+done
+$FUSERMOUNT -u $M
+[ "${lck:-0}" -gt 0 ] || fail "the daemon in the background is not locked into memory (VmLck: ${lck:-?} kB)"
+echo "the daemon in the background is locked into memory ($lck kB)"
 rm -rf $T
 echo "SOCKETTEST OK"

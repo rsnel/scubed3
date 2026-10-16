@@ -339,7 +339,8 @@ sockettest.sh DAEMON SCUBED3CTL
 	thread was cancelled halfway through the command, with its locks
 	held, and the daemon hung or stopped with FATAL at exit); numbers
 	that are not parsed get one answer (ERR) and change nothing, several
-	commands sent at once are all done.
+	commands sent at once are all done; the daemon in the background (it
+	forks) is locked into memory (VmLck).
 
 
 Paranoia levels and the write order

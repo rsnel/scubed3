@@ -55,7 +55,7 @@ for dev in $DEVICES/*; do
 			case "$mnt" in
 			    /)
 				s3_root=yes
-				[ "$(cat $dev/device)" = /dev/mapper/scubed3-root ] ||
+				[ "$(cat $dev/device)" = "$(s3_luks_dev root)" ] ||
 					error partman-scubed3/root_not_root
 				;;
 			    /boot|/boot/*)

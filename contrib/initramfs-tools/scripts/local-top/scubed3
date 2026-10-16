@@ -30,13 +30,15 @@
 # 3. all partitions of the unlocked views are opened (in paranoia level 2
 #    and 3 ALL partitions must be open: all of them must be in the views
 #    that are unlocked at boot), and the LUKS volumes of the view of root
-#    (/dev/mapper/scubed3-NAME, with their keys from the key store, for
+#    (/dev/mapper/PREFIXNAME, with their keys from the key store, for
 #    /etc/fstab: /home, ...); the copy of the key store is overwritten and
 #    removed
 # 4. the paranoia level is switched (PARANOIA, or paranoia= in
 #    /etc/scubed3.conf, default 2), before anything is written
-# 5. ROOT is /dev/mapper/scubed3-root (root has LUKS on it), otherwise a
-#    loop device on root
+# 5. ROOT is /dev/mapper/PREFIXroot (root has LUKS on it), otherwise a
+#    loop device on root; PREFIX is luks_prefix= of /etc/scubed3.conf (the
+#    debian-installer makes it HOSTNAME-, as LVM names HOSTNAME-vg),
+#    default scubed3-
 #
 # the messages of the daemon and of scubed3ctl go to
 # /run/initramfs/scubed3.log (after the boot too), not to the console
@@ -199,6 +201,12 @@ if [ ! -e "$MNT/root" ]; then
 	exit 0
 fi
 
+# the names of the LUKS volumes (as scubed3ctl names them)
+prefix=scubed3-
+if [ -f /etc/scubed3.conf ] && grep -q '^[[:space:]]*luks_prefix[[:space:]]*=' /etc/scubed3.conf; then
+	prefix=$(sed -n 's/^[[:space:]]*luks_prefix[[:space:]]*=[[:space:]]*\([^[:space:]]*\)[[:space:]]*$/\1/p' /etc/scubed3.conf | head -n 1)
+fi
+
 # 4. the paranoia level (it shows the open partitions in the log)
 level=$PARANOIA
 if [ -z "$level" ] && [ -f /etc/scubed3.conf ]; then
@@ -214,13 +222,13 @@ if ! ctl -c p 2>> $LOG | tee -a $LOG | grep -q "paranoia level $level "; then
 fi
 
 # 5. the block device of the root partition
-if [ -b /dev/mapper/scubed3-root ]; then
-	dev=/dev/mapper/scubed3-root
+if [ -b /dev/mapper/${prefix}root ]; then
+	dev=/dev/mapper/${prefix}root
 elif [ -x /sbin/cryptsetup ] && /sbin/cryptsetup isLuks "$MNT/root"; then
 	# (its LUKS key is not in the key store: cryptsetup asks)
-	dev=/dev/mapper/scubed3-root
+	dev=/dev/mapper/${prefix}root
 	i=0
-	until /sbin/cryptsetup open "$MNT/root" scubed3-root; do
+	until /sbin/cryptsetup open "$MNT/root" ${prefix}root; do
 		i=$((i + 1))
 		[ $i -ge 3 ] && panic "scubed3: the LUKS volume on root is not opened"
 	done

@@ -17,7 +17,7 @@
 #    finish-install.d/08scubed3), LUKS is put on the partitions that get it
 #    (their keys are in the key store), the LUKS volumes of the view of the
 #    boot passphrase are opened, partman is restarted: they
-#    (/dev/mapper/scubed3-NAME) are disks in partman
+#    (/dev/mapper/HOSTNAME-NAME) are disks in partman
 
 . /lib/partman/lib/crypto-base.sh
 . /lib/partman/lib/scubed3-base.sh
@@ -102,6 +102,8 @@ ${salt:+salt=$salt}
 iterations=${iterations:-$S3DEFAULT_ITERATIONS}
 # the paranoia level that mount, mke2fs and luksformat require
 paranoia=2
+# the names of the LUKS volumes: /dev/mapper/$(s3_hostname)-NAME
+luks_prefix=$(s3_hostname)-
 EOF
 	echo $base > $S3STATE/base
 
@@ -299,7 +301,7 @@ do_finish () {
 		fi
 		[ "$view" = 1 ] || continue
 		s3ks -c "luksopen $name" < /dev/null
-		if [ ! -b /dev/mapper/scubed3-$name ]; then
+		if [ ! -b $(s3_luks_dev $name) ]; then
 			s3_error partman-scubed3/luks_failed "$name"
 			return 1
 		fi

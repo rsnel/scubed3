@@ -9,7 +9,8 @@
 # what is on the console: three times the prompt of cryptroot ("Please
 # unlock disk base_crypt: ", base is the base device), twice its message of
 # a wrong passphrase, once "set up successfully", nothing else; afterwards
-# ROOT in conf/param.conf is /dev/mapper/scubed3-root with the file system,
+# ROOT in conf/param.conf is /dev/mapper/myhost-root (luks_prefix=myhost-
+# in /etc/scubed3.conf) with the file system,
 # the daemon runs as @scubed3 (argv[0]) with oom_score_adj -1000, root, home
 # and hidden are open, the LUKS volumes of root and home (the view of root)
 # are open, not that of hidden, the level is 2, the copy of the key store is
@@ -29,7 +30,7 @@ unboot() {
 	umount $FS 2> /dev/null
 	[ -n "$LOOP" ] && losetup -d $LOOP 2> /dev/null
 	for n in root home hidden; do
-		[ -e /dev/mapper/scubed3-$n ] && PATH=$P/sbin:$PATH cryptsetup close scubed3-$n
+		[ -e /dev/mapper/myhost-$n ] && PATH=$P/sbin:$PATH cryptsetup close myhost-$n
 	done
 	$P/sbin/scubed3ctl -q -YYY -c "paranoia 1" > /dev/null 2>&1
 	for n in root home hidden; do $P/sbin/scubed3ctl -c "close $n" > /dev/null 2>&1; done
@@ -45,7 +46,7 @@ mkdir -p $P/scripts $P/conf $P/sbin $P/etc $P/lib/cryptsetup $P/run/initramfs $F
 cat > $P/scripts/functions <<EOF
 panic() { echo "PANIC: \$*"; exit 1; }
 EOF
-printf 'iterations=1000\nparanoia=2\n' > $P/etc/scubed3.conf
+printf 'iterations=1000\nparanoia=2\nluks_prefix=myhost-\n' > $P/etc/scubed3.conf
 printf 'BASE=%s\nOPTIONS="-m 12 -M 16"\n' $P/base > $P/conf/scubed3.conf
 cp $D "$P/sbin/@scubed3"
 printf '#!/bin/sh\nPATH=%s/sbin:$PATH exec %s -C %s/etc/scubed3.conf "$@"\n' $P $C $P > $P/sbin/scubed3ctl
@@ -98,8 +99,8 @@ cp $KS $P/keys.saved
 printf 'wrong\nH\nA\n' | sh $P/local-top > $P/out 2>&1
 cp $P/out $P/boot.out
 grep -q PANIC $P/out && fail "panic"
-grep -q "ROOT=/dev/mapper/scubed3-root" $P/conf/param.conf || fail "ROOT is not set: $(cat $P/conf/param.conf 2>&1)"
-echo "   ok: ROOT=/dev/mapper/scubed3-root (opened with the key from the store)"
+grep -q "ROOT=/dev/mapper/myhost-root" $P/conf/param.conf || fail "ROOT is not set: $(cat $P/conf/param.conf 2>&1)"
+echo "   ok: ROOT=/dev/mapper/myhost-root (opened with the key from the store)"
 expect="Please unlock disk base_crypt: cryptsetup: ERROR: base_crypt: cryptsetup failed, bad password or options?
 Please unlock disk base_crypt: cryptsetup: ERROR: base_crypt: cryptsetup failed, bad password or options?
 Please unlock disk base_crypt: cryptsetup: base_crypt: set up successfully"
@@ -127,12 +128,12 @@ echo "$st" | grep -q "paranoia level 2 " || fail "level: $st"
 for n in root home hidden; do
 	echo "$st" | grep -q " blocks in $n" || fail "$n is not open: $st"
 done
-[ -b /dev/mapper/scubed3-home ] || fail "the LUKS volume of home is not open"
-[ -e /dev/mapper/scubed3-hidden ] && fail "the LUKS volume of hidden is open"
+[ -b /dev/mapper/myhost-home ] || fail "the LUKS volume of home is not open"
+[ -e /dev/mapper/myhost-hidden ] && fail "the LUKS volume of hidden is open"
 echo "   ok: root, home and hidden are open, the LUKS volumes of root and home (not of hidden), level 2"
-mount -o ro /dev/mapper/scubed3-root $FS || fail "mount of /dev/mapper/scubed3-root"
+mount -o ro /dev/mapper/myhost-root $FS || fail "mount of /dev/mapper/myhost-root"
 grep -q "the root file system on LUKS" $FS/marker || fail "the file system on LUKS"
-echo "   ok: /dev/mapper/scubed3-root has the file system"
+echo "   ok: /dev/mapper/myhost-root has the file system"
 umount $FS
 unboot
 

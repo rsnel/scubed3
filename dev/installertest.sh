@@ -20,7 +20,8 @@
 #    the views of the key store; Configure scubed3 again: the passphrases of
 #    the key store are asked again (filling a new store with random data is
 #    not done here, see the README)
-# 2. init.d: /dev/mapper/scubed3-root becomes a disk in partman with one
+# 2. init.d: /dev/mapper/testhost-root (testhost is the hostname, the
+#    prefix luks_prefix= in scubed3.conf) becomes a disk in partman with one
 #    partition (format, mount point /)
 # 3. check.d: no /boot -> error; with /boot -> ok; /boot on scubed3 -> error;
 #    /home on scubed3 without / on scubed3 -> error; with it: a note
@@ -49,7 +50,7 @@ FUSERMOUNT=$(command -v fusermount3 || echo fusermount)
 MNT=/dev/scubed3fs; LOOP=
 cleanup() {
 	umount $T/target/home 2> /dev/null; umount $T/target 2> /dev/null; umount $T/fs 2> /dev/null
-	for m in /dev/mapper/scubed3-*; do
+	for m in /dev/mapper/testhost-* /dev/mapper/scubed3-*; do
 		[ -e "$m" ] && PATH=$T/bin:$PATH cryptsetup close ${m#/dev/mapper/}
 	done
 	$C -q -YYY -C $T/state/scubed3.conf -c "paranoia 1" > /dev/null 2>&1
@@ -230,6 +231,9 @@ $C -q -YYY -C $T/old.conf -c "close old" > /dev/null 2>&1
 $FUSERMOUNT -u $MNT; sleep 1
 
 echo "1. Configure scubed3"
+# the hostname (netcfg asks it before partitioning): the LUKS volumes are
+# /dev/mapper/testhost-NAME
+echo testhost > $T/db/netcfg_get_hostname
 ans partman-scubed3/store_type existing
 ans partman-scubed3/salt oldsalt
 ans partman-scubed3/iterations 1000
@@ -247,6 +251,7 @@ sh $T/do_option > $T/do_option.out 2>&1 || fail "do_option: $(cat $T/do_option.o
 [ -S /run/scubed3/control ] || fail "the daemon does not run"
 [ "$(cat $T/state/options)" = "-m 14 -M 22" ] || fail "options: $(cat $T/state/options)"
 grep -q "^salt=oldsalt$" $T/state/scubed3.conf || fail "the salt"
+grep -q "^luks_prefix=testhost-$" $T/state/scubed3.conf || fail "luks_prefix: $(cat $T/state/scubed3.conf)"
 [ "$(cat $T/locked)" = $LOOP ] || fail "the base device is not locked"
 ok "the daemon runs on $LOOP with $(cat $T/state/options), the salt of the store"
 grep -q backup_note $T/asked || fail "no note about a backup of the key store"
@@ -266,10 +271,10 @@ ctl -c p | grep -q "paranoia level 2 " || fail "level: $(ctl -c p)"
 [ "$(cat $T/state/parts/root/lent)" = "20 5" ] || fail "lent: $(cat $T/state/parts/root/lent)"
 [ "$(stat -c %s $MNT/root)" = $((15*4080*1024)) ] || fail "the size of root: $(stat -c %s $MNT/root)"
 ok "hidden and home: 7 blocks; root: 20 blocks + 13 lent (as reserved blocks, the size of its file is the same)"
-cryptsetup isLuks $MNT/root && [ -b /dev/mapper/scubed3-root ] || fail "LUKS on root"
-cryptsetup isLuks $MNT/home && [ -b /dev/mapper/scubed3-home ] || fail "LUKS on home"
+cryptsetup isLuks $MNT/root && [ -b /dev/mapper/testhost-root ] || fail "LUKS on root"
+cryptsetup isLuks $MNT/home && [ -b /dev/mapper/testhost-home ] || fail "LUKS on home"
 cryptsetup isLuks $MNT/hidden && fail "LUKS on hidden"
-ok "LUKS on root and home (open as /dev/mapper/scubed3-NAME), not on hidden"
+ok "LUKS on root and home (open as /dev/mapper/testhost-NAME), not on hidden"
 K=$T/state/scubed3.keys
 keys() { printf '%s\n' "$@" "" | $C -q -YYY -C $T/state/scubed3.conf -K $K -c unlock-all -c keys 2> /dev/null; }
 keys bootpass1 > $T/keys.out
@@ -280,7 +285,7 @@ keys "$hiddenpw1" > $T/keys.out
 grep -q "^  hidden" $T/keys.out && ! grep -q root $T/keys.out || fail "the hidden view: $(cat $T/keys.out)"
 [ "$(cat $T/state/views)" = 2 ] || fail "views: $(cat $T/state/views)"
 grep -q luks_open_failed $T/asked || fail "the wrong LUKS passphrase of old was accepted"
-[ -b /dev/mapper/scubed3-old ] || fail "the LUKS volume of old is not open (with its new key)"
+[ -b /dev/mapper/testhost-old ] || fail "the LUKS volume of old is not open (with its new key)"
 ok "the key store: the boot passphrase has root, home and old (a new LUKS key, a wrong LUKS passphrase was refused), the hidden passphrase hidden"
 # Configure scubed3 again: a wrong passphrase, then both
 ans partman-scubed3/passphrase wrong bootpass1 "$hiddenpw1"
@@ -293,13 +298,13 @@ ok "Configure scubed3 again: the passphrases are asked again (a wrong one again)
 
 echo "2. init.d"
 sh $T/init.d-scubed3 || fail "init.d"
-R=$T/devices/=dev=mapper=scubed3-root
+R=$T/devices/=dev=mapper=testhost-root
 [ -f $R/partitions ] && [ "$(cat $R/p1/method)" = format ] && [ "$(cat $R/p1/mountpoint)" = / ] ||
 	fail "partman disk: $(ls -R $R)"
-H=$T/devices/=dev=mapper=scubed3-home
+H=$T/devices/=dev=mapper=testhost-home
 [ -f $H/partitions ] && [ "$(cat $H/p1/method)" = format ] && [ ! -f $H/p1/mountpoint ] ||
 	fail "partman disk of home: $(ls -R $H)"
-ok "/dev/mapper/scubed3-root and -home are disks in partman, one partition: format, root mount point /"
+ok "/dev/mapper/testhost-root and -home are disks in partman, one partition: format, root mount point /"
 
 echo "3. check.d"
 sh $T/check > /dev/null && fail "root on scubed3 without /boot is accepted"
@@ -324,8 +329,8 @@ tail -n1 $T/asked | grep -q others_note || fail "no note about /home"
 ok "/ on scubed3 needs /boot (not on scubed3) and the partition root, /home on scubed3 needs / on scubed3, a note"
 
 echo "4. the installation"
-mke2fs -q -F /dev/mapper/scubed3-root || fail "mke2fs"
-mount /dev/mapper/scubed3-root $T/target || fail "mount"
+mke2fs -q -F /dev/mapper/testhost-root || fail "mke2fs"
+mount /dev/mapper/testhost-root $T/target || fail "mount"
 echo "the installed system" > $T/target/marker
 # the packages: 40 MB, written twice (the blocks get live and dead data)
 for r in 1 2; do
@@ -334,16 +339,16 @@ for r in 1 2; do
 	done
 done
 mkdir -p $T/target/etc $T/target/home
-mke2fs -q -F /dev/mapper/scubed3-home || fail "mke2fs home"
-mount /dev/mapper/scubed3-home $T/target/home || fail "mount home"
+mke2fs -q -F /dev/mapper/testhost-home || fail "mke2fs home"
+mount /dev/mapper/testhost-home $T/target/home || fail "mount home"
 echo "the home of the installed system" > $T/target/home/marker
-printf '%s\n' "/dev/mapper/scubed3-root $T/target ext2 rw 0 0" \
-	"/dev/mapper/scubed3-home $T/target/home ext2 rw 0 0" > $T/mounts
+printf '%s\n' "/dev/mapper/testhost-root $T/target ext2 rw 0 0" \
+	"/dev/mapper/testhost-home $T/target/home ext2 rw 0 0" > $T/mounts
 # /etc/fstab as partman-target writes it
-printf '%s\n' "/dev/mapper/scubed3-root /               ext2    errors=remount-ro 0       1" \
-	"/dev/mapper/scubed3-home /home           ext2    defaults        0       2" \
+printf '%s\n' "/dev/mapper/testhost-root /               ext2    errors=remount-ro 0       1" \
+	"/dev/mapper/testhost-home /home           ext2    defaults        0       2" \
 	"UUID=1234 /boot           ext2    defaults        0       2" > $T/target/etc/fstab
-ok "file systems on /dev/mapper/scubed3-root and -home, mounted as the target, 80 MB written"
+ok "file systems on /dev/mapper/testhost-root and -home, mounted as the target, 80 MB written"
 
 echo "5. finish-install"
 sh $T/finish-install > $T/finish.out 2>&1 || fail "finish-install: $(cat $T/finish.out)"
@@ -380,7 +385,7 @@ cp -r $T/target/etc $T/target-etc
 umount $T/target/home; umount $T/target
 
 echo "6. the boot of the installed system"
-for n in root home old; do cryptsetup close scubed3-$n; done
+for n in root home old; do cryptsetup close testhost-$n; done
 for n in root hidden home old; do ctl -c "close $n" > /dev/null; done
 [ -e /dev/mapper/scubed3-check-home ] && fail "a check of a LUKS passphrase is left open"
 ctl -c "paranoia 1" > /dev/null
@@ -405,17 +410,17 @@ sed -e "s|/scripts/functions|$I/scripts/functions|" -e "s|/conf/|$I/conf/|g" \
 	$T/target-etc/initramfs-tools/scripts/local-top/scubed3 > $I/local-top
 printf '%s\nbootpass1\n' "$hiddenpw1" | sh $I/local-top > $T/boot.out 2>&1
 grep -q PANIC $T/boot.out && fail "boot: $(cat $T/boot.out)"
-grep -q "ROOT=/dev/mapper/scubed3-root" $I/conf/param.conf || fail "ROOT: $(cat $T/boot.out)"
-mount /dev/mapper/scubed3-root $T/target || fail "mount of the root file system"
+grep -q "ROOT=/dev/mapper/testhost-root" $I/conf/param.conf || fail "ROOT: $(cat $T/boot.out)"
+mount /dev/mapper/testhost-root $T/target || fail "mount of the root file system"
 grep -q "the installed system" $T/target/marker || fail "the marker"
 grep -q "set up successfully" $T/boot.out || fail "boot: $(cat $T/boot.out)"
-ok "the installed system boots (the hidden passphrase, the boot passphrase): ROOT=/dev/mapper/scubed3-root, the marker is there"
+ok "the installed system boots (the hidden passphrase, the boot passphrase): ROOT=/dev/mapper/testhost-root, the marker is there"
 # the mount of /etc/fstab
-[ -b /dev/mapper/scubed3-home ] || fail "the LUKS volume of home is not open"
-mount /dev/mapper/scubed3-home $T/target/home || fail "mount of home"
+[ -b /dev/mapper/testhost-home ] || fail "the LUKS volume of home is not open"
+mount /dev/mapper/testhost-home $T/target/home || fail "mount of home"
 grep -q "the home of the installed system" $T/target/home/marker || fail "the marker of home"
 ctl -c p | grep -q " blocks in hidden" || fail "hidden is not open"
-[ -b /dev/mapper/scubed3-old ] || fail "the LUKS volume of old is not open"
+[ -b /dev/mapper/testhost-old ] || fail "the LUKS volume of old is not open"
 ok "the initramfs opened home and old (LUKS, the view of root) and hidden, the marker of home is there"
 ctl -c p | grep -q "paranoia level 2 " || fail "level after boot: $(ctl -c p)"
 rm -f $T/target/pkg*; sync

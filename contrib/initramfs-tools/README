@@ -46,14 +46,16 @@ What happens at boot (scripts/local-top/scubed3):
 3. all partitions of the unlocked views are opened (in paranoia level 2
    and 3 ALL partitions must be open: all of them must be in the views that
    are unlocked at boot), and the LUKS volumes of the view of root, with
-   their keys from the key store, as /dev/mapper/scubed3-NAME (other file
+   their keys from the key store, as /dev/mapper/PREFIXNAME (PREFIX is
+   luks_prefix= of /etc/scubed3.conf, the debian-installer makes it
+   HOSTNAME-, default scubed3-; other file
    systems, /home, ..., are mounted from /etc/fstab); the LUKS volumes of
    the hidden views are not opened; the copy of the key store in the
    initramfs is overwritten with random data and removed
 4. the paranoia level is switched (PARANOIA in initramfs.conf, otherwise
    paranoia= in /etc/scubed3.conf, otherwise 2); this is before anything is
    written
-5. root becomes a block device: /dev/mapper/scubed3-root if it has LUKS on
+5. root becomes a block device: /dev/mapper/PREFIXroot if it has LUKS on
    it (otherwise a loop device); ROOT is set to it (root= on the kernel
    command line, for example root=UUID=... as grub writes it, is replaced)
 

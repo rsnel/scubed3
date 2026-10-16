@@ -15,7 +15,9 @@ the same way as software RAID, LVM and encrypted volumes:
 random data (or uses an existing scubed3 store, with its salt), starts the
 daemon, makes a key store with the boot passphrase and shows a menu to
 create and open scubed3 partitions (their keys go into the key store). The
-LUKS volumes on them (/dev/mapper/scubed3-NAME) become disks in the
+LUKS volumes on them (/dev/mapper/HOSTNAME-NAME, with the hostname that was
+asked before partitioning, as LVM names its volumes HOSTNAME--vg-NAME) become
+disks in the
 partitioner, the root file system goes on the partition root. At the end of
 the installation the installed system gets scubed3, its configuration, the
 key store and an initramfs that asks the boot passphrase as for an

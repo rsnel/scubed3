@@ -790,8 +790,12 @@ static int check_paranoia(ctl_priv_t *priv, const char *what) {
 	return 0;
 }
 
-/* the name of the device mapper device of a partition with LUKS on it */
-#define LUKS_NAME	"scubed3-%s"
+/* the name of the device mapper device of a partition with LUKS on it:
+ * the prefix (luks_prefix= in the configuration file, the debian-installer
+ * makes it HOSTNAME-, as LVM names the volumes of HOSTNAME-vg) and the name
+ * of the partition */
+#define LUKS_NAME	"%s%s"
+static char luks_prefix[65] = "scubed3-";
 
 /* does the partition have a LUKS header? (it is not counted as an error if
  * it has not) */
@@ -862,17 +866,18 @@ static ks_entry_t *luks_key(const char *name, int *ambiguous) {
 	return (e && (e->flags&KS_HAS_LUKS))?e:NULL;
 }
 
-/* open the LUKS volume on partition name as /dev/mapper/scubed3-NAME */
+/* open the LUKS volume on partition name as /dev/mapper/PREFIXNAME */
 static int luks_open(ctl_priv_t *priv, const char *name) {
 	int ambiguous;
 	ks_entry_t *e = luks_key(name, &ambiguous);
 
 	if (ambiguous) return 1;
 	if (e) return cryptsetup_with_key(e, "cryptsetup open --key-file=- "
-			"%s/%s " LUKS_NAME, priv->mountpoint, name, name);
+			"%s/%s " LUKS_NAME, priv->mountpoint, name,
+			luks_prefix, name);
 
 	return var_system("cryptsetup open %s/%s " LUKS_NAME,
-			priv->mountpoint, name, name);
+			priv->mountpoint, name, luks_prefix, name);
 }
 
 static int ctl_luksformat(ctl_priv_t *priv, char *argv[]) {
@@ -935,8 +940,9 @@ static int ctl_mke2fs(ctl_priv_t *priv, char *argv[]) {
 		return ret;
 	if (is_luks(priv, argv[0])) {
 		if (luks_open(priv, argv[0])) return 0;
-		var_system("mke2fs -F /dev/mapper/" LUKS_NAME, argv[0]);
-		var_system("cryptsetup close " LUKS_NAME, argv[0]);
+		var_system("mke2fs -F /dev/mapper/" LUKS_NAME, luks_prefix,
+				argv[0]);
+		var_system("cryptsetup close " LUKS_NAME, luks_prefix, argv[0]);
 	} else var_system("mke2fs -F %s/%s", priv->mountpoint, argv[0]);
 	return 0;
 }
@@ -974,9 +980,10 @@ static int ctl_mount(ctl_priv_t *priv, char *argv[]) {
 
 	if (is_luks(priv, argv[0])) {
 		if (luks_open(priv, argv[0])) return 0;
-		if (var_system("mount /dev/mapper/" LUKS_NAME " %s", argv[0],
-					argv[1])) {
-			var_system("cryptsetup close " LUKS_NAME, argv[0]);
+		if (var_system("mount /dev/mapper/" LUKS_NAME " %s",
+					luks_prefix, argv[0], argv[1])) {
+			var_system("cryptsetup close " LUKS_NAME, luks_prefix,
+					argv[0]);
 			return 0;
 		}
 	} else if (var_system("mount -o loop %s/%s %s", priv->mountpoint,
@@ -1079,7 +1086,7 @@ static void umount_close(const char *mountpoint) {
 	var_system("src=$(findmnt -n -o SOURCE %s); umount %s && "
 			"case \"$src\" in /dev/mapper/" LUKS_NAME ") "
 			"cryptsetup close \"$src\";; esac", mountpoint,
-			mountpoint, "*");
+			mountpoint, luks_prefix, "*");
 }
 
 static int ctl_umount(ctl_priv_t *priv, char *argv[]) {
@@ -1818,7 +1825,7 @@ static int ctl_open_all(ctl_priv_t *priv, char *argv[]) {
  * other views are open, their LUKS volumes are not) */
 static int ctl_luksopen_all(ctl_priv_t *priv, char *argv[]) {
 	int v, from = 0, to = ks.no_views, i, n = 0;
-	char dev[64];
+	char dev[128];
 
 	if (argv[0]) {
 		if (!ks_find(&ks, -1, argv[0], &from)) {
@@ -1831,7 +1838,8 @@ static int ctl_luksopen_all(ctl_priv_t *priv, char *argv[]) {
 	for (v = from; v < to; v++) for (i = 0; i < KS_ENTRIES; i++) {
 		ks_entry_t *e = &ks.views[v]->e[i];
 		if (!(e->flags&KS_USED) || !(e->flags&KS_HAS_LUKS)) continue;
-		snprintf(dev, sizeof(dev), "/dev/mapper/" LUKS_NAME, e->name);
+		snprintf(dev, sizeof(dev), "/dev/mapper/" LUKS_NAME,
+				luks_prefix, e->name);
 		if (!access(dev, F_OK)) continue; /* open already */
 		if (do_server_command(priv->s, 0, "info %s", e->name))
 			return -1;
@@ -2027,6 +2035,8 @@ static char *strip(char *str) {
  * salt=TEXT           the salt (whitespace at both ends is ignored)
  * iterations=NUMBER   the number of iterations
  * paranoia=LEVEL      the recommended paranoia level (0..3, default 2)
+ * luks_prefix=TEXT    the start of the names of the LUKS volumes
+ *                     (/dev/mapper/TEXTNAME), default scubed3-
  *
  * values that are given on the command line take precedence; returns 0
  * if the file does not exist and must_exist is 0, 1 if it was read */
@@ -2093,6 +2103,18 @@ static int read_config(const char *path, int must_exist, int salt_set,
 						"must be 0, 1, 2 or 3", path,
 						lineno, value);
 			recommended_paranoia = *value - '0';
+		} else if (!strcmp(key, "luks_prefix")) {
+			const char *c;
+			if (strlen(value) >= sizeof(luks_prefix))
+				FATAL("%s:%d: luks_prefix is too long", path,
+						lineno);
+			for (c = value; *c; c++)
+				if (!isalnum((unsigned char)*c) && *c != '-' &&
+						*c != '_' && *c != '.')
+					FATAL("%s:%d: luks_prefix may only have "
+							"letters, digits, '-', '_' "
+							"and '.'", path, lineno);
+			strcpy(luks_prefix, value);
 		} else FATAL("%s:%d: unknown key \"%s\"", path, lineno, key);
 	}
 

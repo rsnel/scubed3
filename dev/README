@@ -229,7 +229,8 @@ initramfstest.sh DAEMON SCUBED3CTL
 	console shows exactly what cryptroot shows: three times "Please unlock
 	disk base_crypt: ", twice the message of a wrong passphrase, "set up
 	successfully", nothing else; ROOT in param.conf is
-	/dev/mapper/scubed3-root with the file system, the daemon runs as
+	/dev/mapper/myhost-root (luks_prefix=myhost-) with the file system,
+	the daemon runs as
 	@scubed3 (with oom_score_adj -1000, where that can be set), root, home
 	and hidden are open, the LUKS volumes of root and home, not of hidden,
 	level 2, the copy of the key store is gone. A second boot with
@@ -255,7 +256,8 @@ installertest.sh DAEMON SCUBED3CTL
 	unclaimed blocks are lent to root (the size of its file does not
 	change); the views of the key store; Configure scubed3 again: the
 	passphrases are asked again (a wrong one again), no view is lost;
-	init.d makes /dev/mapper/scubed3-root and -home disks in partman
+	init.d makes /dev/mapper/testhost-root and -home (the hostname is
+	testhost) disks in partman
 	(format, root at /); check.d wants /boot (not on scubed3), / on root,
 	and / on scubed3 for /home on scubed3 (then a note); 80 MB is
 	"installed", home is mounted at /home; finish-install copies the

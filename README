@@ -253,8 +253,9 @@ it is mounted):
 				the passphrase of the partition)
 	s3> mke2fs NAME		opens the LUKS volume, makes the filesystem,
 				closes it
-	s3> mount NAME DIR	opens the LUKS volume (as /dev/mapper/scubed3-NAME)
-				and mounts it
+	s3> mount NAME DIR	opens the LUKS volume (as /dev/mapper/scubed3-NAME,
+				see luks_prefix in Key derivation) and mounts
+				it
 	s3> umount NAME|DIR	unmounts it and closes the LUKS volume
 
 mke2fs and mount see from the partition whether it has LUKS on it (it needs
@@ -311,7 +312,7 @@ learns one passphrase sees its view, the other slots look like unused ones.
 
 With the key store unlocked, open, create, luksformat, mke2fs and mount use
 its keys instead of asking passphrases, luksopen opens a LUKS volume (as
-/dev/mapper/scubed3-NAME). The keys of a LUKS volume are random (64 bytes),
+/dev/mapper/PREFIXNAME). The keys of a LUKS volume are random (64 bytes),
 they are given to cryptsetup on a pipe, never in a file. To change the key
 store: keys-create, keys-passphrase-add, keys-passphrase-change [VIEW],
 keys-passphrase-remove [VIEW], keys-add NAME [VIEW] (new random keys, or the
@@ -427,6 +428,10 @@ to which partition). They are read from the configuration file
 	iterations=16777216
 	# the paranoia level that mount, mke2fs and luksformat require
 	paranoia=2
+	# the start of the names of the LUKS volumes, /dev/mapper/myhost-NAME
+	# (default scubed3-; the debian-installer makes it HOSTNAME-, as LVM
+	# names the volume group HOSTNAME-vg)
+	luks_prefix=myhost-
 
 Empty lines and lines starting with # are ignored, whitespace around keys and
 values is ignored, all keys are optional. If the file does not exist, the

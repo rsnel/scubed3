@@ -17,7 +17,8 @@
 #	parts/NAME/	a partition, opened or created by the installer:
 #		view		the view of the key store it is in
 #		luks		it has (or gets) LUKS on it
-#		luks_open	LUKS is open as /dev/mapper/scubed3-NAME
+#		luks_open	LUKS is open as /dev/mapper/HOSTNAME-NAME (the
+#				prefix HOSTNAME- is luks_prefix= in scubed3.conf)
 #		lent		"BLOCKS RESERVED": its size before blocks were
 #				lent to it, the blocks are given back at the
 #				end of the installation (finish-install)
@@ -86,11 +87,42 @@ s3_bases () {
 	done
 }
 
-# is DEVDIR a disk that scubed3 made (a partition of the installer)?
+# the names of the LUKS volumes start with HOSTNAME- (as LVM names the
+# volume group HOSTNAME-vg): luks_prefix= in scubed3.conf, for scubed3ctl;
+# the hostname that was asked before partitioning
+s3_hostname () {
+	local h
+	h=
+	if db_get netcfg/get_hostname 2>/dev/null; then
+		h=$RET
+	fi
+	[ "$h" ] || h=$(hostname 2>/dev/null)
+	h=$(echo "$h" | sed 's/\..*//; s/[^A-Za-z0-9_-]//g' | cut -c1-40)
+	echo "${h:-debian}"
+}
+
+s3_luks_prefix () {
+	if [ -f $S3CONF ] && grep -q '^luks_prefix=' $S3CONF; then
+		sed -n 's/^luks_prefix=//p' $S3CONF | head -n 1
+	else
+		echo scubed3-
+	fi
+}
+
+# the device of the LUKS volume on partition NAME
+s3_luks_dev () {
+	echo /dev/mapper/$(s3_luks_prefix)$1
+}
+
+# is DEVDIR a disk that scubed3 made (the LUKS volume of a partition of the
+# installer)?
 s3_is_ours () {
-	case "$(cat $1/device 2>/dev/null)" in
-	    /dev/mapper/scubed3-*)	return 0 ;;
-	esac
+	local dev p
+	dev=$(cat $1/device 2>/dev/null)
+	for p in $S3STATE/parts/*; do
+		[ -d "$p" ] || continue
+		[ "$dev" = "$(s3_luks_dev ${p##*/})" ] && return 0
+	done
 	return 1
 }
 

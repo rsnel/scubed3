@@ -218,7 +218,7 @@ Type: string
 Description: Name of the scubed3 partition:
  The root file system goes on the partition "root". The name is used for
  the file of the partition, and for its LUKS volume
- (/dev/mapper/scubed3-NAME); it is in the key store. Letters, digits, '.',
+ (/dev/mapper/HOSTNAME-NAME); it is in the key store. Letters, digits, '.',
  '_' and '-' only.
 
 Template: partman-scubed3/bad_name
@@ -439,7 +439,7 @@ Template: partman-scubed3/root_not_root
 Type: error
 Description: The root file system is not on the partition root
  The root file system on scubed3 must be on the partition "root" (its LUKS
- volume /dev/mapper/scubed3-root): the initramfs of the installed system
+ volume /dev/mapper/HOSTNAME-root): the initramfs of the installed system
  boots from it.
 
 Template: partman-scubed3/not_supported

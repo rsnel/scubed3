@@ -1,5 +1,5 @@
 #!/bin/sh
-# the LUKS volumes on the scubed3 partitions (/dev/mapper/scubed3-NAME)
+# the LUKS volumes on the scubed3 partitions (/dev/mapper/HOSTNAME-NAME)
 # become disks in partman, with one partition (a loop label, as the
 # encrypted volumes of partman-crypto); the first time, on a partition that
 # the installer created, it is set up to be formatted with the default file
@@ -81,7 +81,7 @@ default_fs="$RET"
 for p in $S3STATE/parts/*; do
 	[ -f $p/luks_open ] || continue
 	name=${p##*/}
-	device=/dev/mapper/scubed3-$name
+	device=$(s3_luks_dev $name)
 	[ -b $device ] || continue
 	devdir=$(dev_to_devdir $device)
 

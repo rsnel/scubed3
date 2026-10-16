@@ -51,7 +51,9 @@ stable_name () {
 }
 
 root=
-grep -q "^/dev/mapper/scubed3-root /target " /proc/mounts && root=root
+prefix=scubed3-
+grep -q '^luks_prefix=' $STATE/scubed3.conf && prefix=$(sed -n 's/^luks_prefix=//p' $STATE/scubed3.conf | head -n 1)
+grep -q "^/dev/mapper/${prefix}root /target " /proc/mounts && root=root
 
 # 1. scubed3
 if ! apt-install scubed3; then

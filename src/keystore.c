@@ -25,6 +25,7 @@
 #include <libgen.h>
 #include <sys/random.h>
 #include <sys/stat.h>
+#include <sys/file.h>
 #include "verbose.h"
 #include "util.h"
 #include "gcry.h"
@@ -96,13 +97,20 @@ static void ks_encrypt(ks_view_t *v, unsigned char *slot) {
 
 /* write data (KS_SIZE bytes) to path: to a new file next to it, that
  * replaces it (a crash leaves the old or the new store) */
-static int ks_replace(const char *path, const unsigned char *data) {
+/* write data to a new file next to path (its name has the pid: two
+ * processes never write the same file), then replace path with it (create:
+ * only if path does not exist, EEXIST otherwise: link fails if it exists,
+ * also when another process makes it at the same moment); a crash leaves
+ * the old or the new key store */
+static int ks_replace(const char *path, const unsigned char *data,
+		int create) {
 	char *tmp, *dir, *d;
 	int fd, ret = -1;
 	ssize_t n;
 	size_t off = 0;
 
-	if (asprintf(&tmp, "%s.new", path) == -1) FATAL("out of memory");
+	if (asprintf(&tmp, "%s.new.%ld", path, (long)getpid()) == -1)
+		FATAL("out of memory");
 	unlink(tmp);
 	if ((fd = open(tmp, O_WRONLY|O_CREAT|O_EXCL|O_CLOEXEC, 0600)) == -1)
 		goto out;
@@ -115,7 +123,10 @@ static int ks_replace(const char *path, const unsigned char *data) {
 		off += n;
 	}
 	if (fsync(fd) || close(fd)) goto out_unlink;
-	if (rename(tmp, path)) goto out_unlink;
+	if (create) {
+		if (link(tmp, path)) goto out_unlink;
+		unlink(tmp);
+	} else if (rename(tmp, path)) goto out_unlink;
 
 	/* the rename must be on disk too */
 	d = estrdup(path);
@@ -140,42 +151,70 @@ int ks_create(const char *path) {
 	unsigned char *data;
 	int ret;
 
-	if (!access(path, F_OK)) {
-		errno = EEXIST;
-		return -1;
-	}
 	data = ecalloc(1, KS_SIZE);
 	ks_random(data, KS_SIZE);
-	ret = ks_replace(path, data);
+	ret = ks_replace(path, data, 1);
 	free(data);
 
 	return ret;
 }
 
-int ks_read(keystore_t *k) {
-	int fd;
+/* read the key store from fd into buf, 0 or -1 (errno) */
+static int ks_read_fd(int fd, unsigned char *buf) {
 	ssize_t n;
 	size_t off = 0;
 	struct stat st;
 
-	if (k->data) return 0;
-	if ((fd = open(k->path, O_RDONLY|O_CLOEXEC)) == -1) return -1;
-	if (fstat(fd, &st) || st.st_size != KS_SIZE) {
-		close(fd);
+	if (fstat(fd, &st)) return -1;
+	if (st.st_size != KS_SIZE) {
 		errno = EINVAL;
 		return -1;
 	}
-	k->data = ecalloc(1, KS_SIZE);
 	while (off < KS_SIZE) {
-		if ((n = read(fd, k->data + off, KS_SIZE - off)) <= 0) {
+		if ((n = pread(fd, buf + off, KS_SIZE - off, off)) <= 0) {
 			if (n < 0 && errno == EINTR) continue;
 			if (!n) errno = EIO;
-			free(k->data);
-			k->data = NULL;
-			close(fd);
 			return -1;
 		}
 		off += n;
+	}
+
+	return 0;
+}
+
+/* lock the key store against other writers (flock of the file at path, the
+ * file that is there when the lock is taken: a writer that waited for it
+ * may find another file, the key store of the writer before it), the fd,
+ * -1 (errno) */
+static int ks_lock(const char *path) {
+	struct stat a, b;
+	int fd;
+
+	for (;;) {
+		if ((fd = open(path, O_RDONLY|O_CLOEXEC)) == -1) return -1;
+		if (flock(fd, LOCK_EX)) {
+			close(fd);
+			return -1;
+		}
+		if (!fstat(fd, &a) && !stat(path, &b) && a.st_dev == b.st_dev &&
+				a.st_ino == b.st_ino) return fd;
+		close(fd);
+	}
+}
+
+int ks_read(keystore_t *k) {
+	int fd, n;
+
+	if (k->data) return 0;
+	if ((fd = open(k->path, O_RDONLY|O_CLOEXEC)) == -1) return -1;
+	k->data = ecalloc(1, KS_SIZE);
+	if (ks_read_fd(fd, k->data)) {
+		n = errno;
+		free(k->data);
+		k->data = NULL;
+		close(fd);
+		errno = n;
+		return -1;
 	}
 	close(fd);
 
@@ -289,9 +328,26 @@ ks_entry_t *ks_new_entry(keystore_t *k, int view, const char *name) {
 }
 
 int ks_write(keystore_t *k) {
-	unsigned char *data = ecalloc(1, KS_SIZE);
-	int i, j;
+	unsigned char *data, *now;
+	int i, j, fd, n;
 
+	/* another scubed3ctl may have written the key store since we read it
+	 * (a view it added, or changed, is not unlocked here: our write would
+	 * lose it), with the lock nobody writes between the check and our
+	 * write */
+	assert(k->data);
+	if ((fd = ks_lock(k->path)) == -1) return -1;
+	now = ecalloc(1, KS_SIZE);
+	if (ks_read_fd(fd, now)) n = errno;
+	else n = memcmp(now, k->data, KS_SIZE)?ESTALE:0;
+	free(now);
+	if (n) {
+		close(fd);
+		errno = n;
+		return -1;
+	}
+
+	data = ecalloc(1, KS_SIZE);
 	for (i = 0; i < KS_SLOTS; i++) {
 		unsigned char *slot = data + (size_t)i*KS_SLOT;
 		for (j = 0; j < k->no_views; j++)
@@ -299,10 +355,14 @@ int ks_write(keystore_t *k) {
 		if (j < k->no_views) ks_encrypt(k->views[j], slot);
 		else ks_random(slot, KS_SLOT);
 	}
-	if (ks_replace(k->path, data)) {
+	if (ks_replace(k->path, data, 0)) {
+		n = errno;
 		free(data);
+		close(fd);
+		errno = n;
 		return -1;
 	}
+	close(fd);
 	free(k->data);
 	k->data = data;
 

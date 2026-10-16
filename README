@@ -362,6 +362,15 @@ old or the new key store); on an SSD the old data may stay on the flash.
 Keep a backup of the key store (it is random data without its passphrases)
 and of the configuration file.
 
+Two scubed3ctl at the same time: the daemon serves one scubed3ctl at a time
+(a second one waits until the first quits, also while an s3> prompt is
+open). With two daemons (two base devices) and one key store they can run
+at the same time: a write takes a lock (flock) on the key store and checks
+that the file is still the one that was read; if another scubed3ctl wrote
+it meanwhile, the write is refused (it would lose that change: a view that
+is not unlocked here is overwritten with random data), quit, unlock again
+and redo the change. keys-create never replaces an existing key store.
+
 One passphrase that opens everything is convenient, but if you have to give
 it away, everything is revealed: as with the partitions, keep a passphrase
 with a view you can admit, and others for the hidden partitions.

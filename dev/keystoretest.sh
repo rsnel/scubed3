@@ -17,7 +17,8 @@
 # boot: passphrases from a pipe, one answer each), luksopen-all, a new
 # passphrase is never generated (an empty one is no passphrase, two
 # different ones do not match), the slot of a new view is random, -k with
-# the key of keys-derive
+# the key of keys-derive, two scubed3ctl at the same time (a write that
+# would lose the change of the other is refused)
 #
 # usage: keystoretest.sh DAEMON CTL (as root; CRYPTSETUP=path: the
 # cryptsetup to use, default the stand-in dev/fake-cryptsetup, it needs no
@@ -31,6 +32,7 @@ export PATH=$T/bin:$PATH
 K=$T/keys
 cleanup() {
 	cryptsetup close scubed3-root 2> /dev/null
+	$FUSERMOUNT -u $T/mnt2 2> /dev/null
 	$FUSERMOUNT -u $MNT 2> /dev/null; wait; rm -rf $T
 }
 fail() { echo "KEYSTORETEST FAILED: $1"; [ -f $T/out ] && cat $T/out; cleanup; exit 1; }
@@ -269,6 +271,34 @@ grep -q "view 2 is added" $T/out || fail "-k keys-passphrase-add: $(cat $T/out)"
 printf 'T\n' | ctl -K $T/k1 -c unlock > $T/out
 grep -q "view 1: 0 entries" $T/out || fail "the passphrase of a view added with -k: $(cat $T/out)"
 ok "keys-derive gives the key of a passphrase, -k unlocks and adds views with it (not with a passphrase or a wrong key)"
+
+echo "12. two scubed3ctl at the same time"
+# a daemon takes one scubed3ctl at a time (B waits until A is done); with
+# two daemons (two base devices, one key store) they run at the same time:
+# A reads the key store (unlock-all), waits for its new passphrase; B adds
+# a view meanwhile: the write of A would lose it, it is refused
+head -c $((40<<16)) /dev/urandom > $T/base2
+mkdir -p $T/mnt2
+$D -b $T/base2 -m 12 -M 16 -a $T/control2 -f $T/mnt2 > $T/log2 2>&1 &
+until [ -S $T/control2 ]; do sleep 0.2; done
+{ printf 'S\n\n'; sleep 4; printf 'U\nU\n'; } | ctl -K $T/k1 -c unlock-all -c keys-passphrase-add > $T/outA 2>&1 &
+pa=$!
+sleep 2
+printf 'S\n\nV\nV\n' | ctl -a $T/control2 -K $T/k1 -c unlock-all -c keys-passphrase-add > $T/outB 2>&1
+wait $pa
+$FUSERMOUNT -u $T/mnt2
+grep -q "the key store is written" $T/outB || fail "B: $(cat $T/outB)"
+grep -q "is NOT written: another scubed3ctl changed it" $T/outA || fail "A: $(cat $T/outA)"
+printf 'V\n' | ctl -K $T/k1 -c unlock > $T/out
+grep -q "view 1: 0 entries" $T/out || fail "the view of B is lost: $(cat $T/out)"
+printf 'U\n' | ctl -K $T/k1 -c unlock > $T/out
+grep -q "no view for this passphrase" $T/out || fail "the view of A is written: $(cat $T/out)"
+ls $T | grep -q '\.new' && fail "a temporary file is left: $(ls $T)"
+ok "a write after another scubed3ctl wrote the key store is refused (it would lose that change)"
+ctl -K $T/k1 -c keys-create > $T/out
+grep -q "unable to create the key store" $T/out || fail "keys-create over a key store: $(cat $T/out)"
+printf 'V\n' | ctl -K $T/k1 -c unlock | grep -q "view 1: 0 entries" || fail "keys-create changed the key store"
+ok "keys-create does not replace an existing key store"
 
 cleanup
 echo "KEYSTORETEST OK"

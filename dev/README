@@ -362,7 +362,9 @@ keystoretest.sh DAEMON SCUBED3CTL
 	its slot is random (at least 50 of the 64 slots, at most 18 times the
 	same), keys shows it; keys-derive gives the key of a passphrase, -k
 	unlocks and adds views with it (not with a passphrase or a wrong
-	key). Uses fake-cryptsetup (CRYPTSETUP=path
+	key); two scubed3ctl on two daemons with one key store: a write after
+	the other wrote it is refused, keys-create does not replace an
+	existing key store. Uses fake-cryptsetup (CRYPTSETUP=path
 	for another cryptsetup).
 
 entropytest.sh DAEMON SCUBED3CTL

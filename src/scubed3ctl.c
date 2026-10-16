@@ -1236,8 +1236,13 @@ static int ks_commit(void) {
 		return 0;
 	}
 	if (ks_write(&ks)) {
-		printf("unable to write the key store %s: %s\n", ks.path,
-				strerror(errno));
+		if (errno == ESTALE) printf("the key store %s is NOT "
+				"written: another scubed3ctl changed it\nafter it "
+				"was read here (this write would lose that "
+				"change); quit,\nunlock again and redo the "
+				"change\n", ks.path);
+		else printf("unable to write the key store %s: %s\n",
+				ks.path, strerror(errno));
 		exit_status = EXIT_FAILURE;
 		return 0;
 	}

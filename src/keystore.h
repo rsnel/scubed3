@@ -94,7 +94,10 @@ int ks_conflict(keystore_t*, int view, const char*);
 ks_entry_t *ks_new_entry(keystore_t*, int view, const char*);
 
 /* write the key store again: the unlocked views with new IVs, all other
- * slots new random data (the views that are not unlocked are lost) */
+ * slots new random data (the views that are not unlocked are lost); it is
+ * locked (flock) while it is checked and written, -1 with errno ESTALE if
+ * another process wrote it after it was read here (nothing is written: our
+ * views do not have its change) */
 int ks_write(keystore_t*);
 
 void ks_random(void*, size_t);

@@ -282,10 +282,12 @@ ans partman-scubed3/size 60M 20M 20M
 ans partman-scubed3/luks true false true
 ans partman-scubed3/view boot hidden boot
 # (the hidden passphrase of the key store: first empty, then twice a
-# different one; root gets a passphrase, hidden and home random keys; the
-# LUKS volume of root a passphrase, home none: home is formatted first)
-ans partman-scubed3/passphrase bootpass1 oldpass1 wrongluks oldluks1 rootpass1 "" hiddenpw1 hiddenpw1 "" "" "" luksroot1
-ans partman-scubed3/passphrase-again bootpass1 rootpass1 "" hiddenpwX hiddenpw1 "" "" "" luksroot1
+# different one; root gets a passphrase and its LUKS volume one (first a
+# passphrase of 64 characters, too long), hidden (no LUKS) and home random
+# keys)
+long=$(printf '%064d' 0)
+ans partman-scubed3/passphrase bootpass1 oldpass1 wrongluks oldluks1 rootpass1 $long luksroot1 "" hiddenpw1 hiddenpw1 "" "" ""
+ans partman-scubed3/passphrase-again bootpass1 rootpass1 $long luksroot1 "" hiddenpwX hiddenpw1 "" "" ""
 ans partman-scubed3/level 2
 ans partman-scubed3/boot_level 2
 sh $T/do_option > $T/do_option.out 2>&1 || fail "do_option: $(cat $T/do_option.out)"
@@ -337,8 +339,8 @@ ok "LUKS on root and home (open as /dev/mapper/testhost-NAME), not on hidden"
 K=$T/state/scubed3.keys
 keys() { printf '%s\n' "$@" "" | $C -q -YYY -C $T/state/scubed3.conf -K $K -c unlock-all -c keys 2> /dev/null; }
 keys bootpass1 > $T/keys.out
-grep -q "^  root \[LUKS\]" $T/keys.out && grep -q "^  home \[LUKS\]" $T/keys.out &&
-	grep -q "^  old \[LUKS\]" $T/keys.out &&
+grep -q "^  root \[LUKS, passphrase\]" $T/keys.out && grep -q "^  home \[LUKS\]" $T/keys.out &&
+	grep -q "^  old \[LUKS, passphrase\]" $T/keys.out &&
 	! grep -q hidden $T/keys.out || fail "the view of the boot passphrase: $(cat $T/keys.out)"
 keys "$hiddenpw1" > $T/keys.out
 grep -q "^  hidden" $T/keys.out && ! grep -q root $T/keys.out || fail "the hidden view: $(cat $T/keys.out)"
@@ -349,7 +351,7 @@ ok "the key store: the boot passphrase has root, home and old (a new LUKS key, a
 # Configure scubed3 again: a wrong passphrase, then both
 ans partman-scubed3/passphrase wrong bootpass1 "$hiddenpw1"
 ans partman-scubed3/mainmenu finish
-: > $T/asked
+cp $T/asked $T/asked.first; : > $T/asked
 : > $T/ctl.calls
 sh $T/do_option > $T/do_option.out 2>&1 || fail "do_option again: $(cat $T/do_option.out)"
 [ "$(grep -c -- '-c keys-derive' $T/ctl.calls)" = 3 ] || fail "keys-derive again: $(grep -- keys-derive $T/ctl.calls)"
@@ -492,17 +494,19 @@ after=$(info root pending_removals)
 [ "$after" = 0 ] || [ "$after" -lt "$pending" ] ||
 	fail "the removals are not drained ($pending -> $after)"
 ok "level 2 after the boot, writes drain the removals ($pending -> $after pending)"
-# the passphrases of root: its LUKS volume has the passphrase as an extra
-# key (home has none), root opens with its passphrase without the key store
+# the passphrases of root: its LUKS volume has the passphrase as its one
+# key, home and old one key too (random, the passphrase of old); root opens
+# with its passphrase without the key store
 lh() { dd if=$MNT/$1 bs=1 skip=8 count=512 2> /dev/null | tr -d '\0' | fold -w 64; }
-lh root | grep -qx "$(printf luksroot1 | sha256sum | cut -c1-64)" || fail "the LUKS passphrase of root"
-[ "$(lh root | grep -c .)" = 2 ] && [ "$(lh home | grep -c .)" = 1 ] ||
-	fail "LUKS keys: root $(lh root | grep -c .), home $(lh home | grep -c .)"
+[ "$(lh root)" = "$(printf luksroot1 | sha256sum | cut -c1-64)" ] || fail "the LUKS key of root is not its passphrase"
+[ "$(lh old)" = "$(printf oldluks1 | sha256sum | cut -c1-64)" ] || fail "the LUKS volume of old has another key"
+[ "$(lh home | grep -c .)" = 1 ] || fail "LUKS keys of home: $(lh home | grep -c .)"
+grep -q luks_passphrase_long $T/asked.first || fail "a LUKS passphrase of 64 characters is accepted"
 umount $T/target/home; umount $T/target
 cryptsetup close testhost-root
 ctl -c "close root" > /dev/null
 printf 'rootpass1\n' | ctl -c "open root" > /dev/null
 [ "$(info root no_macroblocks)" = 20 ] || fail "root does not open with its passphrase"
-ok "root opens with its passphrase (without the key store), its LUKS volume with its passphrase too; home has only its random LUKS key"
+ok "root opens with its passphrase (without the key store), its LUKS volume has its passphrase as its one key (64 characters refused); home a random key, old keeps its passphrase"
 cleanup
 echo "INSTALLERTEST OK"

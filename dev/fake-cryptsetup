@@ -4,17 +4,19 @@
 #
 # luksFormat writes a LUKS signature and the SHA-256 of the key (8 key
 # slots), open checks the key and maps the payload (after 1 MiB) with a
-# loop device as /dev/mapper/NAME (a device node), luksAddKey adds a key
+# loop device as /dev/mapper/NAME (a device node; --test-passphrase: only
+# the check), luksAddKey adds a key
 # (after the existing one is given), close removes the mapping, isLuks looks
 # at the signature; keys come from --key-file (- is stdin) or are typed
 # (one line); -q: luksFormat does not ask for confirmation
 #
 # usage: put it in PATH as cryptsetup (see lukstest.sh, keystoretest.sh)
-q=; keyfile=
+q=; keyfile=; test=
 args=
 while [ $# -gt 0 ]; do
 	case $1 in
 	-q|--batch-mode) q=1;;
+	--test-passphrase) test=1;;
 	--type) shift;;
 	--type=*) ;;
 	--key-file) shift; keyfile=$1;;
@@ -61,6 +63,7 @@ luksAddKey)
 open)
 	h=$(keyhash "Enter passphrase for $2: ")
 	hashes "$2" | grep -qx "$h" || { echo "No key available with this passphrase." >&2; exit 2; }
+	[ "$test" ] && exit 0
 	dev=$(losetup -f --show -o 1048576 "$2") || exit 1
 	mkdir -p /dev/mapper; n=$(basename $dev); mm=$(cat /sys/block/$n/dev)
 	mknod /dev/mapper/$3 b ${mm%:*} ${mm#*:}; echo $dev > /dev/mapper/.$3;;

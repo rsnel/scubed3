@@ -312,8 +312,10 @@ learns one passphrase sees its view, the other slots look like unused ones.
 
 With the key store unlocked, open, create, luksformat, mke2fs and mount use
 its keys instead of asking passphrases, luksopen opens a LUKS volume (as
-/dev/mapper/PREFIXNAME). The keys of a LUKS volume are random (64 bytes),
-they are given to cryptsetup on a pipe, never in a file. To change the key
+/dev/mapper/PREFIXNAME). A LUKS volume has ONE key: a random one (64
+bytes), or a passphrase (at most 63 characters, keys-luks-passphrase; then
+it also opens without the key store); it is given to cryptsetup on a pipe,
+never in a file. To change the key
 store: keys-create, keys-passphrase-add, keys-passphrase-change [VIEW],
 keys-passphrase-remove [VIEW], keys-add-passphrase NAME [VIEW] (as keys-add,
 but the partition gets the key of a passphrase, asked twice, so that it
@@ -321,17 +323,16 @@ also opens without the key store; empty: a random key), keys-add NAME
 [VIEW] (new random keys, or the
 keys of NAME in another unlocked view: the same partition in more views),
 keys-import NAME [VIEW] (a partition with its own passphrase; if it is open
-and has LUKS on it, the LUKS volume gets a new key, a passphrase of the LUKS
-volume is asked), keys-copy NAME1 NAME2 [VIEW] (NAME2 gets the keys of
+and has LUKS on it, the passphrase of the LUKS volume is asked, checked and
+kept in the key store: the volume keeps its one key), keys-luks-passphrase
+NAME [VIEW] (the LUKS key of NAME becomes a passphrase, asked twice; empty:
+a new random key; before luksformat, a volume that exists keeps its key),
+keys-copy NAME1 NAME2 [VIEW] (NAME2 gets the keys of
 NAME1: the same partition under another name, for example root for the
 initramfs; keys-remove NAME1 removes the old name), keys-remove NAME
 [VIEW]. More commands at once: scubed3ctl -c unlock-all -c open-all (the
 views stay unlocked between them).
 
-	s3> luksaddkey NAME	a passphrase for the LUKS volume of NAME, next
-				to its key in the key store (cryptsetup gets
-				the key on a pipe, the passphrase in a memory
-				file): it opens also without the key store
 	s3> luksstatus [NAME]	of every open partition (or NAME): its LUKS
 				header (LUKS1, LUKS2), its LUKS key in an
 				unlocked view, the loop device on its file,
@@ -387,8 +388,8 @@ Killing scubed3ctl (Ctrl-C, kill, also kill -9) does no harm: what it has
 asked the daemon is done or not (the daemon finishes a command also when
 scubed3ctl is gone), the key store is written to a new file that replaces
 the old one at once (killed before: the old key store stays; the new file
-is removed, after kill -9 by the next write), the key files of keys-import
-are in memory (memfd), not in a file, and a terminal gets its echo back if
+is removed, after kill -9 by the next write), no key is ever in a file
+(cryptsetup gets keys on a pipe), and a terminal gets its echo back if
 it is killed at a passphrase prompt (not with kill -9: then type reset).
 What it did before is done: keys-add writes the key store before create,
 so a kill between them leaves a key for a partition that does not exist

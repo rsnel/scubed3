@@ -236,14 +236,20 @@ ctl -c "close root" > /dev/null
 run "-c 'create lk'" lpw lpw
 ctl -c "resize lk 20" > /dev/null
 printf 'lukspw' | cryptsetup -q luksFormat --key-file=- $MNT/lk || fail "luksFormat lk"
+run "-c unlock -c 'keys-import lk 1'" A2 lpw wrongpw yes
+grep -q 'this passphrase does not open the LUKS volume on "lk"' $T/out || fail "keys-import with a wrong LUKS passphrase: $(cat $T/out)"
+run "-c unlock -c 'keys-remove lk 1'" A2 yes
 run "-c unlock -c 'keys-import lk 1'" A2 lpw lukspw yes
-grep -q 'the LUKS volume on "lk" has a new key' $T/out || fail "keys-import with LUKS: $(cat $T/out)"
+grep -q 'the passphrase of the LUKS volume on "lk" is in the key store' $T/out || fail "keys-import with LUKS: $(cat $T/out)"
+lh() { dd if=$MNT/$1 bs=1 skip=8 count=512 2> /dev/null | tr -d '\0' | fold -w 64 | grep -c .; }
+[ "$(lh lk)" = 1 ] || fail "the LUKS volume of lk has $(lh lk) keys"
 ctl -c "close lk" > /dev/null
-run "-c unlock -c 'open lk' -c 'luksopen lk'" A2
-[ -b /dev/mapper/scubed3-lk ] || fail "luksopen lk with the imported key: $(cat $T/out)"
+run "-c unlock -c 'open lk' -c 'luksopen lk' -c keys" A2
+[ -b /dev/mapper/scubed3-lk ] || fail "luksopen lk with the imported passphrase: $(cat $T/out)"
+grep -q "^  lk \[LUKS, passphrase\]" $T/out || fail "keys does not show the LUKS passphrase of lk: $(cat $T/out)"
 cryptsetup close scubed3-lk
 ctl -c "close lk" > /dev/null
-ok "keys-import of an open partition with LUKS: the LUKS passphrase is asked, the new LUKS key opens it"
+ok "keys-import of an open partition with LUKS: its passphrase is checked and goes into the key store (one key, nothing is added)"
 cp $K $T/keys.before
 run "-c unlock-all -c keys-passphrase-add" A2 "" "" ""
 grep -q "^no passphrase" $T/out || fail "an empty new passphrase: $(cat $T/out)"
@@ -361,7 +367,7 @@ rm -f $T/k1.new.$$
 ls /run | grep -q scubed3ctl- && fail "a key file is in /run"
 ok "a temporary file of a killed write is removed by the next write, keys-import leaves no key file"
 
-echo "14. keys-add-passphrase, luksaddkey"
+echo "14. keys-add-passphrase, keys-luks-passphrase"
 printf 'S\n\npp3pass\npp3pass\n' | ctl -K $T/k1 -c unlock-all -c "keys-add-passphrase p3 1" -c "create p3" -c "resize p3 10" > $T/out
 grep -q '"p3" has the key of its passphrase' $T/out && [ -e $MNT/p3 ] || fail "keys-add-passphrase p3: $(cat $T/out)"
 ctl -c "close p3" > /dev/null
@@ -372,18 +378,27 @@ grep -q '"p4" has new random keys' $T/out || fail "keys-add-passphrase with an e
 printf 'S\n\nxx\nyy\n' | ctl -K $T/k1 -c unlock-all -c "keys-add-passphrase p5 1" > $T/out
 grep -q "passphrases do not match" $T/out && ! grep -q '"p5"' $T/out || fail "two different passphrases: $(cat $T/out)"
 ok "keys-add-passphrase: the partition opens with its passphrase without the key store; empty: a random key"
-lh() { dd if=$MNT/$1 bs=1 skip=8 count=512 2> /dev/null | tr -d '\0' | fold -w 64 | grep -c .; }
-printf 'S\n\n' | ctl -K $T/k1 -c unlock-all -c "luksformat p3" > /dev/null
-printf 'S\n\nlp3pass\nlp3pass\n' | ctl -K $T/k1 -c unlock-all -c "luksaddkey p3" > $T/out
-grep -q "opens with the new passphrase too" $T/out && [ "$(lh p3)" = 2 ] || fail "luksaddkey p3: $(cat $T/out)"
-printf 'S\n\n\n\n' | ctl -K $T/k1 -c unlock-all -c "luksaddkey p3" > $T/out
-grep -q "no passphrase is added" $T/out && [ "$(lh p3)" = 2 ] || fail "luksaddkey with an empty passphrase: $(cat $T/out)"
+# the LUKS volume of p3 gets a passphrase (its only key), p4 a new random
+# key (empty); too long (64) is refused; a volume that exists keeps its key
+printf 'S\n\nlp3pass\nlp3pass\n' | ctl -K $T/k1 -c unlock-all -c "keys-luks-passphrase p3 1" -c "luksformat p3" -c keys > $T/out
+grep -q 'the LUKS volume of "p3" gets this passphrase' $T/out && grep -q "^  p3 \[LUKS, passphrase\]" $T/out ||
+	fail "keys-luks-passphrase p3: $(cat $T/out)"
+[ "$(lh p3)" = 1 ] || fail "the LUKS volume of p3 has $(lh p3) keys"
+lh1() { dd if=$MNT/$1 bs=1 skip=8 count=64 2> /dev/null; }
+[ "$(lh1 p3)" = "$(printf lp3pass | sha256sum | cut -c1-64)" ] || fail "the key of the LUKS volume of p3 is not its passphrase"
 printf 'lp3pass' | cryptsetup open --key-file=- $MNT/p3 lp3 && cryptsetup close lp3 || fail "the LUKS passphrase does not open p3"
 printf 'S\n\n' | ctl -K $T/k1 -c unlock-all -c "luksopen p3" > /dev/null
-[ -b /dev/mapper/scubed3-p3 ] || fail "the LUKS key of the key store does not open p3 after luksaddkey"
+[ -b /dev/mapper/scubed3-p3 ] || fail "the key store does not open the LUKS volume of p3"
 cryptsetup close scubed3-p3
+printf 'S\n\nother\nother\n' | ctl -K $T/k1 -c unlock-all -c "keys-luks-passphrase p3 1" > $T/out
+grep -q 'has a LUKS volume already, it keeps its key' $T/out || fail "keys-luks-passphrase of an existing volume: $(cat $T/out)"
+long=$(printf '%064d' 0)
+printf 'S\n\n%s\n%s\n' $long $long | ctl -K $T/k1 -c unlock-all -c "keys-luks-passphrase p4 1" > $T/out
+grep -q 'too long' $T/out || fail "a LUKS passphrase of 64 characters: $(cat $T/out)"
+printf 'S\n\n\n\n' | ctl -K $T/k1 -c unlock-all -c "keys-luks-passphrase p4 1" -c keys > $T/out
+grep -q 'gets a new random key' $T/out && grep -q "^  p4 \[LUKS\]$" $T/out || fail "keys-luks-passphrase empty: $(cat $T/out)"
 ctl -c "close p3" > /dev/null
-ok "luksaddkey: a passphrase next to the key of the key store (both open it); empty: nothing is added"
+ok "keys-luks-passphrase: the passphrase is the one key of the LUKS volume (it and the key store open it); empty: a random key; not for a volume that exists"
 
 cleanup
 echo "KEYSTORETEST OK"

@@ -582,7 +582,6 @@ static int ctl_help(ctl_priv_t *priv, char *argv[]) {
 	printf("resize NAME MACROBLOCKS\n");
 	printf("luksformat NAME\n");
 	printf("luksopen NAME\n");
-	printf("luksaddkey NAME   (a passphrase for the LUKS volume, next to its key)\n");
 	printf("luksstatus [NAME] (LUKS header, key store, loop device, /dev/mapper, mount)\n");
 	printf("\nKey store (%s):\n\n", ks.path);
 	printf("keys-setup        (guided: creates, unlocks, adds passphrases and partitions)\n");
@@ -599,6 +598,7 @@ static int ctl_help(ctl_priv_t *priv, char *argv[]) {
 	printf("keys-passphrase-remove [VIEW]\n");
 	printf("keys-add NAME [VIEW]\n");
 	printf("keys-add-passphrase NAME [VIEW] (the key of a passphrase, not a random key)\n");
+	printf("keys-luks-passphrase NAME [VIEW] (the LUKS key is a passphrase, before luksformat)\n");
 	printf("keys-copy NAME1 NAME2 [VIEW] (NAME2 gets the keys of NAME1)\n");
 	printf("keys-import NAME [VIEW]\n");
 	printf("keys-remove NAME [VIEW]\n");
@@ -891,6 +891,16 @@ static int check_unmounted(ctl_priv_t *priv, const char *name) {
  * and mount, umount closes it */
 /* run a cryptsetup command with the key file of the LUKS volume of e on its
  * standard input (--key-file=-), the key is never written to a file */
+/* the key of the LUKS volume of e becomes a passphrase (len at most
+ * KS_LUKS_PASS_MAX) */
+static void ks_set_luks_passphrase(ks_entry_t *e, const char *pw, size_t len) {
+	assert(len > 0 && len <= KS_LUKS_PASS_MAX);
+	memset(e->luks, 0, KS_LUKS);
+	e->luks[0] = len;
+	memcpy(e->luks + 1, pw, len);
+	e->flags |= KS_HAS_LUKS|KS_LUKS_PASS;
+}
+
 static int cryptsetup_with_key(ks_entry_t *e, const char *format, ...) {
 	char *cmd;
 	va_list ap;
@@ -904,7 +914,9 @@ static int cryptsetup_with_key(ks_entry_t *e, const char *format, ...) {
 
 	if (!(fp = popen(cmd, "w"))) FATAL("popen: %s", strerror(errno));
 	free(cmd);
-	if (fwrite(e->luks, KS_LUKS, 1, fp) != 1)
+	/* a passphrase (luks[0] is its length) or the random key */
+	if ((e->flags&KS_LUKS_PASS)?fwrite(e->luks + 1, e->luks[0], 1, fp) != 1:
+			fwrite(e->luks, KS_LUKS, 1, fp) != 1)
 		WARNING("writing the key to cryptsetup: %s", strerror(errno));
 	if ((ret = pclose(fp))) exit_status = EXIT_FAILURE;
 
@@ -1033,7 +1045,9 @@ static void luks_status(ctl_priv_t *priv, const char *name) {
 	else if (luks) printf("LUKS header (version %d)", version);
 	else printf("no LUKS header");
 	if (ks.data && (e = ks_find(&ks, -1, name, &v))) {
-		if (e->flags&KS_HAS_LUKS) printf(", its LUKS key is in view "
+		if (e->flags&KS_LUKS_PASS) printf(", its LUKS passphrase is in "
+				"view %d of the key store", v + 1);
+		else if (e->flags&KS_HAS_LUKS) printf(", its LUKS key is in view "
 				"%d of the key store", v + 1);
 		else printf(", in view %d of the key store (no LUKS key)",
 				v + 1);
@@ -1133,64 +1147,6 @@ static int ctl_luksformat(ctl_priv_t *priv, char *argv[]) {
 
 /* open the LUKS volume of a partition (for a boot: no filesystem is
  * mounted, nothing is written) */
-static void ks_wipe_file(int fd, size_t len);
-
-/* a passphrase is added to the LUKS volume of a partition (asked twice;
- * empty: nothing is added), cryptsetup gets the key from the key store on
- * a pipe and the new passphrase in a memory file (/dev/fd/N, memfd): the
- * volume opens with it also without the key store */
-static int ctl_luksaddkey(ctl_priv_t *priv, char *argv[]) {
-	int fd, ambiguous;
-	ks_entry_t *e;
-	char *pw, path[32];
-	size_t len;
-
-	if (do_server_command(priv->s, 0, "info %s", argv[0])) return -1;
-	if (result.status) {
-		printf("%s\n", result.argv[0]);
-		exit_status = EXIT_FAILURE;
-		return 0;
-	}
-	if (!is_luks(priv, argv[0])) {
-		printf("partition \"%s\" has no LUKS header\n", argv[0]);
-		exit_status = EXIT_FAILURE;
-		return 0;
-	}
-	if (!(e = luks_key(argv[0], &ambiguous))) {
-		if (!ambiguous) printf("the LUKS key of \"%s\" is not in an "
-				"unlocked view (cryptsetup luksAddKey asks "
-				"an existing passphrase)\n", argv[0]);
-		exit_status = EXIT_FAILURE;
-		return 0;
-	}
-	if (!(pw = ask_passphrase("New passphrase of the LUKS volume (empty: "
-					"none): ", 1, &len))) return 0;
-	if (!len) {
-		free_passphrase(pw, len);
-		printf("no passphrase is added to the LUKS volume on \"%s\"\n",
-				argv[0]);
-		return 0;
-	}
-	if ((fd = memfd_create("scubed3ctl-pass", 0)) == -1 ||
-			write(fd, pw, len) != (ssize_t)len) {
-		WARNING("unable to make a key file in memory: %s",
-				strerror(errno));
-		free_passphrase(pw, len);
-		if (fd != -1) ks_wipe_file(fd, len);
-		exit_status = EXIT_FAILURE;
-		return 0;
-	}
-	snprintf(path, sizeof(path), "/dev/fd/%d", fd);
-	if (!cryptsetup_with_key(e, "cryptsetup luksAddKey --key-file=- "
-				"%s/%s %s", priv->mountpoint, argv[0], path))
-		printf("the LUKS volume on \"%s\" opens with the new "
-				"passphrase too\n", argv[0]);
-	free_passphrase(pw, len);
-	ks_wipe_file(fd, len);
-
-	return 0;
-}
-
 static int ctl_luksopen(ctl_priv_t *priv, char *argv[]) {
 	if (do_server_command(priv->s, 0, "info %s", argv[0])) return -1;
 	if (result.status) {
@@ -1644,6 +1600,7 @@ static void ks_list(int v) {
 		ks_entry_t *e = &ks.views[v]->e[i];
 		if (!(e->flags&KS_USED)) continue;
 		printf("  %s%s", e->name,
+				(e->flags&KS_LUKS_PASS)?" [LUKS, passphrase]":
 				(e->flags&KS_HAS_LUKS)?" [LUKS]":"");
 		if ((other = ks_conflict(&ks, v, e->name)) >= 0)
 			printf(" (other keys in view %d: lock one of them to "
@@ -1828,6 +1785,63 @@ static int ctl_keys_add(ctl_priv_t *priv, char *argv[]) {
 	return 0;
 }
 
+/* the key of the LUKS volume of NAME becomes a passphrase (asked twice;
+ * empty: a new random key): luksformat gives it to cryptsetup, the volume
+ * has one key, it opens also without the key store; only before the
+ * volume exists (a partition that is open with a LUKS header keeps its
+ * key: keys-import it); the copies of NAME in other unlocked views (the
+ * same partition) get it too */
+static int ctl_keys_luks_passphrase(ctl_priv_t *priv, char *argv[]) {
+	ks_entry_t *e, *o;
+	char *pw;
+	size_t len;
+	int view, v, i;
+
+	if ((view = ks_view_arg(argv[1])) < 0) return 0;
+	if (!(e = ks_find(&ks, view, argv[0], NULL))) {
+		printf("\"%s\" is not in view %d\n", argv[0], view + 1);
+		exit_status = EXIT_FAILURE;
+		return 0;
+	}
+	if (do_server_command(priv->s, 0, "info %s", argv[0])) return -1;
+	if (!result.status && is_luks(priv, argv[0])) {
+		printf("partition \"%s\" has a LUKS volume already, it keeps "
+				"its key\n", argv[0]);
+		exit_status = EXIT_FAILURE;
+		return 0;
+	}
+	if (!(pw = ask_passphrase("Passphrase of the LUKS volume (empty: a "
+					"random key): ", 1, &len))) return 0;
+	if (len > KS_LUKS_PASS_MAX) {
+		free_passphrase(pw, len);
+		printf("the passphrase is too long (at most %d characters in "
+				"the key store)\n", KS_LUKS_PASS_MAX);
+		exit_status = EXIT_FAILURE;
+		return 0;
+	}
+	if (len) ks_set_luks_passphrase(e, pw, len);
+	else {
+		e->flags &= ~KS_LUKS_PASS;
+		e->flags |= KS_HAS_LUKS;
+		ks_random(e->luks, KS_LUKS);
+	}
+	for (v = 0; v < ks.no_views; v++) for (i = 0; i < KS_ENTRIES; i++) {
+		o = &ks.views[v]->e[i];
+		if (o == e || !(o->flags&KS_USED) || strcmp(o->name, e->name) ||
+				memcmp(o->key, e->key, KS_KEY)) continue;
+		o->flags = e->flags;
+		memcpy(o->luks, e->luks, KS_LUKS);
+	}
+	free_passphrase(pw, len);
+	if (len) printf("the LUKS volume of \"%s\" gets this passphrase "
+			"(luksformat it)\n", argv[0]);
+	else printf("the LUKS volume of \"%s\" gets a new random key "
+			"(luksformat it)\n", argv[0]);
+	ks_commit();
+
+	return 0;
+}
+
 /* as keys-add, but the partition gets the key of a passphrase (it is asked
  * twice; empty: a random key, as keys-add): it can also be opened without
  * the key store, with the passphrase */
@@ -1897,30 +1911,14 @@ static int ctl_keys_copy(ctl_priv_t *priv, char *argv[]) {
 	return 0;
 }
 
-/* overwrite the key file path (fd, len bytes) with zeroes, remove it */
-static void ks_wipe_file(int fd, size_t len) {
-	char zero[256] = { };
-	size_t n;
-
-	if (fd == -1) return;
-	if (lseek(fd, 0, SEEK_SET) == 0) {
-		while (len) {
-			n = len < sizeof(zero)?len:sizeof(zero);
-			if (write(fd, zero, n) != (ssize_t)n) break;
-			len -= n;
-		}
-	}
-	close(fd);
-}
-
 /* an existing partition: its key from its passphrase; if it is open and
- * has LUKS on it, a new key of the LUKS volume is added to it (with a
- * passphrase of the LUKS volume, it is asked) */
+ * has LUKS on it, the passphrase of its LUKS volume is asked, it goes into
+ * the key store (the volume keeps its one key) */
 static int ks_import(ctl_priv_t *priv, int view, const char *name) {
 	ks_entry_t *e;
-	char *pw, tmp[32], old[32];
+	char *pw;
 	size_t len, old_len = 0;
-	int fd, old_fd = -1, other;
+	int other;
 	char *argv[] = { (char*)name }, *old_pw = NULL;
 
 	if (!ks_valid_name(argv[0])) return 0;
@@ -1939,39 +1937,36 @@ static int ks_import(ctl_priv_t *priv, int view, const char *name) {
 	derive_key(pw, len, "", e->key);
 	free_passphrase(pw, len);
 
-	/* the LUKS volume gets a new key; the new key and the existing
-	 * passphrase (asked here, so that all input comes from the same
-	 * place, also from a pipe) are in memory files (memfd_create, given
-	 * to cryptsetup as /dev/fd/N): they are wiped afterwards, and they
-	 * vanish with the processes, also when scubed3ctl is killed */
+	/* the LUKS volume keeps its one key: its passphrase (asked here, so
+	 * that all input comes from the same place, also from a pipe) goes
+	 * into the key store, if it opens the volume */
 	if (!do_server_command(priv->s, 0, "info %s", argv[0]) &&
 			!result.status && is_luks(priv, argv[0])) {
-		ks_random(e->luks, KS_LUKS);
-		fd = -1;
 		if (!(old_pw = ask_passphrase("Passphrase of its LUKS volume: ",
 						0, &old_len))) {
 			printf("the LUKS volume on \"%s\" gets no key in the key "
 					"store\n", argv[0]);
-		} else if ((fd = memfd_create("scubed3ctl-key", 0)) == -1 ||
-				write(fd, e->luks, KS_LUKS) != KS_LUKS ||
-				(old_fd = memfd_create("scubed3ctl-old", 0)) ==
-				-1 || write(old_fd, old_pw, old_len) !=
-				(ssize_t)old_len) {
-			WARNING("unable to make a key file in memory: %s",
-					strerror(errno));
-		} else if (snprintf(tmp, sizeof(tmp), "/dev/fd/%d", fd),
-				snprintf(old, sizeof(old), "/dev/fd/%d", old_fd),
-				!var_system("cryptsetup luksAddKey --key-file %s "
-					"%s/%s %s", old, priv->mountpoint,
-					argv[0], tmp)) {
-			e->flags |= KS_HAS_LUKS;
-			printf("the LUKS volume on \"%s\" has a new key, it is in "
-					"the key store\n", argv[0]);
+		} else if (!old_len || old_len > KS_LUKS_PASS_MAX) {
+			printf("the passphrase of the LUKS volume on \"%s\" is %s "
+					"(at most %d characters in the key "
+					"store): it is not in the key store\n",
+					argv[0], old_len?"too long":"empty",
+					KS_LUKS_PASS_MAX);
+		} else {
+			ks_set_luks_passphrase(e, old_pw, old_len);
+			if (cryptsetup_with_key(e, "cryptsetup open "
+						"--test-passphrase --key-file=- "
+						"%s/%s", priv->mountpoint,
+						argv[0])) {
+				printf("this passphrase does not open the LUKS "
+						"volume on \"%s\": it is not in "
+						"the key store\n", argv[0]);
+				e->flags &= ~(KS_HAS_LUKS|KS_LUKS_PASS);
+				memset(e->luks, 0, KS_LUKS);
+			} else printf("the passphrase of the LUKS volume on "
+					"\"%s\" is in the key store\n", argv[0]);
 		}
-		free_passphrase(old_pw, old_len);
-		ks_wipe_file(fd, KS_LUKS);
-		ks_wipe_file(old_fd, old_len);
-		if (!(e->flags&KS_HAS_LUKS)) memset(e->luks, 0, KS_LUKS);
+		if (old_pw) free_passphrase(old_pw, old_len);
 	}
 	printf("the key of \"%s\" is in view %d (it is not checked: close and "
 			"open it to see\nthat it is right)\n", argv[0], view + 1);
@@ -2222,11 +2217,7 @@ static ctl_command_t ctl_commands[] = {
 		.argc = 1,
 		.usage = " NAME"
 	}, {
-		.head.key = "luksaddkey",
-		.command = ctl_luksaddkey,
-		.argc = 1,
-		.usage = " NAME"
-	}, {
+
 		.head.key = "luksstatus",
 		.command = ctl_luksstatus,
 		.argc = 0,
@@ -2293,6 +2284,12 @@ static ctl_command_t ctl_commands[] = {
 	}, {
 		.head.key = "keys-add-passphrase",
 		.command = ctl_keys_add_passphrase,
+		.argc = 1,
+		.optargc = 1,
+		.usage = " NAME [VIEW]"
+	}, {
+		.head.key = "keys-luks-passphrase",
+		.command = ctl_keys_luks_passphrase,
 		.argc = 1,
 		.optargc = 1,
 		.usage = " NAME [VIEW]"

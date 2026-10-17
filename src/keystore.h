@@ -34,6 +34,8 @@
 #define KS_NAME		31	/* with the terminating 0 */
 #define KS_KEY		32	/* the key of the partition */
 #define KS_LUKS		64	/* the key file of the LUKS volume */
+#define KS_LUKS_PASS_MAX (KS_LUKS - 1)	/* a passphrase in luks: its length,
+					 * then the passphrase */
 #define KS_IV		12
 #define KS_TAG		16
 
@@ -46,6 +48,10 @@ typedef struct ks_entry_s {
 
 #define KS_USED		0x01	/* the entry is used */
 #define KS_HAS_LUKS	0x02	/* luks is the key of the LUKS volume */
+#define KS_LUKS_PASS	0x04	/* the key of the LUKS volume is a passphrase:
+				 * luks[0] is its length, then the passphrase
+				 * (the rest is zero), otherwise the key is all
+				 * of luks (random) */
 
 #define KS_PLAIN	(KS_ENTRIES*sizeof(ks_entry_t))
 #define KS_SLOT		(KS_IV + KS_PLAIN + KS_TAG)

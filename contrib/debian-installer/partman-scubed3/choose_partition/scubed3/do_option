@@ -119,7 +119,7 @@ EOF
 }
 
 do_create () {
-	local name blocks free bytes mib
+	local name blocks free bytes mib pass luks
 	db_set partman-scubed3/name ""
 	db_fset partman-scubed3/name seen false
 	db_input critical partman-scubed3/name
@@ -167,19 +167,43 @@ do_create () {
 
 	s3_choose_view "$name" || return 0
 
-	# its passphrase (empty: a random key); the keys go into the key
-	# store (the LUKS key is random), the partition is made with them
+	# its passphrase (empty: a random key), the passphrase of its LUKS
+	# volume (empty: a random key; one key, luksformat at finish uses
+	# it); the keys go into the key store, the partition is made with them
 	db_metaget partman-scubed3/text/new_partition_description description
 	s3_ask_passphrase "$(printf "$RET" "$name")" yes empty || return 0
-	if [ "$PASS" ]; then
+	pass=$PASS
+	PASS=
+	luks=
+	db_get partman-scubed3/luks
+	if [ "$RET" = true ]; then
+		while :; do
+			db_metaget partman-scubed3/text/new_luks_description description
+			if ! s3_ask_passphrase "$(printf "$RET" "$name")" yes empty; then
+				pass=
+				return 0
+			fi
+			[ ${#PASS} -le 63 ] && break
+			PASS=
+			note partman-scubed3/luks_passphrase_long
+		done
+		luks=$PASS
+		PASS=
+	fi
+	if [ "$pass" ]; then
 		s3_busy open
-		printf '%s\n%s\n' "$PASS" "$PASS" |
-			s3ks -c "keys-add-passphrase $name $VIEW" -c "create $name"
+		printf '%s\n%s\n' "$pass" "$pass" |
+			s3ks -c "keys-add-passphrase $name $VIEW"
 		s3_busy_done
 	else
-		s3ks -c "keys-add $name $VIEW" -c "create $name" < /dev/null
+		s3ks -c "keys-add $name $VIEW" < /dev/null
 	fi
-	PASS=
+	if [ "$luks" ]; then
+		printf '%s\n%s\n' "$luks" "$luks" |
+			s3ks -c "keys-luks-passphrase $name $VIEW"
+	fi
+	pass=; luks=
+	s3ks -c "create $name" < /dev/null
 	if [ ! -e $S3MNT/$name ] || ! s3ctl -c "resize $name $blocks"; then
 		s3_error partman-scubed3/create_failed "$name"
 		return 0
@@ -234,6 +258,11 @@ do_open () {
 				pass=
 				s3ctl -c "close $name"
 				return 0
+			fi
+			if [ ${#PASS} -gt 63 ]; then
+				PASS=
+				note partman-scubed3/luks_passphrase_long
+				continue
 			fi
 			s3_luks_check "$PASS" $name && break
 			PASS=
@@ -322,17 +351,6 @@ do_finish () {
 				s3_error partman-scubed3/luks_failed "$name"
 				return 1
 			fi
-			# a passphrase of the LUKS volume, next to its
-			# random key in the key store (empty: none)
-			db_metaget partman-scubed3/text/new_luks_description description
-			if s3_ask_passphrase "$(printf "$RET" "$name")" yes empty &&
-					[ "$PASS" ]; then
-				s3_busy luks
-				printf '%s\n%s\n' "$PASS" "$PASS" |
-					s3ks -c "luksaddkey $name"
-				s3_busy_done
-			fi
-			PASS=
 		fi
 		[ "$view" = 1 ] || continue
 		s3_busy luks

@@ -1,7 +1,7 @@
 #!/bin/sh
 # entropytest.sh - the random secrets of scubed3ctl have at least 256 bits:
-# the keys in the key store (scubed3ctl, with fake-cryptsetup): the LUKS key
-# that luksformat gives cryptsetup has 64 bytes (512 bits), the key of a
+# the keys in the key store (scubed3ctl, with fake-cryptsetup): the volume
+# key that luksformat gives cryptsetup has 64 bytes (512 bits), the key of a
 # partition 32 bytes (256 bits), from getrandom(2), they differ between
 # partitions (the passphrases of the key store are typed, never generated)
 #
@@ -15,12 +15,15 @@ ok() { echo "   ok: $1"; }
 
 echo "the keys in the key store"
 mkdir -p $T/bin
-# cryptsetup: the length of the key file that luksformat gives it
+# cryptsetup: the volume key that luksformat gives it (--volume-key-file)
 cat > $T/bin/cryptsetup << EOF
 #!/bin/sh
 case " \$* " in
-*" luksFormat "*" --key-file=- "*|*" luksFormat --type luks2 --key-file=- "*)
-	tee $T/lukskey.\$\$ | $DEV/fake-cryptsetup "\$@";;
+*" luksFormat "*)
+	v=; p=
+	for a in "\$@"; do [ "\$p" = --volume-key-file ] && v=\$a; p=\$a; done
+	[ -n "\$v" ] && cat "\$v" > $T/lukskey.\$\$
+	exec $DEV/fake-cryptsetup "\$@";;
 *)	exec $DEV/fake-cryptsetup "\$@";;
 esac
 EOF
@@ -34,15 +37,16 @@ $D -b $T/base -m 12 -M 16 -f $MNT > $T/log 2>&1 & sleep 0.5
 ctl() { $C -q -YYY -C $T/s3.conf -K $T/keys "$@"; }
 ctl -c keys-create > /dev/null
 printf '\nA\nA\n' | ctl -c unlock-all -c keys-passphrase-add > /dev/null
-printf 'A\n\n' | ctl -c unlock-all -c "keys-add p1 1" -c "keys-add p2 1" -c "create p1" \
+printf 'A\n\n\n\n\n\n' | ctl -c unlock-all -c "keys-add p1 1" -c "keys-add p2 1" -c "create p1" \
 	-c "create p2" -c "resize p1 10" -c "resize p2 10" -c "luksformat p1" \
 	-c "luksformat p2" > $T/out 2>&1
 set -- $T/lukskey.*
 [ $# = 2 ] || fail "luksformat: $(cat $T/out)"
-[ "$(wc -c < $1)" = 64 ] && [ "$(wc -c < $2)" = 64 ] || fail "a LUKS key has not 64 bytes"
-cmp -s $1 $2 && fail "two LUKS volumes have the same key"
-ok "the LUKS keys have 64 bytes (512 bits), they differ"
+[ "$(wc -c < $1)" = 64 ] && [ "$(wc -c < $2)" = 64 ] || fail "a volume key has not 64 bytes"
+cmp -s $1 $2 && fail "two LUKS volumes have the same volume key"
+ok "the volume keys of the LUKS volumes (in the key store) have 64 bytes (512 bits), they differ"
 grep -q 'define KS_KEY		32' $SRC/keystore.h && grep -q 'ks_random(e->key, KS_KEY);' $SRC/scubed3ctl.c &&
+	grep -q 'ks_random(vk, KS_LUKS);' $SRC/scubed3ctl.c &&
 	grep -q 'ks_random(e->luks, KS_LUKS);' $SRC/scubed3ctl.c || fail "the keys are not from ks_random"
 # two partitions with keys from the store open as two partitions (the keys
 # differ)

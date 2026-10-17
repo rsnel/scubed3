@@ -280,6 +280,7 @@ int ks_unlock(keystore_t *k, const unsigned char *key) {
 	v = ecalloc(1, sizeof(*v));
 	for (i = 0; i < KS_SLOTS; i++) if (!ks_decrypt(k, i, key, v->e)) {
 		v->slot = i;
+		snprintf(v->name, sizeof(v->name), "i%02d", i);
 		memcpy(v->key, key, 32);
 		k->views[k->no_views] = v;
 		return k->no_views++;
@@ -305,6 +306,7 @@ int ks_add_view(keystore_t *k, const unsigned char *key) {
 	ks_random(&r, sizeof(r));
 	v = ecalloc(1, sizeof(*v));
 	v->slot = free_slots[r%no_free];
+	snprintf(v->name, sizeof(v->name), "i%02d", v->slot);
 	memcpy(v->key, key, 32);
 	k->views[k->no_views] = v;
 
@@ -340,7 +342,8 @@ ks_entry_t *ks_find(keystore_t *k, int view, const char *name, int *found) {
 /* the same partition (and the same LUKS key) */
 static int ks_same(const ks_entry_t *a, const ks_entry_t *b) {
 	if (memcmp(a->key, b->key, KS_KEY)) return 0;
-	if ((a->flags&KS_HAS_LUKS) != (b->flags&KS_HAS_LUKS)) return 0;
+	if ((a->flags&(KS_HAS_LUKS|KS_LUKS_VK)) !=
+			(b->flags&(KS_HAS_LUKS|KS_LUKS_VK))) return 0;
 	if ((a->flags&KS_HAS_LUKS) && memcmp(a->luks, b->luks, KS_LUKS))
 		return 0;
 	return 1;

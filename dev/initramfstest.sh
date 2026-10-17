@@ -87,7 +87,7 @@ typed "$c -c unlock-all -c 'keys-add root 1' -c 'keys-add home 1' -c 'keys-add h
 	A H "" yes yes yes
 for n in root:60 home:30 hidden:30; do $P/sbin/scubed3ctl -q -YYY -c "resize ${n%:*} ${n#*:}" > /dev/null; done
 typed "$c -c unlock-all -c 'luksformat root' -c 'luksformat home' -c 'luksformat hidden' -c 'mke2fs root' -c 'mount root $FS'" \
-	A H "" yes yes yes yes yes yes yes yes
+	A H "" yes yes "" "" yes yes yes "" "" yes yes yes "" "" yes yes yes
 mountpoint -q $FS || fail "the LUKS volume is not mounted: $(cat $P/out)"
 echo "the root file system on LUKS" > $FS/marker
 typed "$P/sbin/scubed3ctl -c 'umount root'"

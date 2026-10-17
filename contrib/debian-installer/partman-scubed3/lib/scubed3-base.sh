@@ -553,10 +553,12 @@ s3_layout () {
 		printf '\\n%s' "$line"
 	done
 	printf '\\nunclaimed: %s blocks' "${free:-0}"
-	slots=$(s3ks_out -c keys < /dev/null |
-		sed -n 's/.*\(view [0-9]*\):.*\[slot \([0-9]*\) of [0-9]*\]$/\1 in slot \2/p' |
-		tr '\n' ';' | sed 's/;$//; s/;/, /g')
-	printf '\\nkey store: %s of 64 slots (chosen at random)\n' "$slots"
+	# (the answers of unlock-all, in the order of S3VIEWKEYS: view 1 is
+	# the boot passphrase; the default name of a view is its slot)
+	slots=$(s3ks_out < /dev/null |
+		sed -n 's/.*view i\([0-9][0-9]\): [0-9]* entries.*/\1/p' |
+		awk '{ printf "%sview %d in slot %s", (NR > 1 ? ", " : ""), NR, $1 }')
+	printf '\\nkey store: %s (of the slots 00 to 63, chosen at random)\n' "$slots"
 }
 
 # the key of passphrase $1 of the key store in KEY (64 hexadecimal digits,
@@ -574,10 +576,11 @@ s3_key_of () {
 	return 1
 }
 
-# the number of views that the keys in S3VIEWKEYS unlock (the prompts of
-# scubed3ctl are on the same lines)
+# the number of views that the keys in S3VIEWKEYS unlock (the answers of
+# unlock-all: "view NAME: N entries"; the prompts of scubed3ctl are on the
+# same lines)
 s3_unlocked_views () {
-	s3ks_out -c keys < /dev/null | sed -n 's/.*\(view [0-9][0-9]*\):.*/\1/p' |
+	s3ks_out < /dev/null | sed -n 's/.*\(view [^ :]*\): [0-9]* entries.*/\1/p' |
 		sort -u | wc -l | tr -d ' '
 }
 

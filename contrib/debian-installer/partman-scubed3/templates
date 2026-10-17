@@ -40,7 +40,7 @@ Description: the new scubed3 partition "%s". With a passphrase it can also be op
 
 Template: partman-scubed3/text/new_luks_description
 Type: text
-Description: the LUKS volume on the new scubed3 partition "%s". With a passphrase (at most 63 characters) it is the key of the volume (in the key store too): it opens the volume also without the key store. Leave both fields empty for a random key (512 bits): then only the key store opens it
+Description: the LUKS volume on the scubed3 partition "%s". The passphrase is the one key of the volume (its keyslot), it opens it also without the key store; the key store keeps the volume key (512 bits, random). Leave both fields empty for no passphrase: then only the key store opens it
 
 Template: partman-scubed3/text/boot_passphrase
 Type: text
@@ -248,14 +248,6 @@ Description: The layout of scubed3
  .
  Hidden partitions are only shown while their passphrase is unlocked;
  blocks of a partition that is not open are counted as unclaimed.
-
-Template: partman-scubed3/luks_passphrase_long
-Type: error
-Description: The LUKS passphrase is too long
- The key store keeps a passphrase of a LUKS volume of at most 63
- characters. Choose a shorter one (or leave both fields empty for a random
- key). An existing LUKS volume with a longer passphrase: give it a shorter
- one first (cryptsetup luksChangeKey).
 
 Template: partman-scubed3/no_cryptsetup
 Type: error

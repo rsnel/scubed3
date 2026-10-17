@@ -33,9 +33,7 @@
 #define KS_ENTRIES	64
 #define KS_NAME		31	/* with the terminating 0 */
 #define KS_KEY		32	/* the key of the partition */
-#define KS_LUKS		64	/* the key file of the LUKS volume */
-#define KS_LUKS_PASS_MAX (KS_LUKS - 1)	/* a passphrase in luks: its length,
-					 * then the passphrase */
+#define KS_LUKS		64	/* the key of the LUKS volume */
 #define KS_IV		12
 #define KS_TAG		16
 
@@ -48,10 +46,11 @@ typedef struct ks_entry_s {
 
 #define KS_USED		0x01	/* the entry is used */
 #define KS_HAS_LUKS	0x02	/* luks is the key of the LUKS volume */
-#define KS_LUKS_PASS	0x04	/* the key of the LUKS volume is a passphrase:
-				 * luks[0] is its length, then the passphrase
-				 * (the rest is zero), otherwise the key is all
-				 * of luks (random) */
+#define KS_LUKS_VK	0x04	/* luks is the volume key of the LUKS volume
+				 * (its first bytes, as many as the LUKS header
+				 * says, the rest is zero: cryptsetup open
+				 * --volume-key-file), otherwise the key file of
+				 * a keyslot (64 bytes) */
 
 #define KS_PLAIN	(KS_ENTRIES*sizeof(ks_entry_t))
 #define KS_SLOT		(KS_IV + KS_PLAIN + KS_TAG)
@@ -59,6 +58,8 @@ typedef struct ks_entry_s {
 
 typedef struct ks_view_s {
 	int slot;
+	char name[KS_NAME]; /* its name while it is unlocked (not in the file),
+			     * default iNN, NN the slot (see ks_view_name) */
 	unsigned char key[32]; /* AES-256-GCM, derived from the passphrase */
 	ks_entry_t e[KS_ENTRIES];
 } ks_view_t;

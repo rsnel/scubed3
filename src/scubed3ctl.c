@@ -511,6 +511,12 @@ static int send_key(ctl_priv_t *priv, const char *name,
  * partitions with the same name, for example a root partition you can
  * admit and a hidden one), the name is ambiguous: an error, NULL and
  * *ambiguous = 1, one of the views must be locked first */
+/* the name of unlocked view v (given at unlock, default iNN: NN is its
+ * slot) */
+static const char *vname(int v) {
+	return ks.views[v]->name;
+}
+
 static ks_entry_t *ks_lookup(const char *name, int *ambiguous) {
 	ks_entry_t *e;
 	int view, other;
@@ -518,10 +524,10 @@ static ks_entry_t *ks_lookup(const char *name, int *ambiguous) {
 	*ambiguous = 0;
 	if (!(e = ks_find(&ks, -1, name, &view))) return NULL;
 	if ((other = ks_conflict(&ks, view, name)) >= 0) {
-		printf("\"%s\" is in view %d and in view %d of the key store, "
+		printf("\"%s\" is in view %s and in view %s of the key store, "
 				"with other keys: two\npartitions with the same "
 				"name; lock one of the views first (lock VIEW)\n",
-				name, view + 1, other + 1);
+				name, vname(view), vname(other));
 		exit_status = EXIT_FAILURE;
 		*ambiguous = 1;
 		return NULL;
@@ -529,6 +535,8 @@ static ks_entry_t *ks_lookup(const char *name, int *ambiguous) {
 
 	return e;
 }
+
+static int ks_commit(void);
 
 /* the key of a partition comes from the key store, if it is in an unlocked
  * view, otherwise from its passphrase */
@@ -589,6 +597,8 @@ static int ctl_help(ctl_priv_t *priv, char *argv[]) {
 	printf("unlock\n");
 	printf("unlock-all\n");
 	printf("unlock-until NAME (passphrases until a view has NAME, for a boot)\n");
+	printf("name VIEW NAME    (another name for an unlocked view, default iNN: its slot;\n");
+	printf("                   at the s3> prompt unlock asks a name)\n");
 	printf("lock VIEW         (forget an unlocked view, for example when two views have\n");
 	printf("                   a partition with the same name and other keys)\n");
 	printf("keys\n");
@@ -598,7 +608,6 @@ static int ctl_help(ctl_priv_t *priv, char *argv[]) {
 	printf("keys-passphrase-remove [VIEW]\n");
 	printf("keys-add NAME [VIEW]\n");
 	printf("keys-add-passphrase NAME [VIEW] (the key of a passphrase, not a random key)\n");
-	printf("keys-luks-passphrase NAME [VIEW] (the LUKS key is a passphrase, before luksformat)\n");
 	printf("keys-copy NAME1 NAME2 [VIEW] (NAME2 gets the keys of NAME1)\n");
 	printf("keys-import NAME [VIEW]\n");
 	printf("keys-remove NAME [VIEW]\n");
@@ -889,36 +898,126 @@ static int check_unmounted(ctl_priv_t *priv, const char *name) {
  * the partition is open (in paranoia level 2 and 3 all partitions are
  * open) but the LUKS volume is not, the LUKS volume is opened by mke2fs
  * and mount, umount closes it */
-/* run a cryptsetup command with the key file of the LUKS volume of e on its
- * standard input (--key-file=-), the key is never written to a file */
-/* the key of the LUKS volume of e becomes a passphrase (len at most
- * KS_LUKS_PASS_MAX) */
-static void ks_set_luks_passphrase(ks_entry_t *e, const char *pw, size_t len) {
-	assert(len > 0 && len <= KS_LUKS_PASS_MAX);
-	memset(e->luks, 0, KS_LUKS);
-	e->luks[0] = len;
-	memcpy(e->luks + 1, pw, len);
-	e->flags |= KS_HAS_LUKS|KS_LUKS_PASS;
-}
-
-static int cryptsetup_with_key(ks_entry_t *e, const char *format, ...) {
+/* run a cryptsetup command with data (a key) on its standard input, the
+ * key is never written to a file */
+static int vcryptsetup_with_data(const void *data, size_t len,
+		const char *format, va_list ap) {
 	char *cmd;
-	va_list ap;
 	FILE *fp;
 	int ret;
 
-	va_start(ap, format);
-	ret = vasprintf(&cmd, format, ap);
-	va_end(ap);
-	if (ret == -1) FATAL("out of memory");
-
+	if (vasprintf(&cmd, format, ap) == -1) FATAL("out of memory");
 	if (!(fp = popen(cmd, "w"))) FATAL("popen: %s", strerror(errno));
 	free(cmd);
-	/* a passphrase (luks[0] is its length) or the random key */
-	if ((e->flags&KS_LUKS_PASS)?fwrite(e->luks + 1, e->luks[0], 1, fp) != 1:
-			fwrite(e->luks, KS_LUKS, 1, fp) != 1)
+	if (len && fwrite(data, len, 1, fp) != 1)
 		WARNING("writing the key to cryptsetup: %s", strerror(errno));
 	if ((ret = pclose(fp))) exit_status = EXIT_FAILURE;
+
+	return ret;
+}
+
+static int cryptsetup_with_data(const void *data, size_t len,
+		const char *format, ...) {
+	va_list ap;
+	int ret;
+
+	va_start(ap, format);
+	ret = vcryptsetup_with_data(data, len, format, ap);
+	va_end(ap);
+
+	return ret;
+}
+
+/* with the key of the LUKS volume of e on its standard input (the key file
+ * of a keyslot, --key-file=-, or the volume key, --volume-key-file
+ * /dev/stdin: see KS_LUKS_VK) */
+static int cryptsetup_with_key(ks_entry_t *e, const char *format, ...) {
+	va_list ap;
+	int ret;
+
+	va_start(ap, format);
+	ret = vcryptsetup_with_data(e->luks, KS_LUKS, format, ap);
+	va_end(ap);
+
+	return ret;
+}
+
+/* overwrite the memory file fd (len bytes) with zeroes */
+static void wipe_fd(int fd, size_t len) {
+	char zero[256] = { };
+	size_t n;
+
+	if (lseek(fd, 0, SEEK_SET)) return;
+	while (len) {
+		n = len < sizeof(zero)?len:sizeof(zero);
+		if (write(fd, zero, n) != (ssize_t)n) break;
+		len -= n;
+	}
+}
+
+/* the LUKS key of e becomes the volume key vk, in the copies of e in other
+ * unlocked views too (the same partition: the same name and key) */
+static void ks_luks_set_vk(ks_entry_t *e, const unsigned char *vk) {
+	ks_entry_t *o;
+	int v, i;
+
+	memcpy(e->luks, vk, KS_LUKS);
+	e->flags |= KS_HAS_LUKS|KS_LUKS_VK;
+	for (v = 0; v < ks.no_views; v++) for (i = 0; i < KS_ENTRIES; i++) {
+		o = &ks.views[v]->e[i];
+		if (o == e || !(o->flags&KS_USED) || strcmp(o->name, e->name) ||
+				memcmp(o->key, e->key, KS_KEY)) continue;
+		o->flags = e->flags;
+		memcpy(o->luks, e->luks, KS_LUKS);
+	}
+}
+
+/* the volume key of the LUKS volume of a partition, with a passphrase of it
+ * (cryptsetup luksDump --dump-volume-key, the passphrase in a memory file,
+ * the key comes back on a pipe), 0 if it is in vk (at most KS_LUKS bytes,
+ * zero padded) */
+static int luks_dump_vk(ctl_priv_t *priv, const char *name, const char *pw,
+		size_t len, unsigned char *vk) {
+	char *cmd, line[256], *p, *end;
+	int fd, bits = 0, n = 0, dump = 0, ret = -1;
+	unsigned long b;
+	FILE *fp;
+
+	memset(vk, 0, KS_LUKS);
+	if ((fd = memfd_create("scubed3ctl-pass", 0)) == -1 ||
+			write(fd, pw, len) != (ssize_t)len) {
+		WARNING("unable to make a key file in memory: %s",
+				strerror(errno));
+		if (fd != -1) close(fd);
+		return -1;
+	}
+	if (asprintf(&cmd, "LC_ALL=C cryptsetup luksDump -q --dump-volume-key "
+				"--key-file /dev/fd/%d %s/%s", fd,
+				priv->mountpoint, name) == -1)
+		FATAL("out of memory");
+	if (!(fp = popen(cmd, "r"))) FATAL("popen: %s", strerror(errno));
+	free(cmd);
+	while (fgets(line, sizeof(line), fp)) {
+		if (!strncmp(line, "MK bits:", 8)) bits = atoi(line + 8);
+		if (!strncmp(line, "MK dump:", 8)) {
+			dump = 1;
+			p = line + 8;
+		} else p = line;
+		if (!dump) continue;
+		for (;;) {
+			b = strtoul(p, &end, 16);
+			if (end == p || b > 255) break;
+			if (n < KS_LUKS) vk[n] = b;
+			n++;
+			p = end;
+		}
+	}
+	wipememory(line, sizeof(line));
+	if (!pclose(fp) && bits > 0 && bits%8 == 0 && n == bits/8 &&
+			n <= KS_LUKS) ret = 0;
+	else wipememory(vk, KS_LUKS);
+	wipe_fd(fd, len);
+	close(fd);
 
 	return ret;
 }
@@ -938,6 +1037,10 @@ static int luks_open(ctl_priv_t *priv, const char *name) {
 	ks_entry_t *e = luks_key(name, &ambiguous);
 
 	if (ambiguous) return 1;
+	/* with the volume key no KDF runs (faster, also at boot) */
+	if (e && (e->flags&KS_LUKS_VK)) return cryptsetup_with_key(e,
+			"cryptsetup open --volume-key-file /dev/stdin %s/%s "
+			LUKS_NAME, priv->mountpoint, name, luks_prefix, name);
 	if (e) return cryptsetup_with_key(e, "cryptsetup open --key-file=- "
 			"%s/%s " LUKS_NAME, priv->mountpoint, name,
 			luks_prefix, name);
@@ -1045,12 +1148,12 @@ static void luks_status(ctl_priv_t *priv, const char *name) {
 	else if (luks) printf("LUKS header (version %d)", version);
 	else printf("no LUKS header");
 	if (ks.data && (e = ks_find(&ks, -1, name, &v))) {
-		if (e->flags&KS_LUKS_PASS) printf(", its LUKS passphrase is in "
-				"view %d of the key store", v + 1);
+		if (e->flags&KS_LUKS_VK) printf(", its LUKS volume key is in "
+				"view %s of the key store", vname(v));
 		else if (e->flags&KS_HAS_LUKS) printf(", its LUKS key is in view "
-				"%d of the key store", v + 1);
-		else printf(", in view %d of the key store (no LUKS key)",
-				v + 1);
+				"%s of the key store", vname(v));
+		else printf(", in view %s of the key store (no LUKS key)",
+				vname(v));
 	}
 
 	/* the loop devices on the file of the partition */
@@ -1113,9 +1216,11 @@ static int ctl_luksstatus(ctl_priv_t *priv, char *argv[]) {
 }
 
 static int ctl_luksformat(ctl_priv_t *priv, char *argv[]) {
-	int ret, ambiguous;
-	ks_entry_t *e = luks_key(argv[0], &ambiguous);
-	char prompt[128];
+	int ret, ambiguous, fd = -1;
+	ks_entry_t *e = ks_lookup(argv[0], &ambiguous);
+	unsigned char vk[KS_LUKS];
+	char prompt[128], *pw;
+	size_t len;
 
 	if (ambiguous) return 0;
 
@@ -1129,18 +1234,52 @@ static int ctl_luksformat(ctl_priv_t *priv, char *argv[]) {
 		return 0;
 	}
 
-	/* the key from the key store, cryptsetup does not ask */
+	/* a new random volume key goes into the key store, the one keyslot
+	 * of the volume gets the passphrase (any length), or a random key
+	 * that is not kept (then only the key store opens it) */
 	snprintf(prompt, sizeof(prompt), "the data on \"%s\" is lost, type "
-			"yes to format it (with its LUKS key from the key "
+			"yes to format it (its volume key goes into the key "
 			"store): ", argv[0]);
 	if (!typed_yes(prompt)) {
 		printf("cancelled\n");
 		return 0;
 	}
-	if (!cryptsetup_with_key(e, "cryptsetup -q luksFormat --type luks2 "
-				"--key-file=- %s/%s", priv->mountpoint, argv[0]))
-		printf("\"%s\" is formatted, its LUKS key is in the key "
-				"store\n", argv[0]);
+	if (!(pw = ask_passphrase("Passphrase of the LUKS volume (empty: a "
+					"random key, only the key store opens "
+					"it): ", 1, &len))) return 0;
+	ks_random(vk, KS_LUKS);
+	ks_luks_set_vk(e, vk);
+	if (!ks_commit()) {
+		free_passphrase(pw, len);
+		wipememory(vk, sizeof(vk));
+		return 0;
+	}
+	if ((fd = memfd_create("scubed3ctl-vk", 0)) == -1 ||
+			write(fd, vk, KS_LUKS) != KS_LUKS) {
+		WARNING("unable to make a key file in memory: %s",
+				strerror(errno));
+		exit_status = EXIT_FAILURE;
+	} else {
+		if (!len) {
+			free_passphrase(pw, len);
+			pw = ecalloc(1, KS_LUKS);
+			len = KS_LUKS;
+			ks_random(pw, len);
+		}
+		if (!cryptsetup_with_data(pw, len, "cryptsetup -q luksFormat "
+					"--type luks2 --key-size %d "
+					"--volume-key-file /dev/fd/%d "
+					"--key-file=- %s/%s", KS_LUKS*8, fd,
+					priv->mountpoint, argv[0]))
+			printf("\"%s\" is formatted, its volume key is in the "
+					"key store\n", argv[0]);
+	}
+	if (fd != -1) {
+		wipe_fd(fd, KS_LUKS);
+		close(fd);
+	}
+	free_passphrase(pw, len);
+	wipememory(vk, sizeof(vk));
 
 	return 0;
 }
@@ -1400,25 +1539,72 @@ static int ks_count(int view) {
 	return n;
 }
 
-/* view VIEW (1, 2, ...), or the only unlocked view if there is no
- * argument; -1 (with a message) if there is no such view */
+static int ks_valid_name(const char *name);
+static char *ask_line(const char *prompt);
+
+/* view VIEW: its name (i04, or the name it got at unlock), or its number
+ * in the order of unlocking (1, 2, ..., for scripts), or the only unlocked
+ * view if there is no argument; -1 (with a message) if there is no such
+ * view */
 static int ks_view_arg(const char *arg) {
 	int view;
 
 	if (!arg) {
 		if (ks.no_views == 1) return 0;
-		printf(ks.no_views?"%d views are unlocked, give the number of "
+		printf(ks.no_views?"%d views are unlocked, give the name of "
 				"the view\n":"no view is unlocked (unlock)\n",
 				ks.no_views);
 		return -1;
 	}
-	if (parse_int(&view, arg) || view < 1 || view > ks.no_views) {
-		printf("there is no view %s (keys shows the unlocked views)\n",
-				arg);
-		return -1;
+	for (view = 0; view < ks.no_views; view++)
+		if (!strcmp(arg, ks.views[view]->name)) return view;
+	if (strspn(arg, "0123456789") == strlen(arg) &&
+			!parse_int(&view, arg) && view >= 1 &&
+			view <= ks.no_views) return view - 1;
+	printf("there is no view %s (keys shows the unlocked views)\n", arg);
+
+	return -1;
+}
+
+/* a name for a view: as the name of a partition, not only digits (a number
+ * is a view in the order of unlocking), not the name of another unlocked
+ * view; 1 if it is right (a message if not) */
+static int ks_valid_view_name(const char *name, int view) {
+	int v;
+
+	if (!ks_valid_name(name)) return 0;
+	if (strspn(name, "0123456789") == strlen(name)) {
+		printf("the name of a view is not only digits\n");
+		return 0;
+	}
+	for (v = 0; v < ks.no_views; v++) if (v != view &&
+			!strcmp(name, ks.views[v]->name)) {
+		printf("view %s is unlocked already\n", name);
+		return 0;
 	}
 
-	return view - 1;
+	return 1;
+}
+
+/* in the s3> prompt (not with -c: scripts get the default names) a view
+ * that is unlocked or added now gets a name (empty: the default, iNN) */
+static int interactive = 0;
+
+static void ks_name_view(int view) {
+	char prompt[96], *name;
+
+	if (!interactive) return;
+	for (;;) {
+		snprintf(prompt, sizeof(prompt), "name of this view (empty: "
+				"%s): ", vname(view));
+		if (!(name = ask_line(prompt)) || !*name) break;
+		if (ks_valid_view_name(name, view)) {
+			snprintf(ks.views[view]->name, KS_NAME, "%s", name);
+			break;
+		}
+		free(name);
+	}
+	free(name);
 }
 
 static int ks_valid_name(const char *name) {
@@ -1450,8 +1636,8 @@ static int ks_commit(void) {
 				"are NOT UNLOCKED NOW ARE LOST, it\ndoes not "
 				"know them; unlocked now:");
 		if (!ks.no_views) printf(" no views");
-		for (i = 0; i < ks.no_views; i++) printf("%s view %d (%d "
-				"entries)", i?",":"", i + 1, ks_count(i));
+		for (i = 0; i < ks.no_views; i++) printf("%s view %s (%d "
+				"entries)", i?",":"", vname(i), ks_count(i));
 		printf("\n\n");
 	}
 	if (!typed_yes("type yes if ALL passphrases of the key store are "
@@ -1501,17 +1687,17 @@ static void ks_warn_conflicts(int view) {
 		ks_entry_t *e = &ks.views[view]->e[i];
 		if (!(e->flags&KS_USED)) continue;
 		if ((other = ks_conflict(&ks, view, e->name)) < 0) continue;
-		printf("WARNING: \"%s\" is in view %d and in view %d with other "
+		printf("WARNING: \"%s\" is in view %s and in view %s with other "
 				"keys (two partitions\nwith the same name), it "
 				"cannot be used while both views are unlocked:\n"
-				"lock one of them (lock VIEW)\n", e->name, view + 1,
-				other + 1);
+				"lock one of them (lock VIEW)\n", e->name, vname(view),
+				vname(other));
 	}
 }
 
 static int ks_unlock_one(const char *prompt) {
 	unsigned char key[32];
-	int ret, view;
+	int ret, view, n = ks.no_views;
 
 	if ((ret = ks_ask_key(prompt, 0, key)) != 1) return ret;
 	view = ks_unlock(&ks, key);
@@ -1520,7 +1706,8 @@ static int ks_unlock_one(const char *prompt) {
 		printf("no view for this passphrase\n");
 		exit_status = EXIT_FAILURE;
 	} else {
-		printf("view %d: %d entries\n", view + 1, ks_count(view));
+		if (view >= n) ks_name_view(view);
+		printf("view %s: %d entries\n", vname(view), ks_count(view));
 		ks_warn_conflicts(view);
 	}
 
@@ -1573,16 +1760,16 @@ static int ctl_unlock_until(ctl_priv_t *priv, char *argv[]) {
 		}
 		if (view < 0) printf("no view for this passphrase\n");
 		else if (!ks_find(&ks, view, argv[0], NULL))
-			printf("view %d: %d entries, without \"%s\"\n",
-					view + 1, ks_count(view), argv[0]);
+			printf("view %s: %d entries, without \"%s\"\n",
+					vname(view), ks_count(view), argv[0]);
 		else if ((other = ks_conflict(&ks, view, argv[0])) >= 0) {
-			printf("\"%s\" is in view %d and in view %d with other "
-					"keys\n", argv[0], view + 1, other + 1);
+			printf("\"%s\" is in view %s and in view %s with other "
+					"keys\n", argv[0], vname(view), vname(other));
 			exit_status = EXIT_FAILURE;
 			fflush(stdout);
 			return 1;
 		} else {
-			printf("\"%s\" is in view %d\n", argv[0], view + 1);
+			printf("\"%s\" is in view %s\n", argv[0], vname(view));
 			fflush(stdout);
 			return 0;
 		}
@@ -1592,19 +1779,22 @@ static int ctl_unlock_until(ctl_priv_t *priv, char *argv[]) {
 }
 
 static void ks_list(int v) {
+	char def[8];
 	int i, other;
 
-	printf("view %d:%s [slot %d of %d]\n", v + 1, ks_count(v)?"":" (empty)",
-			ks.views[v]->slot + 1, KS_SLOTS);
+	printf("view %s:%s", vname(v), ks_count(v)?"":" (empty)");
+	/* a name of its own: the slot (its default name) too */
+	snprintf(def, sizeof(def), "i%02d", ks.views[v]->slot);
+	if (strcmp(vname(v), def)) printf(" [slot %s]", def);
+	printf("\n");
 	for (i = 0; i < KS_ENTRIES; i++) {
 		ks_entry_t *e = &ks.views[v]->e[i];
 		if (!(e->flags&KS_USED)) continue;
 		printf("  %s%s", e->name,
-				(e->flags&KS_LUKS_PASS)?" [LUKS, passphrase]":
 				(e->flags&KS_HAS_LUKS)?" [LUKS]":"");
 		if ((other = ks_conflict(&ks, v, e->name)) >= 0)
-			printf(" (other keys in view %d: lock one of them to "
-					"use it)", other + 1);
+			printf(" (other keys in view %s: lock one of them to "
+					"use it)", vname(other));
 		printf("\n");
 	}
 }
@@ -1615,10 +1805,31 @@ static void ks_list(int v) {
 static int ctl_lock(ctl_priv_t *priv, char *argv[]) {
 	int view;
 
+	char name[KS_NAME];
+
 	if ((view = ks_view_arg(argv[0])) < 0) return 0;
+	snprintf(name, sizeof(name), "%s", vname(view));
 	ks_remove_view(&ks, view);
-	printf("view %d is locked%s\n", view + 1, (view < ks.no_views)?
-			" (keys shows the new numbers of the other views)":"");
+	printf("view %s is locked\n", name);
+
+	return 0;
+}
+
+/* name VIEW NAME: another name for an unlocked view (in memory, until it is
+ * locked: the name is not in the key store) */
+static int ctl_name(ctl_priv_t *priv, char *argv[]) {
+	char old[KS_NAME];
+	int view;
+
+	if ((view = ks_view_arg(argv[0])) < 0) return 0;
+	if (!ks_valid_view_name(argv[1], view)) {
+		exit_status = EXIT_FAILURE;
+		return 0;
+	}
+	snprintf(old, sizeof(old), "%s", vname(view));
+	snprintf(ks.views[view]->name, KS_NAME, "%s", argv[1]);
+	printf("view %s is now view %s (slot i%02d; the name is not in the key "
+			"store)\n", old, vname(view), ks.views[view]->slot);
 
 	return 0;
 }
@@ -1675,9 +1886,10 @@ static int ctl_keys_passphrase_add(ctl_priv_t *priv, char *argv[]) {
 	} else if ((view = ks_add_view(&ks, key)) < 0) {
 		printf("all %d slots are used by unlocked views\n", KS_SLOTS);
 	} else {
-		printf("view %d is added (empty, in slot %d of %d, chosen at "
-				"random)\n", view + 1, ks.views[view]->slot + 1,
-				KS_SLOTS);
+		ks_name_view(view);
+		printf("view %s is added (empty, in slot i%02d of i00..i%02d, "
+				"chosen at random)\n", vname(view),
+				ks.views[view]->slot, KS_SLOTS - 1);
 		ks_commit();
 	}
 	wipememory(key, 32);
@@ -1695,11 +1907,11 @@ static int ctl_keys_passphrase_change(ctl_priv_t *priv, char *argv[]) {
 		return 0;
 	}
 	if ((other = ks_unlock(&ks, key)) >= 0) {
-		printf("this passphrase has a view already (view %d)\n",
-				other + 1);
+		printf("this passphrase has a view already (view %s)\n",
+				vname(other));
 	} else {
 		memcpy(ks.views[view]->key, key, 32);
-		printf("view %d has the new passphrase\n", view + 1);
+		printf("view %s has the new passphrase\n", vname(view));
 		ks_commit();
 	}
 	wipememory(key, 32);
@@ -1711,8 +1923,8 @@ static int ctl_keys_passphrase_remove(ctl_priv_t *priv, char *argv[]) {
 	int view;
 
 	if ((view = ks_view_arg(argv[0])) < 0) return 0;
-	printf("view %d (%d entries) is removed: the keys in it are lost, "
-			"unless they are in\nanother view too\n", view + 1,
+	printf("view %s (%d entries) is removed: the keys in it are lost, "
+			"unless they are in\nanother view too\n", vname(view),
 			ks_count(view));
 	ks_remove_view(&ks, view);
 	ks_commit();
@@ -1732,45 +1944,45 @@ static int ks_add(int view, const char *name, const unsigned char *key) {
 
 	if (!ks_valid_name(name)) return 0;
 	if (ks_find(&ks, view, name, NULL)) {
-		printf("\"%s\" is in view %d already\n", name, view + 1);
+		printf("\"%s\" is in view %s already\n", name, vname(view));
 		return 0;
 	}
 	from = ks_find(&ks, -1, name, &other);
 	if (from && ks_conflict(&ks, other, name) >= 0) {
-		printf("\"%s\" has other keys in view %d and view %d: two "
+		printf("\"%s\" has other keys in view %s and view %s: two "
 				"partitions with the same\nname, it is not clear "
 				"which one to copy; lock one of the views first "
-				"(lock VIEW)\n", name, other + 1,
-				ks_conflict(&ks, other, name) + 1);
+				"(lock VIEW)\n", name, vname(other),
+				vname(ks_conflict(&ks, other, name)));
 		return 0;
 	}
 	if (!(e = ks_new_entry(&ks, view, name))) {
-		printf("view %d is full (%d entries)\n", view + 1, KS_ENTRIES);
+		printf("view %s is full (%d entries)\n", vname(view), KS_ENTRIES);
 		return 0;
 	}
 	if (from && key) {
-		printf("\"%s\" is in view %d: its keys are copied with keys-add "
-				"(a partition has\none key)\n", name, other + 1);
+		printf("\"%s\" is in view %s: its keys are copied with keys-add "
+				"(a partition has\none key)\n", name, vname(other));
 		memset(e, 0, sizeof(*e));
 		return 0;
 	}
 	if (from) {
 		memcpy(e, from, sizeof(*e));
-		printf("the keys of \"%s\" are copied from view %d to view %d\n",
-				name, other + 1, view + 1);
+		printf("the keys of \"%s\" are copied from view %s to view %s\n",
+				name, vname(other), vname(view));
 	} else if (key) {
 		memcpy(e->key, key, KS_KEY);
 		ks_random(e->luks, KS_LUKS);
 		e->flags |= KS_HAS_LUKS;
 		printf("\"%s\" has the key of its passphrase and a new random "
-				"LUKS key in view %d:\ncreate it, and luksformat "
-				"it\n", name, view + 1);
+				"LUKS key in view %s:\ncreate it, and luksformat "
+				"it\n", name, vname(view));
 	} else {
 		ks_random(e->key, KS_KEY);
 		ks_random(e->luks, KS_LUKS);
 		e->flags |= KS_HAS_LUKS;
-		printf("\"%s\" has new random keys in view %d: create it, and "
-				"luksformat it\n", name, view + 1);
+		printf("\"%s\" has new random keys in view %s: create it, and "
+				"luksformat it\n", name, vname(view));
 	}
 
 	return 1;
@@ -1781,63 +1993,6 @@ static int ctl_keys_add(ctl_priv_t *priv, char *argv[]) {
 
 	if ((view = ks_view_arg(argv[1])) < 0) return 0;
 	if (ks_add(view, argv[0], NULL)) ks_commit();
-
-	return 0;
-}
-
-/* the key of the LUKS volume of NAME becomes a passphrase (asked twice;
- * empty: a new random key): luksformat gives it to cryptsetup, the volume
- * has one key, it opens also without the key store; only before the
- * volume exists (a partition that is open with a LUKS header keeps its
- * key: keys-import it); the copies of NAME in other unlocked views (the
- * same partition) get it too */
-static int ctl_keys_luks_passphrase(ctl_priv_t *priv, char *argv[]) {
-	ks_entry_t *e, *o;
-	char *pw;
-	size_t len;
-	int view, v, i;
-
-	if ((view = ks_view_arg(argv[1])) < 0) return 0;
-	if (!(e = ks_find(&ks, view, argv[0], NULL))) {
-		printf("\"%s\" is not in view %d\n", argv[0], view + 1);
-		exit_status = EXIT_FAILURE;
-		return 0;
-	}
-	if (do_server_command(priv->s, 0, "info %s", argv[0])) return -1;
-	if (!result.status && is_luks(priv, argv[0])) {
-		printf("partition \"%s\" has a LUKS volume already, it keeps "
-				"its key\n", argv[0]);
-		exit_status = EXIT_FAILURE;
-		return 0;
-	}
-	if (!(pw = ask_passphrase("Passphrase of the LUKS volume (empty: a "
-					"random key): ", 1, &len))) return 0;
-	if (len > KS_LUKS_PASS_MAX) {
-		free_passphrase(pw, len);
-		printf("the passphrase is too long (at most %d characters in "
-				"the key store)\n", KS_LUKS_PASS_MAX);
-		exit_status = EXIT_FAILURE;
-		return 0;
-	}
-	if (len) ks_set_luks_passphrase(e, pw, len);
-	else {
-		e->flags &= ~KS_LUKS_PASS;
-		e->flags |= KS_HAS_LUKS;
-		ks_random(e->luks, KS_LUKS);
-	}
-	for (v = 0; v < ks.no_views; v++) for (i = 0; i < KS_ENTRIES; i++) {
-		o = &ks.views[v]->e[i];
-		if (o == e || !(o->flags&KS_USED) || strcmp(o->name, e->name) ||
-				memcmp(o->key, e->key, KS_KEY)) continue;
-		o->flags = e->flags;
-		memcpy(o->luks, e->luks, KS_LUKS);
-	}
-	free_passphrase(pw, len);
-	if (len) printf("the LUKS volume of \"%s\" gets this passphrase "
-			"(luksformat it)\n", argv[0]);
-	else printf("the LUKS volume of \"%s\" gets a new random key "
-			"(luksformat it)\n", argv[0]);
-	ks_commit();
 
 	return 0;
 }
@@ -1886,48 +2041,49 @@ static int ctl_keys_copy(ctl_priv_t *priv, char *argv[]) {
 		if ((view = ks_view_arg(argv[2])) < 0) return 0;
 	} else ks_find(&ks, -1, argv[0], &view);
 	if (ks_find(&ks, view, argv[1], NULL)) {
-		printf("\"%s\" is in view %d already (keys-remove it first)\n",
-				argv[1], view + 1);
+		printf("\"%s\" is in view %s already (keys-remove it first)\n",
+				argv[1], vname(view));
 		return 0;
 	}
 	if (!(e = ks_new_entry(&ks, view, argv[1]))) {
-		printf("view %d is full (%d entries)\n", view + 1, KS_ENTRIES);
+		printf("view %s is full (%d entries)\n", vname(view), KS_ENTRIES);
 		return 0;
 	}
 	e->flags = from->flags;
 	memcpy(e->key, from->key, KS_KEY);
 	memcpy(e->luks, from->luks, KS_LUKS);
-	printf("\"%s\" has the keys of \"%s\" in view %d: the same partition "
+	printf("\"%s\" has the keys of \"%s\" in view %s: the same partition "
 			"(it is opened as\none of them at a time; keys-remove "
 			"%s removes the old name)\n", argv[1], argv[0],
-			view + 1, argv[0]);
+			vname(view), argv[0]);
 	if ((other = ks_conflict(&ks, view, argv[1])) >= 0)
-		printf("NOTE: view %d has another partition \"%s\" (other "
+		printf("NOTE: view %s has another partition \"%s\" (other "
 				"keys); while both views\nare unlocked, \"%s\" "
 				"cannot be used: lock one of them first (lock "
-				"VIEW)\n", other + 1, argv[1], argv[1]);
+				"VIEW)\n", vname(other), argv[1], argv[1]);
 	ks_commit();
 
 	return 0;
 }
 
 /* an existing partition: its key from its passphrase; if it is open and
- * has LUKS on it, the passphrase of its LUKS volume is asked, it goes into
- * the key store (the volume keeps its one key) */
+ * has LUKS on it, the passphrase of its LUKS volume is asked, its volume key
+ * goes into the key store (the volume is not changed) */
 static int ks_import(ctl_priv_t *priv, int view, const char *name) {
 	ks_entry_t *e;
 	char *pw;
 	size_t len, old_len = 0;
 	int other;
 	char *argv[] = { (char*)name }, *old_pw = NULL;
+	unsigned char vk[KS_LUKS];
 
 	if (!ks_valid_name(argv[0])) return 0;
 	if (ks_find(&ks, view, argv[0], NULL)) {
-		printf("\"%s\" is in view %d already\n", argv[0], view + 1);
+		printf("\"%s\" is in view %s already\n", argv[0], vname(view));
 		return 0;
 	}
 	if (!(e = ks_new_entry(&ks, view, argv[0]))) {
-		printf("view %d is full (%d entries)\n", view + 1, KS_ENTRIES);
+		printf("view %s is full (%d entries)\n", vname(view), KS_ENTRIES);
 		return 0;
 	}
 	if (!(pw = ask_passphrase("Passphrase of the partition: ", 0, &len))) {
@@ -1937,44 +2093,34 @@ static int ks_import(ctl_priv_t *priv, int view, const char *name) {
 	derive_key(pw, len, "", e->key);
 	free_passphrase(pw, len);
 
-	/* the LUKS volume keeps its one key: its passphrase (asked here, so
-	 * that all input comes from the same place, also from a pipe) goes
-	 * into the key store, if it opens the volume */
+	/* the LUKS volume keeps its keyslots: with its passphrase (asked
+	 * here, so that all input comes from the same place, also from a
+	 * pipe) its volume key goes into the key store */
 	if (!do_server_command(priv->s, 0, "info %s", argv[0]) &&
 			!result.status && is_luks(priv, argv[0])) {
 		if (!(old_pw = ask_passphrase("Passphrase of its LUKS volume: ",
-						0, &old_len))) {
-			printf("the LUKS volume on \"%s\" gets no key in the key "
-					"store\n", argv[0]);
-		} else if (!old_len || old_len > KS_LUKS_PASS_MAX) {
-			printf("the passphrase of the LUKS volume on \"%s\" is %s "
-					"(at most %d characters in the key "
-					"store): it is not in the key store\n",
-					argv[0], old_len?"too long":"empty",
-					KS_LUKS_PASS_MAX);
+						0, &old_len)) || !old_len ||
+				luks_dump_vk(priv, argv[0], old_pw, old_len,
+					vk)) {
+			printf("the volume key of the LUKS volume on \"%s\" is "
+					"not in the key store (a wrong "
+					"passphrase?)\n", argv[0]);
 		} else {
-			ks_set_luks_passphrase(e, old_pw, old_len);
-			if (cryptsetup_with_key(e, "cryptsetup open "
-						"--test-passphrase --key-file=- "
-						"%s/%s", priv->mountpoint,
-						argv[0])) {
-				printf("this passphrase does not open the LUKS "
-						"volume on \"%s\": it is not in "
-						"the key store\n", argv[0]);
-				e->flags &= ~(KS_HAS_LUKS|KS_LUKS_PASS);
-				memset(e->luks, 0, KS_LUKS);
-			} else printf("the passphrase of the LUKS volume on "
-					"\"%s\" is in the key store\n", argv[0]);
+			memcpy(e->luks, vk, KS_LUKS);
+			e->flags |= KS_HAS_LUKS|KS_LUKS_VK;
+			printf("the volume key of the LUKS volume on \"%s\" is "
+					"in the key store\n", argv[0]);
 		}
+		wipememory(vk, sizeof(vk));
 		if (old_pw) free_passphrase(old_pw, old_len);
 	}
-	printf("the key of \"%s\" is in view %d (it is not checked: close and "
-			"open it to see\nthat it is right)\n", argv[0], view + 1);
+	printf("the key of \"%s\" is in view %s (it is not checked: close and "
+			"open it to see\nthat it is right)\n", argv[0], vname(view));
 	if ((other = ks_conflict(&ks, view, argv[0])) >= 0)
-		printf("NOTE: view %d has another partition \"%s\" (other "
+		printf("NOTE: view %s has another partition \"%s\" (other "
 				"keys); while both views\nare unlocked, \"%s\" "
 				"cannot be used: lock one of them first (lock "
-				"VIEW)\n", other + 1, argv[0], argv[0]);
+				"VIEW)\n", vname(other), argv[0], argv[0]);
 
 	return 1;
 }
@@ -1994,7 +2140,7 @@ static int ctl_keys_remove(ctl_priv_t *priv, char *argv[]) {
 
 	if ((view = ks_view_arg(argv[1])) < 0) return 0;
 	if (!(e = ks_find(&ks, view, argv[0], NULL))) {
-		printf("\"%s\" is not in view %d\n", argv[0], view + 1);
+		printf("\"%s\" is not in view %s\n", argv[0], vname(view));
 		return 0;
 	}
 	wipememory(e, sizeof(*e));
@@ -2069,9 +2215,10 @@ static int ctl_keys_setup(ctl_priv_t *priv, char *argv[]) {
 		else if ((v = ks_add_view(&ks, key)) < 0)
 			printf("all %d slots are used\n", KS_SLOTS);
 		else {
-			printf("view %d is added (in slot %d of %d, chosen at "
-					"random)\n", v + 1, ks.views[v]->slot + 1,
-					KS_SLOTS);
+			ks_name_view(v);
+			printf("view %s is added (in slot i%02d of i00..i%02d, "
+					"chosen at random)\n", vname(v),
+					ks.views[v]->slot, KS_SLOTS - 1);
 			changed = 1;
 		}
 		wipememory(key, 32);
@@ -2087,7 +2234,7 @@ static int ctl_keys_setup(ctl_priv_t *priv, char *argv[]) {
 		ks_list(v);
 		for (;;) {
 			snprintf(prompt, sizeof(prompt), "partition to add to "
-					"view %d (empty when done): ", v + 1);
+					"view %s (empty when done): ", vname(v));
 			if (!(name = ask_line(prompt)) || !*name) {
 				free(name);
 				break;
@@ -2125,9 +2272,9 @@ static int ctl_open_all(ctl_priv_t *priv, char *argv[]) {
 		ks_entry_t *e = &ks.views[v]->e[i];
 		if (!(e->flags&KS_USED)) continue;
 		if ((other = ks_conflict(&ks, v, e->name)) <= v) continue;
-		printf("\"%s\" is in view %d and in view %d with other keys "
+		printf("\"%s\" is in view %s and in view %s with other keys "
 				"(two partitions with\nthe same name)\n",
-				e->name, v + 1, other + 1);
+				e->name, vname(v), vname(other));
 		conflicts++;
 	}
 	if (conflicts) {
@@ -2224,6 +2371,11 @@ static ctl_command_t ctl_commands[] = {
 		.optargc = 1,
 		.usage = " [NAME]"
 	}, {
+		.head.key = "name",
+		.command = ctl_name,
+		.argc = 2,
+		.usage = " VIEW NAME"
+	}, {
 		.head.key = "keys-create",
 		.command = ctl_keys_create,
 		.argc = 0,
@@ -2287,12 +2439,7 @@ static ctl_command_t ctl_commands[] = {
 		.argc = 1,
 		.optargc = 1,
 		.usage = " NAME [VIEW]"
-	}, {
-		.head.key = "keys-luks-passphrase",
-		.command = ctl_keys_luks_passphrase,
-		.argc = 1,
-		.optargc = 1,
-		.usage = " NAME [VIEW]"
+
 	}, {
 		.head.key = "keys-copy",
 		.command = ctl_keys_copy,
@@ -2688,6 +2835,7 @@ int main(int argc, char **argv) {
 
 	connections++;
 
+	interactive = !no_commands;
 	i = 0;
 	do {
 		if (line) free(line);

@@ -251,8 +251,8 @@ installertest.sh DAEMON SCUBED3CTL
 	an error; without the device mapper target crypt (dmsetup targets) it
 	runs modprobe dm-crypt and depmod, then an error. Configure scubed3: the existing store (its salt), a key store with the boot
 	passphrase; old is opened first (its passphrase, a wrong and the right
-	LUKS passphrase: its key and its LUKS passphrase go into the view of
-	the boot passphrase), root (60 MB, LUKS), hidden (20 MB, a hidden
+	LUKS passphrase: its key and its volume key go into the view of the
+	boot passphrase), root (60 MB, LUKS), hidden (20 MB, a hidden
 	passphrase: an empty one and two different ones are refused) and
 	home (20 MB, LUKS) are created (a note about a backup of the key
 	store), the layout is shown (the base device, the partitions with
@@ -264,9 +264,9 @@ installertest.sh DAEMON SCUBED3CTL
 	-k), a message is shown while the KDF and LUKS run; the views of the
 	key store; Configure scubed3 again: the passphrases are asked again
 	(a wrong one again, keys-derive three times), no view is lost; root
-	gets a passphrase of its own and its LUKS volume one (64 characters
-	are refused; at the end: root opens with its passphrase without the
-	key store, the one key of its LUKS volume is the passphrase, old keeps
+	gets a passphrase of its own, at finish its LUKS volume one of 200
+	characters (at the end: root opens with its passphrase without the key
+	store, the one keyslot of its LUKS volume has the passphrase, old keeps
 	its LUKS passphrase), hidden and home random keys;
 	init.d makes /dev/mapper/testhost-root and -home (the hostname is
 	testhost) disks in partman
@@ -362,11 +362,12 @@ keystoretest.sh DAEMON SCUBED3CTL
 	locked); keys-copy (the same partition under another name),
 	unlock-until (passphrases from a pipe, one answer each; at the end of
 	the input the next command is not done), luksopen-all, keys-import of
-	an open partition with LUKS (its LUKS passphrase is asked, the new
-	LUKS key opens it), an empty new passphrase is refused (key store
+	an open partition with LUKS (with its LUKS passphrase its volume key
+	goes into the key store, a wrong one is refused, the volume keeps one
+	keyslot), an empty new passphrase is refused (key store
 	passphrases are never generated); 300 new key stores with one view:
 	its slot is random (at least 50 of the 64 slots, at most 18 times the
-	same), keys shows it; keys-derive gives the key of a passphrase, -k
+	same), its default name is the slot (iNN); keys-derive gives the key of a passphrase, -k
 	unlocks and adds views with it (not with a passphrase or a wrong
 	key); two scubed3ctl on two daemons with one key store: a write after
 	the other wrote it is refused, keys-create does not replace an
@@ -377,11 +378,11 @@ keystoretest.sh DAEMON SCUBED3CTL
 	is on again; a temporary file of a gone process is removed by the next
 	write, keys-import leaves no key file; keys-add-passphrase (the
 	partition opens with its passphrase without the key store; empty: a
-	random key; two different ones are refused), keys-luks-passphrase (the
-	passphrase is the one key of the LUKS volume, it and the key store
-	open it; empty: a random key; 64 characters are refused; not for a
-	volume that exists); keys-import keeps the LUKS passphrase (a wrong one
-	is refused, no key is added). Uses fake-cryptsetup (CRYPTSETUP=path
+	random key; two different ones are refused), luksformat (one keyslot
+	with the passphrase, 300 characters, or a random key; the volume key
+	in the key store opens it); the names of views (asked at the s3>
+	prompt, only digits refused, name renames, keys-add and lock take the
+	name, with -c the default iNN and numbers). Uses fake-cryptsetup (CRYPTSETUP=path
 	for another cryptsetup).
 
 entropytest.sh DAEMON SCUBED3CTL

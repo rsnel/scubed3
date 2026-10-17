@@ -312,10 +312,12 @@ learns one passphrase sees its view, the other slots look like unused ones.
 
 With the key store unlocked, open, create, luksformat, mke2fs and mount use
 its keys instead of asking passphrases, luksopen opens a LUKS volume (as
-/dev/mapper/PREFIXNAME). A LUKS volume has ONE key: a random one (64
-bytes), or a passphrase (at most 63 characters, keys-luks-passphrase; then
-it also opens without the key store); it is given to cryptsetup on a pipe,
-never in a file. To change the key
+/dev/mapper/PREFIXNAME). The key store keeps the VOLUME KEY of a LUKS
+volume (random, 512 bits; cryptsetup open --volume-key-file, on a pipe,
+never in a file: no KDF runs, opening is fast, also at boot). The volume has
+ONE keyslot: luksformat asks its passphrase (twice, any length: with it the
+volume also opens without the key store), empty: a random key that is not
+kept (then only the key store opens it). To change the key
 store: keys-create, keys-passphrase-add, keys-passphrase-change [VIEW],
 keys-passphrase-remove [VIEW], keys-add-passphrase NAME [VIEW] (as keys-add,
 but the partition gets the key of a passphrase, asked twice, so that it
@@ -323,11 +325,9 @@ also opens without the key store; empty: a random key), keys-add NAME
 [VIEW] (new random keys, or the
 keys of NAME in another unlocked view: the same partition in more views),
 keys-import NAME [VIEW] (a partition with its own passphrase; if it is open
-and has LUKS on it, the passphrase of the LUKS volume is asked, checked and
-kept in the key store: the volume keeps its one key), keys-luks-passphrase
-NAME [VIEW] (the LUKS key of NAME becomes a passphrase, asked twice; empty:
-a new random key; before luksformat, a volume that exists keeps its key),
-keys-copy NAME1 NAME2 [VIEW] (NAME2 gets the keys of
+and has LUKS on it, the passphrase of the LUKS volume is asked, with it its
+volume key goes into the key store: cryptsetup luksDump --dump-volume-key,
+the volume is not changed), keys-copy NAME1 NAME2 [VIEW] (NAME2 gets the keys of
 NAME1: the same partition under another name, for example root for the
 initramfs; keys-remove NAME1 removes the old name), keys-remove NAME
 [VIEW]. More commands at once: scubed3ctl -c unlock-all -c open-all (the
@@ -352,9 +352,15 @@ the key of a partition 256 bits, the key of a LUKS volume 512 bits.
 
 A new view gets a slot chosen at random (getrandom(2)) among the slots that
 no unlocked view uses, not the first free one: the order in which the
-passphrases were added is not in the file. "view N" is only the order in
-which the views were unlocked by this run of scubed3ctl, keys shows the
-slot of every view ([slot S of 64]).
+passphrases were added is not in the file.
+
+A view has a name while it is unlocked (it is not in the key store): by
+default iNN, NN its slot (00 to 63, inherent to the view); at the s3> prompt
+unlock asks a name (empty: the default), "name VIEW NAME" renames it, keys
+shows the slot of a view with a name of its own ([slot iNN]). A VIEW
+argument is the name, or (for scripts) the number of the view in the order
+of unlocking (1, 2, ...); the name of a view is not only digits. With -c
+(scripts) no name is asked.
 
 The KDF of a passphrase takes seconds (with the default 16777216
 iterations; minutes in a slow virtual machine). A script that runs
@@ -410,7 +416,8 @@ create, luksopen, luksformat, mke2fs, mount and open-all refuse it (open-all
 opens nothing then), keys-add does not copy it. Lock one of the views first:
 
 	s3> lock VIEW		forgets an unlocked view (in memory; the views
-				after it get a lower number, keys shows them)
+				after it get a lower number in the order of
+				unlocking, their names stay)
 
 Both views can be unlocked at the same time to change the key store (a
 change needs all views unlocked, see above), only the ambiguous name cannot

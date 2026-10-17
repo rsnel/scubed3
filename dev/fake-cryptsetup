@@ -3,15 +3,18 @@
 # device mapper (a container): NO ENCRYPTION
 #
 # luksFormat writes a LUKS signature and the SHA-256 of the key (8 key
-# slots), open checks the key and maps the payload (after 1 MiB) with a
+# slots), and the volume key itself in hex (at 520; --volume-key-file gives
+# it, 64 bytes, otherwise a random one), open checks the key (or the volume
+# key with --volume-key-file) and maps the payload (after 1 MiB) with a
 # loop device as /dev/mapper/NAME (a device node; --test-passphrase: only
-# the check), luksAddKey adds a key
+# the check), luksDump --dump-volume-key shows the volume key (as
+# cryptsetup: MK bits, MK dump) after the key, luksAddKey adds a key
 # (after the existing one is given), close removes the mapping, isLuks looks
 # at the signature; keys come from --key-file (- is stdin) or are typed
 # (one line); -q: luksFormat does not ask for confirmation
 #
 # usage: put it in PATH as cryptsetup (see lukstest.sh, keystoretest.sh)
-q=; keyfile=; test=
+q=; keyfile=; test=; vkfile=; dumpvk=
 args=
 while [ $# -gt 0 ]; do
 	case $1 in
@@ -19,6 +22,10 @@ while [ $# -gt 0 ]; do
 	--test-passphrase) test=1;;
 	--type) shift;;
 	--type=*) ;;
+	--volume-key-file) shift; vkfile=$1;;
+	--volume-key-file=*) vkfile=${1#--volume-key-file=};;
+	--key-size) shift;;
+	--dump-volume-key) dumpvk=1;;
 	--key-file) shift; keyfile=$1;;
 	--key-file=*) keyfile=${1#--key-file=};;
 	*) args="$args $1";;
@@ -37,6 +44,8 @@ keyhash() {
 		printf '%s' "$p" | sha256sum
 	fi | cut -c1-64
 }
+# the volume key of $1 (hex)
+vk() { dd if="$1" bs=1 skip=520 count=128 2> /dev/null; }
 # the key hashes in the header of $1
 hashes() { dd if="$1" bs=1 skip=8 count=512 2> /dev/null | tr -d '\0' | fold -w 64; }
 
@@ -52,8 +61,24 @@ luksFormat)
 	if [ -z "$keyfile" ]; then
 		h2=$(keyhash "Verify passphrase: "); [ "$h" = "$h2" ] || exit 2
 	fi
+	if [ -n "$vkfile" ]; then
+		v=$(head -c 64 "$vkfile" | od -An -tx1 | tr -d ' \n')
+	else
+		v=$(head -c 64 /dev/urandom | od -An -tx1 | tr -d ' \n')
+	fi
+	[ ${#v} = 128 ] || { echo "Cannot read 64 bytes from keyfile $vkfile." >&2; exit 1; }
 	dd if=/dev/zero of="$2" bs=4096 count=256 conv=notrunc 2> /dev/null
-	printf 'LUKS\272\276\0\2%s' "$h" | dd of="$2" conv=notrunc 2> /dev/null;;
+	printf 'LUKS\272\276\0\2%s' "$h" | dd of="$2" conv=notrunc 2> /dev/null
+	printf '%s' "$v" | dd of="$2" bs=1 seek=520 conv=notrunc 2> /dev/null;;
+luksDump)
+	[ "$dumpvk" ] || { echo "LUKS header information"; exit 0; }
+	h=$(keyhash "Enter passphrase for $2: ")
+	hashes "$2" | grep -qx "$h" || { echo "No key available with this passphrase." >&2; exit 2; }
+	echo "LUKS header information for $2"
+	echo "MK bits:       	512"
+	printf 'MK dump:\t'
+	vk "$2" | sed 's/../& /g; s/ $//' | fold -w 48 | sed '2,$s/^/\t\t/'
+	echo;;
 luksAddKey)
 	h=$(keyhash "Enter any existing passphrase: ")
 	hashes "$2" | grep -qx "$h" || { echo "No key available with this passphrase." >&2; exit 2; }
@@ -61,8 +86,13 @@ luksAddKey)
 	new=$(sha256sum < "$3" | cut -c1-64)
 	printf '%s' "$new" | dd of="$2" bs=1 seek=$((8 + 64*n)) conv=notrunc 2> /dev/null;;
 open)
-	h=$(keyhash "Enter passphrase for $2: ")
-	hashes "$2" | grep -qx "$h" || { echo "No key available with this passphrase." >&2; exit 2; }
+	if [ -n "$vkfile" ]; then
+		[ "$(head -c 64 "$vkfile" | od -An -tx1 | tr -d ' \n')" = "$(vk "$2")" ] ||
+			{ echo "Volume key does not match the volume." >&2; exit 1; }
+	else
+		h=$(keyhash "Enter passphrase for $2: ")
+		hashes "$2" | grep -qx "$h" || { echo "No key available with this passphrase." >&2; exit 2; }
+	fi
 	[ "$test" ] && exit 0
 	dev=$(losetup -f --show -o 1048576 "$2") || exit 1
 	mkdir -p /dev/mapper; n=$(basename $dev); mm=$(cat /sys/block/$n/dev)

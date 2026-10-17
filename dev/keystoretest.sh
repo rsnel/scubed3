@@ -63,18 +63,18 @@ run "-c keys-create"
 size
 cp $K $T/k0
 run "-c unlock-all -c keys-passphrase-add" "" A A yes
-grep -q "view 1 is added" $T/out || fail "passphrase A"
+grep -q "view i[0-9][0-9] is added" $T/out || fail "passphrase A"
 size; [ "$(same $T/k0 $K)" = 0 ] || fail "the key store did not change completely"
 cp $K $T/k1
 run "-c unlock-all -c keys-passphrase-add" A "" B B yes
-grep -q "view 2 is added" $T/out || fail "passphrase B"
+grep -q "view i[0-9][0-9] is added" $T/out || fail "passphrase B"
 size; [ "$(same $T/k1 $K)" = 0 ] || fail "the key store did not change completely"
 ok "the file changes completely with every write, it has always $SIZE bytes"
 
 echo "2. partitions with keys from the store"
 run "-c unlock-all -c 'keys-add root 1' -c 'keys-add hid 2' -c 'keys-add shared 1' -c 'keys-add shared 2'" \
 	A B "" yes yes yes yes
-grep -q "copied from view 1 to view 2" $T/out || fail "shared is not copied"
+grep -q "copied from view i[0-9][0-9] to view i[0-9][0-9]" $T/out || fail "shared is not copied"
 run "-c unlock-all -c 'create root' -c 'create hid' -c 'create shared'" A B ""
 grep -qi "passphrase:" $T/out && grep -q "Enter passphrase" $T/out && fail "a passphrase was asked"
 for n in root:60 hid:40 shared:30; do ctl -c "resize ${n%:*} ${n#*:}" > /dev/null; done
@@ -85,7 +85,7 @@ ok "created with the keys from the store"
 
 echo "3. one passphrase"
 run "-c unlock -c keys" A
-sed -n '/^view 1/,$p' $T/out | sed 's/^/      /'
+sed -n '/^view /,$p' $T/out | sed 's/^/      /'
 grep -q "^  root \[LUKS\]" $T/out && grep -q "^  shared" $T/out || fail "view of A: $(cat $T/out)"
 grep -q "hid" $T/out && fail "A shows hid"
 run "-c unlock -c open-all" A
@@ -113,7 +113,7 @@ ctl -c "close old" > /dev/null
 ok "old is imported, it opens with the key from the store"
 
 echo "5. LUKS with the key from the store"
-run "-c unlock -c 'open root' -c 'luksformat root'" A yes yes
+run "-c unlock -c 'open root' -c 'luksformat root'" A yes yes "" "" yes
 cryptsetup isLuks $MNT/root || fail "luksformat: $(cat $T/out)"
 run "-c unlock -c 'luksopen root'" A
 [ -b /dev/mapper/scubed3-root ] || fail "luksopen: $(cat $T/out)"
@@ -168,10 +168,10 @@ run "-c keys-create"
 run "-c unlock-all -c keys-passphrase-add" "" C C yes
 run "-c unlock-all -c keys-passphrase-add" C "" D D yes
 run "-c unlock-all -c 'keys-import root 1' -c 'keys-import root 2'" C D "" pw-r1 yes pw-r2 yes
-grep -q "NOTE: view 1 has another partition \"root\"" $T/out || fail "no note at the import: $(cat $T/out)"
+grep -q "NOTE: view i[0-9][0-9] has another partition \"root\"" $T/out || fail "no note at the import: $(cat $T/out)"
 run "-c unlock-all -c keys" C D ""
-grep -q "WARNING: \"root\" is in view 2 and in view 1 with other keys" $T/out &&
-	grep -q "^  root (other keys in view 2" $T/out || fail "no warning: $(cat $T/out)"
+grep -q "WARNING: \"root\" is in view i[0-9][0-9] and in view i[0-9][0-9] with other keys" $T/out &&
+	grep -q "^  root (other keys in view i[0-9][0-9]" $T/out || fail "no warning: $(cat $T/out)"
 ok "the import and unlock-all warn, keys marks root in both views"
 run "-c unlock-all -c open-all" C D ""
 grep -q "nothing is opened" $T/out || fail "open-all: $(cat $T/out)"
@@ -191,20 +191,21 @@ ok "after lock 2 / lock 1, root opens the partition of the view that is left"
 echo "10. keys-copy, unlock-until, luksopen-all"
 K=$T/keys
 run "-c unlock -c 'keys-copy old r00t'" A2 yes
-grep -q '"r00t" has the keys of "old" in view 1' $T/out || fail "keys-copy: $(cat $T/out)"
+grep -q '"r00t" has the keys of "old" in view i[0-9][0-9]' $T/out || fail "keys-copy: $(cat $T/out)"
 run "-c unlock -c 'keys-copy old r00t'" A2
-grep -q '"r00t" is in view 1 already' $T/out || fail "keys-copy to an existing name: $(cat $T/out)"
+grep -q '"r00t" is in view i[0-9][0-9] already' $T/out || fail "keys-copy to an existing name: $(cat $T/out)"
 run "-c unlock -c 'open r00t'" A2
 cmp -s -n 100000 $T/data $MNT/r00t || fail "r00t is not the partition old"
 ctl -c "close r00t" > /dev/null
 ok "keys-copy old r00t: r00t opens the partition old, a second copy is refused"
 K=$T/keys2
 printf 'wrong\nQ\nP\n' | ctl -c "unlock-until old" -c keys > $T/out 2> /dev/null
-printf 'no view for this passphrase\nview 1: 2 entries, without "old"\n"old" is in view 2\n' > $T/expect
-head -n 3 $T/out | cmp -s - $T/expect || fail "unlock-until: $(cat $T/out)"
-grep -q "^view 1:" $T/out && grep -q "^view 2:" $T/out || fail "the views after unlock-until: $(cat $T/out)"
+[ "$(sed -n 1p $T/out)" = "no view for this passphrase" ] &&
+	sed -n 2p $T/out | grep -qx 'view i[0-9][0-9]: 2 entries, without "old"' &&
+	sed -n 3p $T/out | grep -qx '"old" is in view i[0-9][0-9]' || fail "unlock-until: $(cat $T/out)"
+grep -q "^view i[0-9][0-9]:" $T/out && grep -q "^view i[0-9][0-9]:" $T/out || fail "the views after unlock-until: $(cat $T/out)"
 printf 'Q\n' | ctl -c "unlock-until old" -c keys > $T/out 2> /dev/null && fail "unlock-until without old succeeds"
-grep -q '^no view with "old" is unlocked' $T/out && ! grep -q "^view 1: \[slot" $T/out ||
+grep -q '^no view with "old" is unlocked' $T/out && ! grep -q "^view i[0-9][0-9]:$" $T/out ||
 	fail "unlock-until at the end of the input: $(cat $T/out)"
 ok "unlock-until: one answer per passphrase, the views stay unlocked; at the end of the input the next command is not done"
 K=$T/keys
@@ -218,7 +219,7 @@ ok "luksopen-all root: the LUKS volume of root with its key from the store"
 printf 'plainpw\nplainpw\n' | ctl -c "create plain" -c "resize plain 30" > /dev/null
 [ -e $MNT/plain ] || fail "create plain"
 run "-c unlock -c 'luksstatus root'" A2
-grep -q "^root: LUKS2 header, its LUKS key is in view 1 of the key store, /dev/loop[0-9]* open as /dev/mapper/scubed3-root$" $T/out ||
+grep -q "^root: LUKS2 header, its LUKS volume key is in view i[0-9][0-9] of the key store, /dev/loop[0-9]* open as /dev/mapper/scubed3-root$" $T/out ||
 	fail "luksstatus root: $(cat $T/out)"
 l=$(losetup -f --show $MNT/plain) || fail "losetup plain"
 mke2fs -q -F $l > $T/mkfs.out 2>&1 || fail "mke2fs on plain: $(cat $T/mkfs.out)"
@@ -237,19 +238,19 @@ run "-c 'create lk'" lpw lpw
 ctl -c "resize lk 20" > /dev/null
 printf 'lukspw' | cryptsetup -q luksFormat --key-file=- $MNT/lk || fail "luksFormat lk"
 run "-c unlock -c 'keys-import lk 1'" A2 lpw wrongpw yes
-grep -q 'this passphrase does not open the LUKS volume on "lk"' $T/out || fail "keys-import with a wrong LUKS passphrase: $(cat $T/out)"
+grep -q 'the volume key of the LUKS volume on "lk" is not in the key store' $T/out || fail "keys-import with a wrong LUKS passphrase: $(cat $T/out)"
 run "-c unlock -c 'keys-remove lk 1'" A2 yes
 run "-c unlock -c 'keys-import lk 1'" A2 lpw lukspw yes
-grep -q 'the passphrase of the LUKS volume on "lk" is in the key store' $T/out || fail "keys-import with LUKS: $(cat $T/out)"
+grep -q 'the volume key of the LUKS volume on "lk" is in the key store' $T/out || fail "keys-import with LUKS: $(cat $T/out)"
 lh() { dd if=$MNT/$1 bs=1 skip=8 count=512 2> /dev/null | tr -d '\0' | fold -w 64 | grep -c .; }
 [ "$(lh lk)" = 1 ] || fail "the LUKS volume of lk has $(lh lk) keys"
 ctl -c "close lk" > /dev/null
 run "-c unlock -c 'open lk' -c 'luksopen lk' -c keys" A2
 [ -b /dev/mapper/scubed3-lk ] || fail "luksopen lk with the imported passphrase: $(cat $T/out)"
-grep -q "^  lk \[LUKS, passphrase\]" $T/out || fail "keys does not show the LUKS passphrase of lk: $(cat $T/out)"
+grep -q "^  lk \[LUKS\]" $T/out || fail "keys does not show LUKS for lk: $(cat $T/out)"
 cryptsetup close scubed3-lk
 ctl -c "close lk" > /dev/null
-ok "keys-import of an open partition with LUKS: its passphrase is checked and goes into the key store (one key, nothing is added)"
+ok "keys-import of an open partition with LUKS: with its passphrase its volume key goes into the key store (the volume is not changed)"
 cp $K $T/keys.before
 run "-c unlock-all -c keys-passphrase-add" A2 "" "" ""
 grep -q "^no passphrase" $T/out || fail "an empty new passphrase: $(cat $T/out)"
@@ -271,30 +272,30 @@ while [ $i -lt 300 ]; do
 	rm -f $T/k1
 	ctl -K $T/k1 -c keys-create > /dev/null
 	printf '\nS\nS\n' | ctl -K $T/k1 -c unlock-all -c keys-passphrase-add |
-		sed -n 's/.*view 1 is added (empty, in slot \([0-9]*\) of 64, chosen at random)$/\1/p' >> $T/slots
+		sed -n 's/.*view i\([0-9][0-9]\) is added (empty, in slot i\1 of i00..i63, chosen at random)$/\1/p' >> $T/slots
 	i=$((i + 1))
 done
 [ "$(wc -l < $T/slots)" = 300 ] || fail "the slot of a new view is not shown"
 n=$(sort -u $T/slots | wc -l); max=$(sort $T/slots | uniq -c | sort -n | tail -n 1 | awk '{ print $1 }')
 [ $n -ge 50 ] && [ $max -le 18 ] || fail "the slots are not random: $n slots used, one $max times"
 printf 'S\n' | ctl -K $T/k1 -c unlock -c keys > $T/out
-grep -q "^view 1: (empty) \[slot $(tail -n 1 $T/slots) of 64\]$" $T/out || fail "keys shows no slot: $(cat $T/out)"
-ok "300 new views are in $n of the 64 slots (at most $max in one), keys shows the slot"
+grep -q "^view i$(tail -n 1 $T/slots): (empty)$" $T/out || fail "keys does not show the view by its slot: $(cat $T/out)"
+ok "300 new views are in $n of the 64 slots (at most $max in one), their default name is the slot (iNN)"
 key=$(printf 'S\n' | ctl -K $T/k1 -c keys-derive | sed -n 's/.*key: \([0-9a-f]\{64\}\)$/\1/p')
 [ ${#key} = 64 ] || fail "keys-derive: $(printf 'S\n' | ctl -K $T/k1 -c keys-derive)"
 printf '%s\n' "$key" | ctl -k -K $T/k1 -c unlock -c keys > $T/out
-grep -q "view 1: 0 entries" $T/out || fail "-k unlock with the key: $(cat $T/out)"
+grep -q "view i[0-9][0-9]: 0 entries" $T/out || fail "-k unlock with the key: $(cat $T/out)"
 printf '%s\n' "$key" | tr a-f A-F | ctl -k -K $T/k1 -c unlock > $T/out
-grep -q "view 1: 0 entries" $T/out || fail "-k unlock with the key in capitals: $(cat $T/out)"
+grep -q "view i[0-9][0-9]: 0 entries" $T/out || fail "-k unlock with the key in capitals: $(cat $T/out)"
 printf 'S\n' | ctl -k -K $T/k1 -c unlock > $T/out && fail "-k takes a passphrase"
 grep -q "not a key" $T/out || fail "-k with a passphrase: $(cat $T/out)"
 printf '%s\n' "${key%?}" | ctl -k -K $T/k1 -c unlock > $T/out && fail "-k takes 63 digits"
 # a view added with -k (its key from keys-derive) opens with the passphrase
 key2=$(printf 'T\n' | ctl -K $T/k1 -c keys-derive | sed -n 's/.*key: \([0-9a-f]\{64\}\)$/\1/p')
 printf '%s\n\n%s\n%s\n' "$key" "$key2" "$key2" | ctl -k -K $T/k1 -c unlock-all -c keys-passphrase-add > $T/out
-grep -q "view 2 is added" $T/out || fail "-k keys-passphrase-add: $(cat $T/out)"
+grep -q "view i[0-9][0-9] is added" $T/out || fail "-k keys-passphrase-add: $(cat $T/out)"
 printf 'T\n' | ctl -K $T/k1 -c unlock > $T/out
-grep -q "view 1: 0 entries" $T/out || fail "the passphrase of a view added with -k: $(cat $T/out)"
+grep -q "view i[0-9][0-9]: 0 entries" $T/out || fail "the passphrase of a view added with -k: $(cat $T/out)"
 ok "keys-derive gives the key of a passphrase, -k unlocks and adds views with it (not with a passphrase or a wrong key)"
 
 echo "12. two scubed3ctl at the same time"
@@ -315,14 +316,14 @@ $FUSERMOUNT -u $T/mnt2
 grep -q "the key store is written" $T/outB || fail "B: $(cat $T/outB)"
 grep -q "is NOT written: another scubed3ctl changed it" $T/outA || fail "A: $(cat $T/outA)"
 printf 'V\n' | ctl -K $T/k1 -c unlock > $T/out
-grep -q "view 1: 0 entries" $T/out || fail "the view of B is lost: $(cat $T/out)"
+grep -q "view i[0-9][0-9]: 0 entries" $T/out || fail "the view of B is lost: $(cat $T/out)"
 printf 'U\n' | ctl -K $T/k1 -c unlock > $T/out
 grep -q "no view for this passphrase" $T/out || fail "the view of A is written: $(cat $T/out)"
 ls $T | grep -q '\.new' && fail "a temporary file is left: $(ls $T)"
 ok "a write after another scubed3ctl wrote the key store is refused (it would lose that change)"
 ctl -K $T/k1 -c keys-create > $T/out
 grep -q "unable to create the key store" $T/out || fail "keys-create over a key store: $(cat $T/out)"
-printf 'V\n' | ctl -K $T/k1 -c unlock | grep -q "view 1: 0 entries" || fail "keys-create changed the key store"
+printf 'V\n' | ctl -K $T/k1 -c unlock | grep -q "view i[0-9][0-9]: 0 entries" || fail "keys-create changed the key store"
 ok "keys-create does not replace an existing key store"
 
 echo "13. waiting for the daemon, killed scubed3ctl"
@@ -367,7 +368,7 @@ rm -f $T/k1.new.$$
 ls /run | grep -q scubed3ctl- && fail "a key file is in /run"
 ok "a temporary file of a killed write is removed by the next write, keys-import leaves no key file"
 
-echo "14. keys-add-passphrase, keys-luks-passphrase"
+echo "14. keys-add-passphrase, luksformat with a passphrase"
 printf 'S\n\npp3pass\npp3pass\n' | ctl -K $T/k1 -c unlock-all -c "keys-add-passphrase p3 1" -c "create p3" -c "resize p3 10" > $T/out
 grep -q '"p3" has the key of its passphrase' $T/out && [ -e $MNT/p3 ] || fail "keys-add-passphrase p3: $(cat $T/out)"
 ctl -c "close p3" > /dev/null
@@ -378,27 +379,50 @@ grep -q '"p4" has new random keys' $T/out || fail "keys-add-passphrase with an e
 printf 'S\n\nxx\nyy\n' | ctl -K $T/k1 -c unlock-all -c "keys-add-passphrase p5 1" > $T/out
 grep -q "passphrases do not match" $T/out && ! grep -q '"p5"' $T/out || fail "two different passphrases: $(cat $T/out)"
 ok "keys-add-passphrase: the partition opens with its passphrase without the key store; empty: a random key"
-# the LUKS volume of p3 gets a passphrase (its only key), p4 a new random
-# key (empty); too long (64) is refused; a volume that exists keeps its key
-printf 'S\n\nlp3pass\nlp3pass\n' | ctl -K $T/k1 -c unlock-all -c "keys-luks-passphrase p3 1" -c "luksformat p3" -c keys > $T/out
-grep -q 'the LUKS volume of "p3" gets this passphrase' $T/out && grep -q "^  p3 \[LUKS, passphrase\]" $T/out ||
-	fail "keys-luks-passphrase p3: $(cat $T/out)"
-[ "$(lh p3)" = 1 ] || fail "the LUKS volume of p3 has $(lh p3) keys"
+# luksformat: the volume key goes into the key store, the one keyslot gets
+# the passphrase (any length: 300 characters) or a random key (empty)
+long=$(printf 'lp3pass%0293d' 0)
+printf 'S\n\n%s\n%s\n' $long $long | ctl -K $T/k1 -c unlock-all -c "luksformat p3" -c "luksstatus p3" > $T/out
+grep -q '"p3" is formatted, its volume key is in the key store' $T/out &&
+	grep -q "its LUKS volume key is in view i[0-9][0-9] of the key store" $T/out || fail "luksformat p3: $(cat $T/out)"
+[ "$(lh p3)" = 1 ] || fail "the LUKS volume of p3 has $(lh p3) keyslots"
 lh1() { dd if=$MNT/$1 bs=1 skip=8 count=64 2> /dev/null; }
-[ "$(lh1 p3)" = "$(printf lp3pass | sha256sum | cut -c1-64)" ] || fail "the key of the LUKS volume of p3 is not its passphrase"
-printf 'lp3pass' | cryptsetup open --key-file=- $MNT/p3 lp3 && cryptsetup close lp3 || fail "the LUKS passphrase does not open p3"
+[ "$(lh1 p3)" = "$(printf %s $long | sha256sum | cut -c1-64)" ] || fail "the keyslot of p3 has not its passphrase"
+printf %s $long | cryptsetup open --key-file=- $MNT/p3 lp3 && cryptsetup close lp3 || fail "the passphrase does not open p3"
 printf 'S\n\n' | ctl -K $T/k1 -c unlock-all -c "luksopen p3" > /dev/null
-[ -b /dev/mapper/scubed3-p3 ] || fail "the key store does not open the LUKS volume of p3"
+[ -b /dev/mapper/scubed3-p3 ] || fail "the volume key in the key store does not open p3"
 cryptsetup close scubed3-p3
-printf 'S\n\nother\nother\n' | ctl -K $T/k1 -c unlock-all -c "keys-luks-passphrase p3 1" > $T/out
-grep -q 'has a LUKS volume already, it keeps its key' $T/out || fail "keys-luks-passphrase of an existing volume: $(cat $T/out)"
-long=$(printf '%064d' 0)
-printf 'S\n\n%s\n%s\n' $long $long | ctl -K $T/k1 -c unlock-all -c "keys-luks-passphrase p4 1" > $T/out
-grep -q 'too long' $T/out || fail "a LUKS passphrase of 64 characters: $(cat $T/out)"
-printf 'S\n\n\n\n' | ctl -K $T/k1 -c unlock-all -c "keys-luks-passphrase p4 1" -c keys > $T/out
-grep -q 'gets a new random key' $T/out && grep -q "^  p4 \[LUKS\]$" $T/out || fail "keys-luks-passphrase empty: $(cat $T/out)"
+printf 'S\n\n\n\n' | ctl -K $T/k1 -c unlock-all -c "luksformat p3" > $T/out
+[ "$(lh p3)" = 1 ] && [ "$(lh1 p3)" != "$(printf %s $long | sha256sum | cut -c1-64)" ] || fail "luksformat without a passphrase: $(cat $T/out)"
+printf %s $long | cryptsetup open --test-passphrase --key-file=- $MNT/p3 2> /dev/null && fail "the old passphrase opens p3"
+printf 'S\n\n' | ctl -K $T/k1 -c unlock-all -c "luksopen p3" > /dev/null
+[ -b /dev/mapper/scubed3-p3 ] || fail "the volume key does not open p3 (no passphrase)"
+cryptsetup close scubed3-p3
+printf 'S\n\nab\ncd\n' | ctl -K $T/k1 -c unlock-all -c "luksformat p3" > $T/out
+grep -q "passphrases do not match" $T/out && ! grep -q "is formatted, its volume key" $T/out || fail "two different passphrases: $(cat $T/out)"
 ctl -c "close p3" > /dev/null
-ok "keys-luks-passphrase: the passphrase is the one key of the LUKS volume (it and the key store open it); empty: a random key; not for a volume that exists"
+ok "luksformat: one keyslot with the passphrase (300 characters) or a random key, the volume key is in the key store (it opens the volume)"
+
+echo "15. the names of the views"
+# at the s3> prompt unlock asks a name (only digits is refused), keys
+# shows it and the slot, name renames, lock and keys-add take the name
+(for l in unlock S 12 work keys "name work home2" "keys-add z9 home2" yes keys "lock home2" keys quit; do
+	sleep 1; printf '%s\n' "$l"; done; sleep 1) |
+	script -qc "$C -C $T/s3.conf -K $T/k1" /dev/null | tr -d '\r' |
+	sed 's/\x1b\[?2004[hl]//g' > $T/out
+grep -q "the name of a view is not only digits" $T/out && grep -q "view work: [0-9]* entries" $T/out ||
+	fail "unlock with a name: $(cat $T/out)"
+grep -q "^view work:.* \[slot i[0-9][0-9]\]$" $T/out || fail "keys with a name: $(cat $T/out)"
+grep -q "view work is now view home2 (slot i[0-9][0-9]" $T/out && grep -q '"z9" has new random keys in view home2' $T/out &&
+	grep -q "view home2 is locked" $T/out || fail "name, keys-add, lock: $(cat $T/out)"
+# with -c (scripts): the default name, the slot
+printf 'S\n' | ctl -K $T/k1 -c unlock -c keys > $T/out
+slot=$(sed -n 's/.*view i\([0-9][0-9]\): [0-9]* entries$/\1/p' $T/out)
+[ -n "$slot" ] && grep -q "^view i$slot:$" $T/out || fail "the default name: $(cat $T/out)"
+printf 'S\n' | ctl -K $T/k1 -c unlock -c "name i$slot x1" -c "name 1 x2" -c keys > $T/out
+grep -q "view i$slot is now view x1" $T/out && grep -q "view x1 is now view x2" $T/out &&
+	grep -q "^view x2: \[slot i$slot\]$" $T/out || fail "name with -c: $(cat $T/out)"
+ok "the names of views: asked at the s3> prompt (default iNN, the slot), name renames, commands take the name (or the number)"
 
 cleanup
 echo "KEYSTORETEST OK"

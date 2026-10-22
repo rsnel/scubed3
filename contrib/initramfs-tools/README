@@ -67,7 +67,7 @@ without the key store (the old initramfs is kept). After a change of the
 key store, run update-initramfs -u. ROOT_PARTITION (of an older version) is
 not used anymore: root is always the partition root of the key store; to
 boot a partition with another name, give it the name root in the key store
-(scubed3ctl: keys-copy NAME root, then keys-remove NAME).
+(keystorectl: copy NAME root, remove NAME, save).
 
 
 Installation
@@ -86,10 +86,12 @@ Installation
    store) and copy the system into it, for example (from the running
    system, or from a live system):
 
-	# scubed3ctl
-	s3> keys-setup		(a passphrase, the partition root in its view;
+	# keystorectl
+	keys> setup		(a passphrase, the partition root in its view;
 				 another passphrase for hidden partitions)
-	s3> unlock-all
+	keys> quit
+	# scubed3ctl
+	s3> unlock		(the passphrase of the view of root)
 	s3> create root
 	s3> resize root 2000
 	s3> luksformat root
@@ -97,8 +99,8 @@ Installation
 	s3> mount root /mnt/newroot
 	# rsync -aHAXx / /mnt/newroot/
 
-   An existing partition with another name: keys-import NAME (its
-   passphrase, and of its LUKS volume), keys-copy NAME root.
+   An existing partition with another name: keystorectl import NAME (its
+   passphrase, and of its LUKS volume), copy NAME root, save.
 
    and in the new system: /etc/fstab with the root file system
    (UUID=... of the file system in the partition), /boot on a normal

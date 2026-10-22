@@ -94,8 +94,10 @@ Installing on scubed3, step by step
      boot passphrase are opened (with the volume key: no KDF)
    - the KDF of a passphrase takes long (seconds, minutes without KVM):
      the installer computes it once per passphrase of the key store
-     (scubed3ctl keys-derive) and keeps the key in its memory (the
-     commands get it with scubed3ctl -k), a message is shown while it
+     (keystorectl derive) and keeps the key in its memory (the commands
+     get it with keystorectl -k and scubed3ctl -k: keystorectl changes the
+     key store, with -c save, scubed3ctl uses the keys of one view to
+     create and luksformat the partitions), a message is shown while it
      runs (also while a partition is opened and while LUKS is set up),
      its bar moves: to 90% at the duration of the last time (10 seconds
      the first time), then slower
@@ -198,7 +200,8 @@ libraries of its installer):
 
 builds, with dpkg-deb (no debhelper needed):
 
-	scubed3-udeb_VERSION_ARCH.udeb	the daemon and scubed3ctl (built
+	scubed3-udeb_VERSION_ARCH.udeb	the daemon, scubed3ctl and
+					keystorectl (built
 					--without-readline, statically
 					linked: configure
 					--enable-static-programs) and the

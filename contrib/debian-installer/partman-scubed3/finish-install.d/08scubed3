@@ -60,11 +60,13 @@ if ! apt-install scubed3; then
 	logger -t scubed3-finish "no package scubed3, the programs of the installer are copied"
 	mkdir -p /target/usr/local/sbin /target/etc/initramfs-tools/hooks \
 		/target/etc/initramfs-tools/scripts/local-top
-	cp /usr/sbin/scubed3 /usr/sbin/scubed3ctl /target/usr/local/sbin/
+	cp /usr/sbin/scubed3 /usr/sbin/scubed3ctl /usr/sbin/keystorectl \
+		/target/usr/local/sbin/
 	cp $SHARE/initramfs-tools/hooks/scubed3 /target/etc/initramfs-tools/hooks/
 	cp $SHARE/initramfs-tools/scripts/local-top/scubed3 \
 		/target/etc/initramfs-tools/scripts/local-top/
 	chmod 755 /target/usr/local/sbin/scubed3 /target/usr/local/sbin/scubed3ctl \
+		/target/usr/local/sbin/keystorectl \
 		/target/etc/initramfs-tools/hooks/scubed3 \
 		/target/etc/initramfs-tools/scripts/local-top/scubed3
 	# the libraries of the programs (libgcrypt is in every system)

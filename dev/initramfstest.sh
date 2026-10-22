@@ -51,6 +51,8 @@ printf 'BASE=%s\nOPTIONS="-m 12 -M 16"\n' $P/base > $P/conf/scubed3.conf
 cp $D "$P/sbin/@scubed3"
 printf '#!/bin/sh\nPATH=%s/sbin:$PATH exec %s -C %s/etc/scubed3.conf "$@"\n' $P $C $P > $P/sbin/scubed3ctl
 chmod +x $P/sbin/scubed3ctl
+# keystorectl (only to make the key store, it is not in the initramfs)
+K=$(dirname $C)/keystorectl
 ln -s "$(command -v losetup)" $P/sbin/losetup-util
 ln -s $S/dev/fake-cryptsetup $P/sbin/cryptsetup
 # askpass: the prompt on stderr, the passphrase (a line of stdin) on stdout
@@ -80,14 +82,16 @@ typed() {
 	(for l in "$@"; do sleep 1; printf '%s\n' "$l"; done; sleep 3) |
 		script -qc "$cmd" /dev/null | tr -d '\r' > $P/out
 }
+k="$K -C $P/etc/scubed3.conf -K $KS"
 c="$P/sbin/scubed3ctl -K $KS"
-typed "$c -c keys-create -c unlock-all -c keys-passphrase-add" "" A A yes
-typed "$c -c unlock-all -c keys-passphrase-add" A "" H H yes
-typed "$c -c unlock-all -c 'keys-add root 1' -c 'keys-add home 1' -c 'keys-add hidden 2' -c 'create root' -c 'create home' -c 'create hidden'" \
-	A H "" yes yes yes
+typed "$k -c create -c unlock-all -c passphrase-add -c save" "" A A yes
+typed "$k -c unlock-all -c passphrase-add -c save" A "" H H yes
+typed "$k -c unlock-all -c 'add root 1' -c 'add home 1' -c 'add hidden 2' -c save" A H "" yes
+grep -q "the key store is written" $P/out || fail "the key store: $(cat $P/out)"
+typed "$c -c unlock -c 'create root' -c 'create home' -c unlock -c 'create hidden'" A H
 for n in root:60 home:30 hidden:30; do $P/sbin/scubed3ctl -q -YYY -c "resize ${n%:*} ${n#*:}" > /dev/null; done
-typed "$c -c unlock-all -c 'luksformat root' -c 'luksformat home' -c 'luksformat hidden' -c 'mke2fs root' -c 'mount root $FS'" \
-	A H "" yes yes "" "" yes yes yes "" "" yes yes yes "" "" yes yes yes
+typed "$c -c unlock -c 'luksformat hidden' -c unlock -c 'luksformat root' -c 'luksformat home' -c 'mke2fs root' -c 'mount root $FS'" \
+	H yes yes "" "" A yes yes "" "" yes yes "" "" yes yes
 mountpoint -q $FS || fail "the LUKS volume is not mounted: $(cat $P/out)"
 echo "the root file system on LUKS" > $FS/marker
 typed "$P/sbin/scubed3ctl -c 'umount root'"

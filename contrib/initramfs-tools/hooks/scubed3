@@ -50,7 +50,7 @@ if [ ! -f /etc/scubed3.keys ]; then
 fi
 if grep -q '^[[:space:]]*ROOT_PARTITION=' "$CONF"; then
 	echo "W: scubed3 hook: ROOT_PARTITION in $CONF is not used anymore, root is" >&2
-	echo "W: the partition root of the key store (keys-copy NAME root: the name root)" >&2
+	echo "W: the partition root of the key store (keystorectl copy NAME root: the name root)" >&2
 fi
 
 # a process whose argv[0] starts with @ is not killed by systemd at

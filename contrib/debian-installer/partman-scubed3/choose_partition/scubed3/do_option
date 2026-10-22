@@ -175,12 +175,13 @@ do_create () {
 	if [ "$PASS" ]; then
 		s3_busy open
 		printf '%s\n%s\n' "$PASS" "$PASS" |
-			s3ks -c "keys-add-passphrase $name $VIEW" -c "create $name"
+			s3ks -c "add-passphrase $name $VIEW" -c save
 		s3_busy_done
 	else
-		s3ks -c "keys-add $name $VIEW" -c "create $name" < /dev/null
+		s3ks -c "add $name $VIEW" -c save < /dev/null
 	fi
 	PASS=
+	s3view $VIEW -c "create $name" < /dev/null
 	if [ ! -e $S3MNT/$name ] || ! s3ctl -c "resize $name $blocks"; then
 		s3_error partman-scubed3/create_failed "$name"
 		return 0
@@ -251,9 +252,9 @@ do_open () {
 	fi
 	s3_busy open
 	if [ "$luks" ]; then
-		printf '%s\n%s\n' "$pass" "$luks" | s3ks -c "keys-import $name $VIEW"
+		printf '%s\n%s\n' "$pass" "$luks" | s3ks -c "import $name $VIEW" -c save
 	else
-		printf '%s\n' "$pass" | s3ks -c "keys-import $name $VIEW"
+		printf '%s\n' "$pass" | s3ks -c "import $name $VIEW" -c save
 	fi
 	s3_busy_done
 	pass=; luks=
@@ -322,7 +323,7 @@ do_finish () {
 			db_metaget partman-scubed3/text/new_luks_description description
 			s3_ask_passphrase "$(printf "$RET" "$name")" yes empty || return 1
 			s3_busy luks
-			printf '%s\n%s\n' "$PASS" "$PASS" | s3ks -c "luksformat $name"
+			printf '%s\n%s\n' "$PASS" "$PASS" | s3view $view -c "luksformat $name"
 			s3_busy_done
 			PASS=
 			if ! cryptsetup isLuks $S3MNT/$name 2>/dev/null; then
@@ -332,7 +333,7 @@ do_finish () {
 		fi
 		[ "$view" = 1 ] || continue
 		s3_busy luks
-		s3ks -c "luksopen $name" < /dev/null
+		s3view $view -c "luksopen $name" < /dev/null
 		s3_busy_done
 		if [ ! -b $(s3_luks_dev $name) ]; then
 			s3_error partman-scubed3/luks_failed "$name"

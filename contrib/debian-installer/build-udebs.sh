@@ -3,7 +3,8 @@
 # debian-installer (see README), with dpkg-deb, on a Debian system of the
 # release that is installed:
 #
-#	scubed3-udeb_VERSION_ARCH.udeb	the daemon and scubed3ctl (without
+#	scubed3-udeb_VERSION_ARCH.udeb	the daemon, scubed3ctl and
+#					keystorectl (without
 #					readline, statically linked) for the
 #					installer, and the initramfs-tools
 #					scripts
@@ -57,7 +58,7 @@ build() {
 	if [ "$static" ] && ldd src/scubed3 > /dev/null 2>&1; then
 		fail "src/scubed3 is not linked statically (see $B/make-$1.log)"
 	fi
-	strip --strip-unneeded src/scubed3 src/scubed3ctl
+	strip --strip-unneeded src/scubed3 src/scubed3ctl src/keystorectl
 }
 build yes
 build no
@@ -83,7 +84,8 @@ shlibdeps() {
 P=$B/scubed3-udeb
 mkdir -p $P/DEBIAN $P/usr/sbin $P/usr/share/scubed3/initramfs-tools/hooks \
 	$P/usr/share/scubed3/initramfs-tools/scripts/local-top
-cp $B/src-no/src/scubed3 $B/src-no/src/scubed3ctl $P/usr/sbin/
+cp $B/src-no/src/scubed3 $B/src-no/src/scubed3ctl $B/src-no/src/keystorectl \
+	$P/usr/sbin/
 cp "$TOP/contrib/initramfs-tools/hooks/scubed3" \
 	$P/usr/share/scubed3/initramfs-tools/hooks/
 cp "$TOP/contrib/initramfs-tools/scripts/local-top/scubed3" \
@@ -94,7 +96,7 @@ if [ $STATIC = yes ]; then
 	DEPENDS=
 else
 	DEPENDS="Depends: $(shlibdeps udeb "libfuse3-4-udeb | libfuse3-3-udeb, libgcrypt20-udeb, libgpg-error0-udeb" \
-		$P/usr/sbin/scubed3 $P/usr/sbin/scubed3ctl)"
+		$P/usr/sbin/scubed3 $P/usr/sbin/scubed3ctl $P/usr/sbin/keystorectl)"
 fi
 cat > $P/DEBIAN/control <<EOF
 Package: scubed3-udeb
@@ -151,7 +153,8 @@ dpkg-deb -Zxz --root-owner-group -b $P "$OUT/partman-scubed3_${VERSION}_all.udeb
 P=$B/scubed3
 mkdir -p $P/DEBIAN $P/usr/sbin $P/usr/share/initramfs-tools/hooks \
 	$P/usr/share/initramfs-tools/scripts/local-top $P/usr/share/doc/scubed3
-cp $B/src-yes/src/scubed3 $B/src-yes/src/scubed3ctl $P/usr/sbin/
+cp $B/src-yes/src/scubed3 $B/src-yes/src/scubed3ctl \
+	$B/src-yes/src/keystorectl $P/usr/sbin/
 cp "$TOP/contrib/initramfs-tools/hooks/scubed3" $P/usr/share/initramfs-tools/hooks/
 cp "$TOP/contrib/initramfs-tools/scripts/local-top/scubed3" \
 	$P/usr/share/initramfs-tools/scripts/local-top/
@@ -175,7 +178,7 @@ License: GPL-3+
  3 can be found in the file /usr/share/common-licenses/GPL-3.
 EOF
 DEPS=$(shlibdeps deb "libfuse3-4 | libfuse3-3, libgcrypt20, libgpg-error0, libreadline8t64 | libreadline8" \
-	$P/usr/sbin/scubed3 $P/usr/sbin/scubed3ctl)
+	$P/usr/sbin/scubed3 $P/usr/sbin/scubed3ctl $P/usr/sbin/keystorectl)
 cat > $P/DEBIAN/control <<EOF
 Package: scubed3
 Source: scubed3
@@ -190,7 +193,8 @@ Homepage: https://penta.snel.it/~rsnel/scubed/
 Description: Simple Steganographic Store: deniable encrypted partitions
  scubed3 hides any number of encrypted partitions in one device full of
  random data. Without its passphrase a partition cannot be told apart from
- unused space. The partitions are files (FUSE), managed with scubed3ctl.
+ unused space. The partitions are files (FUSE), managed with scubed3ctl;
+ their keys can be in a key store (keystorectl).
  .
  With /etc/scubed3/initramfs.conf the root file system can be on a scubed3
  partition (initramfs-tools).

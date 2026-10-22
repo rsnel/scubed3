@@ -22,15 +22,16 @@
 #    its mount point is below /dev and its control socket below /run, the
 #    initramfs moves both to the real root
 # 2. passphrases of the key store are asked until one has a view with
-#    "root"; a passphrase of another view (with hidden partitions) unlocks
-#    it, and gets the message of a wrong passphrase: type it first, then
-#    the passphrase of root; after TRIES passphrases (default 3, 0: no
-#    limit) without root, the message of cryptroot and the boot goes on
-#    without a root device (as with cryptroot)
-# 3. all partitions of the unlocked views are opened (in paranoia level 2
+#    "root"; a passphrase of another view (with hidden partitions) opens
+#    its partitions (scubed3ctl unlock-until: one view at a time), and gets
+#    the message of a wrong passphrase: type it first, then the passphrase
+#    of root; after TRIES passphrases (default 3, 0: no limit) without
+#    root, the message of cryptroot and the boot goes on without a root
+#    device (as with cryptroot)
+# 3. the partitions of the view of root are opened (in paranoia level 2
 #    and 3 ALL partitions must be open: all of them must be in the views
-#    that are unlocked at boot), and the LUKS volumes of the view of root
-#    (/dev/mapper/PREFIXNAME, with their keys from the key store, for
+#    of the passphrases that are typed at boot), and their LUKS volumes
+#    (/dev/mapper/PREFIXNAME, with their volume keys from the key store, for
 #    /etc/fstab: /home, ...); the copy of the key store is overwritten and
 #    removed
 # 4. the paranoia level is switched (PARANOIA, or paranoia= in
@@ -134,8 +135,8 @@ done
 ln -sfn $MNT /run/scubed3/fs
 
 # 2. and 3. one scubed3ctl: it reads the passphrases from one fifo and
-# answers on the other (the views stay unlocked), then it opens the
-# partitions and the LUKS volumes
+# answers on the other (it opens the partitions of a view without root),
+# then it opens the partitions of root and the LUKS volumes
 PASS=/run/scubed3/pass
 ANSWER=/run/scubed3/answer
 rm -f $PASS $ANSWER

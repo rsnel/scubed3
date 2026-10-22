@@ -272,15 +272,16 @@ files), and autoconf, automake and pkg-config:
 
 	./autogen.sh && ./configure && make
 
-The programs are src/scubed3 and src/scubed3ctl, make install installs them
-in /usr/local/sbin (another place with ./configure --prefix=...).
-./configure --without-readline builds scubed3ctl without line editing (the
-debian-installer has no readline), ./configure --enable-static-programs
-links both programs statically (it needs the static libraries of libfuse3,
+The programs are src/scubed3, src/scubed3ctl and src/keystorectl (see Key
+store), make install installs them in /usr/local/sbin (another place with
+./configure --prefix=...). ./configure --without-readline builds
+scubed3ctl and keystorectl without line editing (the debian-installer has
+no readline), ./configure --enable-static-programs links the programs
+statically (it needs the static libraries of libfuse3,
 libgcrypt and libgpg-error; the debian-installer udeb is built so, it does
-not depend on library udebs). scubed3ctl reads passphrases from the
-terminal without echo; when its input is not a terminal (a pipe), it reads
-them as lines from its input.
+not depend on library udebs). scubed3ctl and keystorectl read passphrases
+from the terminal without echo; when their input is not a terminal (a
+pipe), they read them as lines from their input.
 
 Debian packages of scubed3, and a component of the debian-installer that
 installs Debian with the root file system on a scubed3 partition: see
@@ -291,60 +292,102 @@ Key store
 ~~~~~~~~~
 
 Typing a passphrase for every partition (and every LUKS volume) is a lot of
-work. scubed3ctl can keep their keys in a key store, /etc/scubed3.keys
-(another file with -K): one passphrase of the key store gives the keys of a
-set of partitions (a view), one or more passphrases can be given at once
-(unlock-all). Nothing in the file shows how many passphrases or keys there
-are, or whether it is used at all: it is 64 slots of random data, a slot
-with a view is encrypted with AES-256-GCM (the key from the passphrase,
-PBKDF2-SHA256 with the salt and iterations of the configuration file), a
-view has 64 entries (the name of a partition, its key and the key of its
-LUKS volume; unused entries cannot be told from used ones). Someone who
-learns one passphrase sees its view, the other slots look like unused ones.
+work. The keys can be kept in a key store, /etc/scubed3.keys (another file
+with -K): one passphrase of the key store gives the keys of a set of
+partitions (a view). Nothing in the file shows how many passphrases or keys
+there are, or whether it is used at all: it is 64 slots of random data, a
+slot with a view is encrypted with AES-256-GCM (the key from the
+passphrase, PBKDF2-SHA256 with the salt and iterations of the configuration
+file), a view has 64 entries (the name of a partition, its key and the key
+of its LUKS volume; unused entries cannot be told from used ones). Someone
+who learns one passphrase sees its view, the other slots look like unused
+ones.
 
-	s3> keys-setup		guided: creates the key store, unlocks all its
+Two programs use it:
+
+	keystorectl	changes the key store: it reads it, unlocks views,
+			changes them in memory; save writes it (nothing is
+			written without save); it does not need the daemon
+			(only import uses it)
+	scubed3ctl	uses the keys: it only reads the key store, ONE view
+			at a time (unlock locks the view that was unlocked),
+			so a name is always one partition
+
+keystorectl (the prompt is keys>):
+
+	keys> setup		guided: creates the key store, unlocks all its
 				passphrases, adds passphrases and partitions,
-				writes it once
-	s3> unlock		one passphrase of the key store
-	s3> unlock-all		passphrases until an empty one
-	s3> keys		the unlocked views (names, [LUKS])
-	s3> open-all		opens all partitions of the unlocked views
+				saves once
+	keys> create		a new key store (random data, no views); it
+				never replaces an existing key store
+	keys> unlock		one passphrase of the key store
+	keys> unlock-all	passphrases until an empty one
+	keys> keys		the unlocked views (names, [LUKS])
+	keys> passphrase-add, passphrase-change [VIEW], passphrase-remove [VIEW]
+	keys> add NAME [VIEW]	new random keys, or the keys of NAME in
+				another unlocked view (the same partition in
+				more views)
+	keys> add-passphrase NAME [VIEW]
+				as add, but the partition gets the key of a
+				passphrase (asked twice), so that it also
+				opens without the key store; empty: a random
+				key
+	keys> import NAME [VIEW]
+				a partition with its own passphrase; if it is
+				open and has LUKS on it, the passphrase of the
+				LUKS volume is asked, with it its volume key
+				goes into the key store (cryptsetup luksDump
+				--dump-volume-key, the volume is not changed)
+	keys> copy NAME1 NAME2 [VIEW]
+				NAME2 gets the keys of NAME1: the same
+				partition under another name, for example root
+				for the initramfs (remove NAME1 removes the old
+				name)
+	keys> remove NAME [VIEW]
+	keys> lock VIEW		forgets an unlocked view (in memory; a save
+				then loses it)
+	keys> derive		the key of a passphrase (for -k, see below)
+	keys> save		writes the key store
 
-With the key store unlocked, open, create, luksformat, mke2fs and mount use
-its keys instead of asking passphrases, luksopen opens a LUKS volume (as
+Quitting with changes that are not saved asks first; with -c the changes
+are lost and the exit status is an error, so a script ends with -c save:
+
+	keystorectl -c unlock-all -c "add home 1" -c save
+
+scubed3ctl, with the key store:
+
+	s3> unlock		one passphrase of the key store (the view that
+				is unlocked is locked first)
+	s3> lock
+	s3> keys		the partitions of the unlocked view
+	s3> open-all		opens all partitions of the unlocked view
+	s3> luksopen-all [NAME]	opens the LUKS volumes of the open partitions
+				of the unlocked view (NAME must be in it),
+				with their keys from the key store
+	s3> unlock-until NAME	(for a boot) passphrases until one has a view
+				with NAME, one line of output for each; the
+				partitions of the views without NAME are opened
+				(then the view is locked); at the end of the
+				input the commands after it are not done
+	s3> luksstatus [NAME]	of every open partition (or NAME): its LUKS
+				header (LUKS1, LUKS2), its LUKS key in the
+				unlocked view, the loop device on its file,
+				the /dev/mapper device on that (LUKS open),
+				where it is mounted
+
+With a view unlocked, open, create, luksformat, mke2fs and mount use its
+keys instead of asking passphrases, luksopen opens a LUKS volume (as
 /dev/mapper/PREFIXNAME). The key store keeps the VOLUME KEY of a LUKS
 volume (random, 512 bits; cryptsetup open --volume-key-file, on a pipe,
 never in a file: no KDF runs, opening is fast, also at boot). The volume has
 ONE keyslot: luksformat asks its passphrase (twice, any length: with it the
 volume also opens without the key store), empty: a random key that is not
-kept (then only the key store opens it). To change the key
-store: keys-create, keys-passphrase-add, keys-passphrase-change [VIEW],
-keys-passphrase-remove [VIEW], keys-add-passphrase NAME [VIEW] (as keys-add,
-but the partition gets the key of a passphrase, asked twice, so that it
-also opens without the key store; empty: a random key), keys-add NAME
-[VIEW] (new random keys, or the
-keys of NAME in another unlocked view: the same partition in more views),
-keys-import NAME [VIEW] (a partition with its own passphrase; if it is open
-and has LUKS on it, the passphrase of the LUKS volume is asked, with it its
-volume key goes into the key store: cryptsetup luksDump --dump-volume-key,
-the volume is not changed), keys-copy NAME1 NAME2 [VIEW] (NAME2 gets the keys of
-NAME1: the same partition under another name, for example root for the
-initramfs; keys-remove NAME1 removes the old name), keys-remove NAME
-[VIEW]. More commands at once: scubed3ctl -c unlock-all -c open-all (the
-views stay unlocked between them).
+kept (then only the key store opens it). A partition is first added with
+keystorectl (add, save), then created and formatted with scubed3ctl:
 
-	s3> luksstatus [NAME]	of every open partition (or NAME): its LUKS
-				header (LUKS1, LUKS2), its LUKS key in an
-				unlocked view, the loop device on its file,
-				the /dev/mapper device on that (LUKS open),
-				where it is mounted
-	s3> luksopen-all [NAME]	opens the LUKS volumes of the partitions of
-				the view of NAME (all unlocked views without
-				NAME), with their keys from the key store
-	s3> unlock-until NAME	(for a boot) passphrases until one has a view
-				with NAME, one line of output for each; at the
-				end of the input the commands after it are not
-				done
+	keystorectl -c unlock -c "add home" -c save
+	scubed3ctl -c unlock -c "create home" -c "resize home 100" \
+		-c "luksformat home"
 
 The passphrases of the key store are always typed by you (twice when they
 are new), they are never generated; the keys in it are random (getrandom(2)):
@@ -355,73 +398,64 @@ no unlocked view uses, not the first free one: the order in which the
 passphrases were added is not in the file.
 
 A view has a name while it is unlocked (it is not in the key store): by
-default iNN, NN its slot (00 to 63, inherent to the view); at the s3> prompt
-unlock asks a name (empty: the default), "name VIEW NAME" renames it, keys
-shows the slot of a view with a name of its own ([slot iNN]). A VIEW
+default iNN, NN its slot (00 to 63, inherent to the view); at the keys>
+prompt unlock asks a name (empty: the default), "name VIEW NAME" renames it,
+keys shows the slot of a view with a name of its own ([slot iNN]). A VIEW
 argument is the name, or (for scripts) the number of the view in the order
 of unlocking (1, 2, ...); the name of a view is not only digits. With -c
-(scripts) no name is asked.
+(scripts) no name is asked. Without VIEW the only unlocked view is meant.
 
 The KDF of a passphrase takes seconds (with the default 16777216
-iterations; minutes in a slow virtual machine). A script that runs
-scubed3ctl often computes it once: keys-derive prints the key of a
+iterations; minutes in a slow virtual machine). A script that runs the
+programs often computes it once: keystorectl derive prints the key of a
 passphrase of the key store (key: 64 hexadecimal digits), with -k
-scubed3ctl takes these keys where it asks the passphrases of the key store
-(unlock, unlock-all, unlock-until, keys-passphrase-add, ...). The key
-unlocks the view as the passphrase does: keep it as secret (the
+keystorectl and scubed3ctl take these keys where they ask the passphrases
+of the key store (unlock, unlock-all, unlock-until, passphrase-add, ...).
+The key unlocks the view as the passphrase does: keep it as secret (the
 debian-installer keeps the keys in its memory, not in a file).
 
-Every change writes the whole key store again: the unlocked views with new
+Every save writes the whole key store again: the unlocked views with new
 IVs, all other slots new random data, so the file changes completely (an
 adversary with snapshots does not see which views changed). That is why ALL
-passphrases must be unlocked before a change: scubed3ctl cannot tell a view
-of a passphrase that is not unlocked from an unused slot, it is LOST (it
+passphrases must be unlocked before a save: keystorectl cannot tell a view
+of a passphrase that is not unlocked from an unused slot, it is LOST (save
 asks you to type yes). The new file replaces the old one (a crash leaves the
 old or the new key store); on an SSD the old data may stay on the flash.
 Keep a backup of the key store (it is random data without its passphrases)
 and of the configuration file.
 
-Two scubed3ctl at the same time: the daemon serves one scubed3ctl at a time
-(a second one waits until the first quits, also while an s3> prompt is
-open; after 2 seconds it says so on stderr). With two daemons (two base devices) and one key store they can run
-at the same time: a write takes a lock (flock) on the key store and checks
-that the file is still the one that was read; if another scubed3ctl wrote
-it meanwhile, the write is refused (it would lose that change: a view that
-is not unlocked here is overwritten with random data), quit, unlock again
-and redo the change. keys-create never replaces an existing key store.
+Two keystorectl at the same time: a save takes a lock (flock) on the key
+store and checks that the file is still the one that was read; if another
+keystorectl saved it meanwhile, the save is refused (it would lose that
+change: a view that is not unlocked here is overwritten with random data),
+quit, unlock again and redo the change. The daemon serves one scubed3ctl at
+a time (a second one waits until the first quits, also while an s3> prompt
+is open; after 2 seconds it says so on stderr).
 
-Killing scubed3ctl (Ctrl-C, kill, also kill -9) does no harm: what it has
-asked the daemon is done or not (the daemon finishes a command also when
-scubed3ctl is gone), the key store is written to a new file that replaces
-the old one at once (killed before: the old key store stays; the new file
-is removed, after kill -9 by the next write), no key is ever in a file
-(cryptsetup gets keys on a pipe), and a terminal gets its echo back if
-it is killed at a passphrase prompt (not with kill -9: then type reset).
-What it did before is done: keys-add writes the key store before create,
-so a kill between them leaves a key for a partition that does not exist
-yet (create it again); luksformat killed while cryptsetup formats leaves
-the partition without a valid LUKS header (its key is in the key store:
-luksformat it again).
+Killing keystorectl or scubed3ctl (Ctrl-C, kill, also kill -9) does no
+harm: what scubed3ctl has asked the daemon is done or not (the daemon
+finishes a command also when scubed3ctl is gone), the key store is written
+to a new file that replaces the old one at once (killed before: the old key
+store stays; the new file is removed, after kill -9 by the next save), no
+key is ever in a file (cryptsetup gets keys on a pipe), and a terminal gets
+its echo back if it is killed at a passphrase prompt (not with kill -9:
+then type reset). keystorectl changes nothing before save; a partition that
+was added and saved but not yet created can be created later; luksformat
+killed while cryptsetup formats leaves the partition without a valid LUKS
+header (its key is in the key store: luksformat it again).
 
 One passphrase that opens everything is convenient, but if you have to give
 it away, everything is revealed: as with the partitions, keep a passphrase
 with a view you can admit, and others for the hidden partitions.
 
-Two views can have different partitions with the same name (keys-import
-does not stop that), for example a root partition you can admit and a
-hidden one, both "root". The same name with the same keys in more views is
-the same partition, that is fine; with other keys it is ambiguous while
-both views are unlocked: unlock warns, keys marks the name, and open,
-create, luksopen, luksformat, mke2fs, mount and open-all refuse it (open-all
-opens nothing then), keys-add does not copy it. Lock one of the views first:
-
-	s3> lock VIEW		forgets an unlocked view (in memory; the views
-				after it get a lower number in the order of
-				unlocking, their names stay)
-
-Both views can be unlocked at the same time to change the key store (a
-change needs all views unlocked, see above), only the ambiguous name cannot
-be used then.
+Two views can have different partitions with the same name (import does not
+stop that), for example a root partition you can admit and a hidden one,
+both "root". The same name with the same keys in more views is the same
+partition, that is fine. scubed3ctl has one view unlocked at a time, so
+"root" is the partition of that view. In keystorectl both views can be
+unlocked at the same time (a save needs all views unlocked, see above):
+unlock warns, keys marks the name, add does not copy it (it is not clear
+which one); lock VIEW forgets one of them.
 
 
 Root on scubed3

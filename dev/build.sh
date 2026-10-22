@@ -1,7 +1,8 @@
 #!/bin/sh
 # build.sh [OUTDIR]: build the binaries the tests need in OUTDIR (default: the
 # current directory): scubed3, scubed3-crash (with -DSCUBED3_CRASH_TEST, see
-# README) and scubed3ctl from ../src, and jstat (unit test of juggler.c)
+# README), scubed3ctl and keystorectl from ../src, and jstat (unit test of
+# juggler.c)
 #
 # the configure step of the main tree must have been run (config.h); extra
 # compiler and linker flags can be given in EXTRA_CFLAGS and EXTRA_LDFLAGS
@@ -16,7 +17,7 @@ LDFLAGS="$EXTRA_LDFLAGS"
 DAEMON="scubed3.c binio.c bitmap.c blockio.c cipher.c dllarr.c fuse_io.c gcry.c
 	hashtbl.c pthd.c util.c verbose.c cipher_null.c cipher_cbc.c control.c
 	ecch.c random.c juggler.c"
-CTL="scubed3ctl.c keystore.c verbose.c gcry.c ecch.c hashtbl.c pthd.c util.c"
+COMMON="ctl_common.c keystore.c verbose.c gcry.c ecch.c hashtbl.c pthd.c util.c"
 DLIBS="-lpthread $FUSE_LIBS -lgcrypt -lm -lrt -lgpg-error"
 CLIBS="-lreadline -lgcrypt -lpthread -lgpg-error"
 
@@ -26,7 +27,8 @@ cd "$SRC" || exit 1
 $CC $CFLAGS $FUSE_CFLAGS -o "$OUT/scubed3" $DAEMON $LDFLAGS $DLIBS || exit 1
 $CC $CFLAGS $FUSE_CFLAGS -DSCUBED3_CRASH_TEST -o "$OUT/scubed3-crash" \
 	$DAEMON $LDFLAGS $DLIBS || exit 1
-$CC $CFLAGS -o "$OUT/scubed3ctl" $CTL $LDFLAGS $CLIBS || exit 1
+$CC $CFLAGS -o "$OUT/scubed3ctl" scubed3ctl.c $COMMON $LDFLAGS $CLIBS || exit 1
+$CC $CFLAGS -o "$OUT/keystorectl" keystorectl.c $COMMON $LDFLAGS $CLIBS || exit 1
 $CC $CFLAGS -o "$OUT/jstat" "$DEV/jstat.c" juggler.c random.c verbose.c util.c \
 	$LDFLAGS -lm || exit 1
-echo "built scubed3 scubed3-crash scubed3ctl jstat in $OUT"
+echo "built scubed3 scubed3-crash scubed3ctl keystorectl jstat in $OUT"

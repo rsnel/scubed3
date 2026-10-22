@@ -260,10 +260,12 @@ installertest.sh DAEMON SCUBED3CTL
 	views), level 2, the
 	unclaimed blocks are lent to root (the size of its file does not
 	change); the KDF of a passphrase of the key store is computed once
-	(keys-derive, all other runs of scubed3ctl with the key store have
-	-k), a message is shown while the KDF and LUKS run; the views of the
-	key store; Configure scubed3 again: the passphrases are asked again
-	(a wrong one again, keys-derive three times), no view is lost; root
+	(keystorectl derive, all other runs of keystorectl and scubed3ctl
+	with the key store have -k; keystorectl adds the partitions and
+	saves, scubed3ctl creates them with one view unlocked), a message is
+	shown while the KDF and LUKS run; the views of the key store;
+	Configure scubed3 again: the passphrases are asked again (a wrong one
+	again, derive three times), no view is lost; root
 	gets a passphrase of its own, at finish its LUKS volume one of 200
 	characters (at the end: root opens with its passphrase without the key
 	store, the one keyslot of its LUKS volume has the passphrase, old keeps
@@ -348,47 +350,54 @@ lukstest.sh DAEMON SCUBED3CTL
 	encryption, like fake-cryptsetup (the plaintext check is skipped).
 
 keystoretest.sh DAEMON SCUBED3CTL
-	The key store of scubed3ctl: two passphrases (A and B) with views,
-	root (A), hid (B), shared (A and B); the partitions are created and
-	opened with the keys from the store (no passphrases); every write
-	changes the whole file (no 16 byte block stays the same), its size is
-	always the same; A alone shows and opens only root and shared; a wrong
-	passphrase has no view; an existing partition is imported; luksformat
-	and luksopen with the key from the store (another key does not open
-	it); a passphrase is changed; a write with only A unlocked loses the
-	view of B, as the warning says; keys-setup (guided) with two
-	passphrases, a new, an imported and a shared partition; two
-	partitions with the same name in two views (refused until one view is
-	locked); keys-copy (the same partition under another name),
-	unlock-until (passphrases from a pipe, one answer each; at the end of
-	the input the next command is not done), luksopen-all, keys-import of
+	The key store, keystorectl (next to SCUBED3CTL) and scubed3ctl: two
+	passphrases (A and B) with views, root (A), hid (B), shared (A and
+	B); keystorectl changes the key store in memory, save writes it
+	(without save nothing is written: at the prompt a question, with -c
+	an error); scubed3ctl has one view at a time (unlock locks the
+	other), the partitions are created and opened with the keys from the
+	store (no passphrases); every save changes the whole file (no 16 byte
+	block stays the same), its size is always the same; A shows and opens
+	only root and shared; a wrong passphrase has no view; an existing
+	partition is imported; luksformat and luksopen with the key from the
+	store (another key does not open it); a passphrase is changed; a save
+	with only A unlocked loses the view of B, as the warning says; setup
+	(guided) with two passphrases, a new, an imported and a shared
+	partition; two partitions with the same name in two views
+	(keystorectl warns until one view is locked, scubed3ctl opens the one
+	of the view it unlocked); copy (the same partition under another
+	name), unlock-until (passphrases from a pipe, one answer each, the
+	partitions of the other views are opened; at the end of the input the
+	next command is not done), luksopen-all, import of
 	an open partition with LUKS (with its LUKS passphrase its volume key
 	goes into the key store, a wrong one is refused, the volume keeps one
 	keyslot), an empty new passphrase is refused (key store
 	passphrases are never generated); 300 new key stores with one view:
 	its slot is random (at least 50 of the 64 slots, at most 18 times the
-	same), its default name is the slot (iNN); keys-derive gives the key of a passphrase, -k
-	unlocks and adds views with it (not with a passphrase or a wrong
-	key); two scubed3ctl on two daemons with one key store: a write after
-	the other wrote it is refused, keys-create does not replace an
-	existing key store; luksstatus (the LUKS header, the key in the key
+	same), its default name is the slot (iNN); derive gives the key of a
+	passphrase, -k unlocks and adds views with it (not with a passphrase
+	or a wrong key); two keystorectl with one key store: a save after the
+	other saved it is refused, create does not replace an existing key
+	store, scubed3ctl does not change the key store; luksstatus (the LUKS header, the key in the key
 	store, the loop device, /dev/mapper, the mount point, a partition that
 	is not open); a scubed3ctl that waits for the daemon says so; killed
 	with SIGTERM at a passphrase prompt on a terminal (python pty): echo
 	is on again; a temporary file of a gone process is removed by the next
-	write, keys-import leaves no key file; keys-add-passphrase (the
+	write, import leaves no key file; add-passphrase (the
 	partition opens with its passphrase without the key store; empty: a
 	random key; two different ones are refused), luksformat (one keyslot
 	with the passphrase, 300 characters, or a random key; the volume key
-	in the key store opens it); the names of views (asked at the s3>
-	prompt, only digits refused, name renames, keys-add and lock take the
-	name, with -c the default iNN and numbers). Uses fake-cryptsetup (CRYPTSETUP=path
+	in the key store opens it); the names of views (asked at the keys>
+	prompt, only digits refused, name renames, add and lock take the
+	name, quit asks when the changes are not saved, with -c the default
+	iNN and numbers). Uses fake-cryptsetup (CRYPTSETUP=path
 	for another cryptsetup).
 
 entropytest.sh DAEMON SCUBED3CTL
 	The random secrets have at least 256 bits (the passphrases of the key
 	store are not: they are typed, never generated): the LUKS keys in the
-	key store that luksformat gives cryptsetup have 64 bytes (512 bits)
+	key store (keystorectl add) that scubed3ctl luksformat gives
+	cryptsetup have 64 bytes (512 bits)
 	and differ, the keys of the partitions 32 bytes (256 bits), both from
 	getrandom(2).
 

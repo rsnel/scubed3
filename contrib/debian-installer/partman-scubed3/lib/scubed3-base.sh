@@ -12,7 +12,7 @@
 #			partitions that are opened at boot with it), views
 #			2, ... of hidden passphrases (typed at boot before
 #			the boot passphrase); the keys of the passphrases
-#			(keys-derive: the KDF takes long, it is computed
+#			(keystorectl derive: the KDF takes long, it is computed
 #			once per passphrase) are only in the memory of
 #			do_option (S3VIEWKEYS), not the passphrases
 #	views		the number of views
@@ -423,21 +423,33 @@ s3_partition_list () {
 	done
 }
 
-# scubed3ctl with the key store, all its views unlocked: the keys of the
+# keystorectl with the key store, all its views unlocked: the keys of the
 # passphrases (S3VIEWKEYS, one per line, of the boot passphrase first: view
-# 1, scubed3ctl -k) come first on its input, then the input of the caller
-# (for the commands)
+# 1, keystorectl -k) come first on its input, then the input of the caller
+# (for the commands); a change is written by -c save
 s3ks () {
 	{ printf '%s\n\n' "$S3VIEWKEYS"; cat; } |
-		log-output -t partman-scubed3 scubed3ctl -q -YYY -C $S3CONF \
+		log-output -t partman-scubed3 keystorectl -q -YYY -C $S3CONF \
 			-K $S3KEYS -k -c unlock-all "$@"
 }
 
 # the same, its output on stdout
 s3ks_out () {
 	{ printf '%s\n\n' "$S3VIEWKEYS"; cat; } |
-		scubed3ctl -q -YYY -C $S3CONF -K $S3KEYS -k -c unlock-all "$@" \
+		keystorectl -q -YYY -C $S3CONF -K $S3KEYS -k -c unlock-all "$@" \
 			2>/dev/null
+}
+
+# scubed3ctl with view $1 of the key store unlocked (it reads the key store,
+# one view at a time: create, luksformat, luksopen with its keys); the key
+# of its passphrase comes first on its input, then the input of the caller
+s3view () {
+	local v
+	v=$1
+	shift
+	{ printf '%s\n' "$S3VIEWKEYS" | sed -n "${v}p"; cat; } |
+		log-output -t partman-scubed3 scubed3ctl -q -YYY -C $S3CONF \
+			-K $S3KEYS -k -c unlock "$@"
 }
 
 # a message while something takes long (the KDF of a passphrase, LUKS):
@@ -562,17 +574,17 @@ s3_layout () {
 }
 
 # the key of passphrase $1 of the key store in KEY (64 hexadecimal digits,
-# keys-derive of scubed3ctl): the KDF takes seconds (minutes in a slow
+# derive of keystorectl): the KDF takes seconds (minutes in a slow
 # virtual machine), it is computed once per passphrase; returns 1 if it
 # fails
 s3_key_of () {
 	s3_busy derive
-	KEY=$(printf '%s\n' "$1" | s3ctl_out -c keys-derive |
+	KEY=$(printf '%s\n' "$1" | keystorectl -q -C $S3CONF -c derive 2>/dev/null |
 		sed -n 's/.*key: \([0-9a-f]\{64\}\)$/\1/p')
 	s3_busy_done
 	[ ${#KEY} = 64 ] && return 0
 	KEY=
-	logger -t partman-scubed3 "keys-derive failed"
+	logger -t partman-scubed3 "keystorectl derive failed"
 	return 1
 }
 
@@ -608,13 +620,15 @@ s3_keystore_new () {
 	fi
 	PASS=
 	rm -f $S3KEYS
-	if ! s3ctl -K $S3KEYS -c keys-create; then
+	if ! log-output -t partman-scubed3 keystorectl -q -C $S3CONF -K $S3KEYS \
+			-c create; then
 		KEY=
 		s3_error partman-scubed3/keystore_failed
 		return 1
 	fi
 	printf '\n%s\n%s\n' "$KEY" "$KEY" |
-		s3ctl -K $S3KEYS -k -c unlock-all -c keys-passphrase-add
+		log-output -t partman-scubed3 keystorectl -q -YYY -C $S3CONF \
+			-K $S3KEYS -k -c unlock-all -c passphrase-add -c save
 	S3VIEWKEYS=$KEY
 	KEY=
 	if [ "$(s3_unlocked_views)" != 1 ]; then
@@ -704,7 +718,7 @@ s3_choose_view () {
 		KEY=
 		return 0
 	fi
-	printf '%s\n%s\n' "$KEY" "$KEY" | s3ks -c keys-passphrase-add
+	printf '%s\n%s\n' "$KEY" "$KEY" | s3ks -c passphrase-add -c save
 	S3VIEWKEYS="$S3VIEWKEYS
 $KEY"
 	KEY=

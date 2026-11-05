@@ -8,7 +8,8 @@
 # key with --volume-key-file) and maps the payload (after 1 MiB) with a
 # loop device as /dev/mapper/NAME (a device node; --test-passphrase: only
 # the check), luksDump --dump-volume-key shows the volume key (as
-# cryptsetup: MK bits, MK dump) after the key, luksAddKey adds a key
+# cryptsetup: MK bits, MK dump) after the key, luksDump without it the
+# keyslots (as LUKS2: "  N: luks2"), luksAddKey adds a key
 # (after the existing one is given), close removes the mapping, isLuks looks
 # at the signature; keys come from --key-file (- is stdin) or are typed
 # (one line); -q: luksFormat does not ask for confirmation
@@ -71,7 +72,12 @@ luksFormat)
 	printf 'LUKS\272\276\0\2%s' "$h" | dd of="$2" conv=notrunc 2> /dev/null
 	printf '%s' "$v" | dd of="$2" bs=1 seek=520 conv=notrunc 2> /dev/null;;
 luksDump)
-	[ "$dumpvk" ] || { echo "LUKS header information"; exit 0; }
+	if [ -z "$dumpvk" ]; then
+		echo "LUKS header information"; echo; echo "Keyslots:"
+		hashes "$2" | grep -n . | sed 's/^\([0-9]*\):.*/\1/' |
+			while read i; do echo "  $((i - 1)): luks2"; done
+		exit 0
+	fi
 	h=$(keyhash "Enter passphrase for $2: ")
 	hashes "$2" | grep -qx "$h" || { echo "No key available with this passphrase." >&2; exit 2; }
 	echo "LUKS header information for $2"

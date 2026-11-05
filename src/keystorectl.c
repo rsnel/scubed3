@@ -497,6 +497,21 @@ static int ctl_copy(ctl_priv_t *priv, char *argv[]) {
 	return 0;
 }
 
+/* the label of a line of luksDump --dump-volume-key ("MK bits: 512"; newer
+ * versions of cryptsetup may say "Volume key bits"): 1 if the text before
+ * the colon ends with " " what, *val points after the colon */
+static int dump_label(char *line, const char *what, char **val) {
+	char *colon = strchr(line, ':');
+	size_t l = strlen(what);
+
+	if (!colon || (size_t)(colon - line) < l + 1 ||
+			*(colon - l - 1) != ' ' ||
+			strncmp(colon - l, what, l)) return 0;
+	*val = colon + 1;
+
+	return 1;
+}
+
 /* the volume key of the LUKS volume of a partition, with a passphrase of it
  * (cryptsetup luksDump --dump-volume-key, the passphrase in a memory file,
  * the key comes back on a pipe), 0 if it is in vk (at most KS_LUKS bytes,
@@ -523,11 +538,9 @@ static int luks_dump_vk(ctl_priv_t *priv, const char *name, const char *pw,
 	if (!(fp = popen(cmd, "r"))) FATAL("popen: %s", strerror(errno));
 	free(cmd);
 	while (fgets(line, sizeof(line), fp)) {
-		if (!strncmp(line, "MK bits:", 8)) bits = atoi(line + 8);
-		if (!strncmp(line, "MK dump:", 8)) {
-			dump = 1;
-			p = line + 8;
-		} else p = line;
+		if (!dump && dump_label(line, "bits", &p)) bits = atoi(p);
+		if (!dump && dump_label(line, "dump", &p)) dump = 1;
+		else p = line;
 		if (!dump) continue;
 		for (;;) {
 			b = strtoul(p, &end, 16);

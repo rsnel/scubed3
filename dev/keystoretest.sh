@@ -26,7 +26,10 @@
 #
 # usage: keystoretest.sh DAEMON CTL (as root; keystorectl is next to CTL;
 # CRYPTSETUP=path: the cryptsetup to use, default the stand-in
-# dev/fake-cryptsetup, it needs no device mapper)
+# dev/fake-cryptsetup, it needs no device mapper; with the real one, for
+# example CRYPTSETUP=$(command -v cryptsetup), the device mapper and
+# dm-crypt are used; the partitions with LUKS on them are large enough for
+# a LUKS2 header, at least 3 MiB)
 D=$(realpath $1); C=$(realpath $2); T=$(mktemp -d); MNT=/mnt/s3
 KS=$(dirname $C)/keystorectl
 DEV=$(cd "$(dirname "$0")" && pwd)
@@ -36,7 +39,9 @@ ln -s ${CRYPTSETUP:-$DEV/fake-cryptsetup} $T/bin/cryptsetup
 export PATH=$T/bin:$PATH
 K=$T/keys
 cleanup() {
-	cryptsetup close scubed3-root 2> /dev/null
+	for n in scubed3-root scubed3-lk scubed3-p3 lp3; do
+		cryptsetup close $n 2> /dev/null
+	done
 	$FUSERMOUNT -u $T/mnt2 2> /dev/null
 	$FUSERMOUNT -u $MNT 2> /dev/null; wait; rm -rf $T
 }
@@ -44,7 +49,7 @@ fail() { echo "KEYSTORETEST FAILED: $1"; [ -f $T/out ] && cat $T/out; cleanup; e
 ok() { echo "   ok: $1"; }
 
 printf 'iterations=1000\nsalt=keystoretest\n' > $T/s3.conf
-head -c $((400<<16)) /dev/urandom > $T/base
+head -c $((700<<16)) /dev/urandom > $T/base
 $FUSERMOUNT -u -z $MNT 2> /dev/null; rm -f /run/scubed3/control
 $D -b $T/base -m 12 -M 16 -f $MNT > $T/log 2>&1 & sleep 0.5
 
@@ -94,7 +99,7 @@ run "-c unlock -c 'create root' -c 'create shared'" A
 grep -q "Enter passphrase" $T/out && fail "a passphrase was asked"
 run "-c unlock -c 'create hid'" B
 grep -q "Enter passphrase" $T/out && fail "a passphrase was asked"
-for n in root:60 hid:40 shared:30; do ctl -c "resize ${n%:*} ${n#*:}" > /dev/null; done
+for n in root:100 hid:40 shared:30; do ctl -c "resize ${n%:*} ${n#*:}" > /dev/null; done
 head -c 100000 /dev/urandom > $T/data
 for n in root hid shared; do dd if=$T/data of=$MNT/$n conv=notrunc 2> /dev/null; done
 sync; for n in root hid shared; do ctl -c "close $n" > /dev/null; done
@@ -261,14 +266,15 @@ ok "luksstatus: the LUKS header, the key in the key store, the loop device, /dev
 cryptsetup close scubed3-root
 ctl -c "close root" > /dev/null
 run "-c 'create lk'" lpw lpw
-ctl -c "resize lk 20" > /dev/null
+ctl -c "resize lk 80" > /dev/null
 printf 'lukspw' | cryptsetup -q luksFormat --key-file=- $MNT/lk || fail "luksFormat lk"
 krun "-c unlock -c 'import lk 1' -c save" A2 lpw wrongpw yes
 grep -q 'the volume key of the LUKS volume on "lk" is not in the key store' $T/out || fail "import with a wrong LUKS passphrase: $(cat $T/out)"
 krun "-c unlock -c 'remove lk 1' -c save" A2 yes
 krun "-c unlock -c 'import lk 1' -c save" A2 lpw lukspw yes
 grep -q 'the volume key of the LUKS volume on "lk" is in the key store' $T/out || fail "import with LUKS: $(cat $T/out)"
-lh() { dd if=$MNT/$1 bs=1 skip=8 count=512 2> /dev/null | tr -d '\0' | fold -w 64 | grep -c .; }
+# the number of keyslots of the LUKS volume on partition $1
+lh() { cryptsetup luksDump $MNT/$1 | grep -c '^  [0-9]*: luks2'; }
 [ "$(lh lk)" = 1 ] || fail "the LUKS volume of lk has $(lh lk) keys"
 ctl -c "close lk" > /dev/null
 run "-c unlock -c 'open lk' -c 'luksopen lk' -c keys" A2
@@ -403,7 +409,7 @@ ok "a temporary file of a killed write is removed by the next write, import leav
 echo "14. add-passphrase, luksformat with a passphrase"
 printf 'S\n\npp3pass\npp3pass\n' | ks -K $T/k1 -c unlock-all -c "add-passphrase p3 1" -c save > $T/out
 grep -q '"p3" has the key of its passphrase' $T/out || fail "add-passphrase p3: $(cat $T/out)"
-printf 'S\n' | ctl -K $T/k1 -c unlock -c "create p3" -c "resize p3 10" > $T/out
+printf 'S\n' | ctl -K $T/k1 -c unlock -c "create p3" -c "resize p3 80" > $T/out
 [ -e $MNT/p3 ] || fail "create p3: $(cat $T/out)"
 ctl -c "close p3" > /dev/null
 printf 'pp3pass\n' | ctl -K $T/nokeys -c "open p3" > /dev/null
@@ -420,14 +426,13 @@ printf 'S\n%s\n%s\n' $long $long | ctl -K $T/k1 -c unlock -c "luksformat p3" -c 
 grep -q '"p3" is formatted, its volume key is in the key store' $T/out &&
 	grep -q "its LUKS volume key is in view i[0-9][0-9] of the key store" $T/out || fail "luksformat p3: $(cat $T/out)"
 [ "$(lh p3)" = 1 ] || fail "the LUKS volume of p3 has $(lh p3) keyslots"
-lh1() { dd if=$MNT/$1 bs=1 skip=8 count=64 2> /dev/null; }
-[ "$(lh1 p3)" = "$(printf %s $long | sha256sum | cut -c1-64)" ] || fail "the keyslot of p3 has not its passphrase"
+printf %s $long | cryptsetup open --test-passphrase --key-file=- $MNT/p3 || fail "the keyslot of p3 has not its passphrase"
 printf %s $long | cryptsetup open --key-file=- $MNT/p3 lp3 && cryptsetup close lp3 || fail "the passphrase does not open p3"
 printf 'S\n' | ctl -K $T/k1 -c unlock -c "luksopen p3" > /dev/null
 [ -b /dev/mapper/scubed3-p3 ] || fail "the volume key in the key store does not open p3"
 cryptsetup close scubed3-p3
 printf 'S\n\n\n' | ctl -K $T/k1 -c unlock -c "luksformat p3" > $T/out
-[ "$(lh p3)" = 1 ] && [ "$(lh1 p3)" != "$(printf %s $long | sha256sum | cut -c1-64)" ] || fail "luksformat without a passphrase: $(cat $T/out)"
+[ "$(lh p3)" = 1 ] || fail "luksformat without a passphrase: $(cat $T/out)"
 printf %s $long | cryptsetup open --test-passphrase --key-file=- $MNT/p3 2> /dev/null && fail "the old passphrase opens p3"
 printf 'S\n' | ctl -K $T/k1 -c unlock -c "luksopen p3" > /dev/null
 [ -b /dev/mapper/scubed3-p3 ] || fail "the volume key does not open p3 (no passphrase)"

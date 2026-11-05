@@ -390,7 +390,9 @@ keystoretest.sh DAEMON SCUBED3CTL
 	in the key store opens it); the names of views (asked at the keys>
 	prompt, only digits refused, name renames, add and lock take the
 	name, quit asks when the changes are not saved, with -c the default
-	iNN and numbers). Uses fake-cryptsetup (CRYPTSETUP=path
+	iNN and numbers). With CRYPTSETUP=$(command -v cryptsetup) it uses
+	the real cryptsetup, the device mapper and dm-crypt (the partitions
+	with LUKS are large enough for a LUKS2 header). Uses fake-cryptsetup (CRYPTSETUP=path
 	for another cryptsetup).
 
 entropytest.sh DAEMON SCUBED3CTL
@@ -405,7 +407,8 @@ fake-cryptsetup
 	A stand-in for cryptsetup for tests without the device mapper (a
 	container), NO ENCRYPTION: luksFormat writes a LUKS signature and the
 	SHA-256 of its keys, open checks the key and maps the payload with a
-	loop device as /dev/mapper/NAME, luksAddKey, close, isLuks; keys from
+	loop device as /dev/mapper/NAME, luksDump (the keyslots, the volume
+	key with --dump-volume-key), luksAddKey, close, isLuks; keys from
 	--key-file (- is stdin) or typed; used by keystoretest.sh and
 	initramfstest.sh.
 

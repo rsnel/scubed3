@@ -94,7 +94,7 @@ static int fuse_io_getattr(const char *path, struct stat *stbuf,
 			entries, path + 1);
 	if (!entry) return -ENOENT;
 
-	stbuf->st_mode = S_IFREG|0600;
+	stbuf->st_mode = S_IFREG|(entry->readonly?0400:0600);
 	stbuf->st_nlink = 1;
 	stbuf->st_size = entry->size;
 
@@ -144,6 +144,13 @@ static int fuse_io_open(const char *path, struct fuse_file_info *fi) {
 	if (entry->to_be_deleted) {
 		hashtbl_unlock_element_byptr(entry);
 		return -EBUSY;
+	}
+	/* a read-only partition: also root may not write (the kernel does
+	 * not check the mode, scubed3 is mounted without default_permissions);
+	 * losetup and cryptsetup fall back to read-only */
+	if (entry->readonly && (fi->flags&O_ACCMODE) != O_RDONLY) {
+		hashtbl_unlock_element_byptr(entry);
+		return -EACCES;
 	}
 	entry->inuse++;
 	//VERBOSE("openend \"%s\"", path + 1);
@@ -217,6 +224,14 @@ static int fuse_io_write(const char *path, const char *buf, size_t size,
 	if (!entry) {
 		io_unlock();
 		return -ENOENT;
+	}
+
+	/* it cannot be opened for writing (set-readonly waits until it is
+	 * not in use), this does not happen */
+	if (entry->readonly) {
+		hashtbl_unlock_element_byptr(entry);
+		io_unlock();
+		return -EBADF;
 	}
 
 	wait_unlock_set(entry);
@@ -309,7 +324,8 @@ static int fuse_io_fallocate(const char *path, int mode, off_t offset,
 	}
 
 	wait_unlock_set(entry);
-	if (offset < 0 || len <= 0) ret = -EINVAL;
+	if (entry->readonly) ret = -EBADF;
+	else if (offset < 0 || len <= 0) ret = -EINVAL;
 	else if (mode&~(FALLOC_FL_KEEP_SIZE|FALLOC_FL_PUNCH_HOLE|
 				FALLOC_FL_ZERO_RANGE)) ret = -EOPNOTSUPP;
 	else if (mode&(FALLOC_FL_PUNCH_HOLE|FALLOC_FL_ZERO_RANGE))

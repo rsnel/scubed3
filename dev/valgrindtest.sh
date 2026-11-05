@@ -8,7 +8,8 @@
 # (in level 3 a writer that waits for its turn, reads of another partition
 # and control commands at the same time);
 # more reserved blocks and back (resize-internal), a shrink, a removal
-# (wipe) in level 1; close, open, a wrong passphrase; the key store
+# (wipe) in level 1; close, open, read-only, a wrong passphrase; the key
+# store
 # (keystorectl: create, passphrases, add, import, remove, change, save, quit
 # without save, derive; scubed3ctl: unlock, open-all, unlock-until,
 # luksopen-all, lock);
@@ -113,6 +114,7 @@ dd if=$T/data of=$MNT/b bs=64k count=20 conv=notrunc 2> /dev/null; sync
 ctl -c "info b" -c "check-data-integrity b" -c "resize b 0"
 sleep 2; ctl -c p -c "close b" -c "close a"
 printf 'pa\n' | ctl -c "open a"
+ctl -c "set-readonly a 1" -c p -c "info a" -c "resize a 100" -c "set-readonly a 0"
 printf 'wrong\n' | ctl -c "open c"
 ctl -c "close a"
 ks -c create

@@ -374,12 +374,13 @@ static int control_status(int s, control_thread_priv_t *priv, char *argv[]) {
 					entry->d.pending_removals)) return -1;
 		}
                 return control_write_line(priv->s,
-				"%07u blocks in %s (%.1fMiB)%s%s%s%s%s%s\n",
+				"%07u blocks in %s (%.1fMiB)%s%s%s%s%s%s%s\n",
 				entry->d.no_macroblocks -
 				entry->d.pending_removals, entry->head.key,
 				(size<<entry->d.b->mesoblk_log)/(1024.*1024.),
 				entry->inuse?" [U]":"",
 				entry->close_on_release?" [C]":"",
+				entry->readonly?" [R]":"",
 				entry->mountpoint?" [MNT ":"",
 				entry->mountpoint?entry->mountpoint:"",
 				entry->mountpoint?"]":"",
@@ -681,6 +682,9 @@ static int control_info(int s, control_thread_priv_t *priv, char *argv[]) {
 
 	if (control_write_line(s, "updated=%d\n", entry->d.updated)) return -1;
 
+	if (control_write_line(s, "readonly=%d\n", entry->readonly))
+		return -1;
+
 	/* a removed partition: blocks that are not wiped yet */
 	if (control_write_line(s, "wipe_left=%u\n",
 				blockio_dev_wipe_left(&entry->d))) return -1;
@@ -727,6 +731,36 @@ static fuse_io_entry_t *control_find_unused(control_thread_priv_t *priv,
 	}
 
 	return hashtbl_find_element_bykey(priv->h, name);
+}
+
+/* set-readonly NAME BOOL: a read-only partition can only be opened for
+ * reading (the flag is not stored, it is gone when the partition is
+ * closed); it is changed when the partition is not in use, so no file
+ * is open for writing when it becomes read-only */
+static int control_set_readonly(int s,
+		control_thread_priv_t *priv, char *argv[]) {
+	fuse_io_entry_t *entry;
+	int ro;
+
+	if (!strcmp(argv[1], "0") || !strcasecmp(argv[1], "false")) ro = 0;
+	else if (!strcmp(argv[1], "1") || !strcasecmp(argv[1], "true")) ro = 1;
+	else return control_write_complete(s, 1,
+			"illegal argument; expected boolean");
+
+	if (!(entry = control_find_unused(priv, argv[0])))
+		return control_write_complete(s, 1,
+				"partition \"%s\" not found", argv[0]);
+
+	if (entry->inuse && ro != entry->readonly) {
+		hashtbl_unlock_element_byptr(entry);
+		return control_write_complete(s, 1,
+				"partition \"%s\" is busy", argv[0]);
+	}
+
+	entry->readonly = ro;
+	hashtbl_unlock_element_byptr(entry);
+
+	return control_write_silent_success(s);
 }
 
 static int control_close(int s, control_thread_priv_t *priv, char *argv[]) {
@@ -832,6 +866,14 @@ static int control_resize(int s, control_thread_priv_t *priv, char *argv[]) {
 				"in use", argv[0]);
 	}
 
+	/* making it smaller (or removing it) destroys data */
+	if (entry->readonly && (!size || new_usable < old_usable)) {
+		hashtbl_unlock_element_byptr(entry);
+		return control_write_complete(s, 1, "partition \"%s\" is "
+				"read-only, it cannot be made smaller "
+				"(set-readonly %s 0 first)", argv[0], argv[0]);
+	}
+
 	target = dev->no_macroblocks - dev->pending_removals;
 	if (!size && being_removed(dev)) {
 		finish_removal(entry);
@@ -934,6 +976,11 @@ static control_command_t control_commands[] = {
 	}, {
 		.head.key = "set-close-on-release",
 		.command = control_set_close_on_release,
+		.argc = 2,
+		.usage = " NAME BOOL"
+	}, {
+		.head.key = "set-readonly",
+		.command = control_set_readonly,
 		.argc = 2,
 		.usage = " NAME BOOL"
 	}, {

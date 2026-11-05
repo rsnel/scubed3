@@ -596,16 +596,16 @@ to the partition it installs on this way, see contrib/debian-installer)
 - info NAME
 
 shows the state of a partition: no_macroblocks, pending_removals, trims,
-reserved_macroblocks, writes, no_indices, updated, wipe_left (a removed
-partition: blocks that are not wiped yet), tombstone_slots,
-tombstones_pending, mapped_mesoblocks
+reserved_macroblocks, writes, no_indices, updated, readonly (see
+set-readonly), wipe_left (a removed partition: blocks that are not wiped
+yet), tombstone_slots, tombstones_pending, mapped_mesoblocks
 
 - p
 
 shows all open partitions, the paranoia level, the number of free blocks
 that were overwritten with random data, and the rate of level 3; after a
-partition its flags: [U] in use, [C] closed when released, [MNT dir]
-mounted, and for a partition of size 0 that is removed (see Removing a
+partition its flags: [U] in use, [C] closed when released, [R] read-only,
+[MNT dir] mounted, and for a partition of size 0 that is removed (see Removing a
 partition):
 	[removing]		the removal is not on disk yet
 	[removed, wiping: N with data, M empty]
@@ -617,6 +617,25 @@ partition):
 				only last and prelast are left
 	[removed, wiped]	no block has an index of it anymore, its
 				passphrase can be used again
+
+- set-readonly NAME BOOL
+
+makes an open partition read-only (1, true) or writable again (0, false):
+a read-only partition can only be opened for reading (its file has mode
+0400; opening it for writing fails with EACCES, also for root), it can grow
+but it cannot be made smaller or removed. The flag is not stored: it is
+gone when the partition is closed. It is changed only when the partition is
+not in use (no file of it is open), so no writer is left when it becomes
+read-only. scubed3ctl mounts a read-only partition read-only (mount -o ro,
+cryptsetup open --readonly; without a warning about the paranoia level:
+nothing is written), and refuses mke2fs and luksformat on it. Use it to look
+at a partition without changing it (for example a hidden partition that you
+open but do not want to touch: in level 2 and 3 the scheduler still moves
+its blocks, its contents stay the same):
+
+	s3> open NAME
+	s3> set-readonly NAME 1
+	s3> mount NAME DIR
 
 - paranoia LEVEL [KIBPS]
 

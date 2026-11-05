@@ -6,8 +6,8 @@
 # slots), and the volume key itself in hex (at 520; --volume-key-file gives
 # it, 64 bytes, otherwise a random one), open checks the key (or the volume
 # key with --volume-key-file) and maps the payload (after 1 MiB) with a
-# loop device as /dev/mapper/NAME (a device node; --test-passphrase: only
-# the check), luksDump --dump-volume-key shows the volume key (as
+# loop device as /dev/mapper/NAME (a device node, read-only with --readonly;
+# --test-passphrase: only the check), luksDump --dump-volume-key shows the volume key (as
 # cryptsetup: MK bits, MK dump) after the key, luksDump without it the
 # keyslots (as LUKS2: "  N: luks2"), luksAddKey adds a key
 # (after the existing one is given), close removes the mapping, isLuks looks
@@ -15,12 +15,13 @@
 # (one line); -q: luksFormat does not ask for confirmation
 #
 # usage: put it in PATH as cryptsetup (see lukstest.sh, keystoretest.sh)
-q=; keyfile=; test=; vkfile=; dumpvk=
+q=; keyfile=; test=; vkfile=; dumpvk=; ro=
 args=
 while [ $# -gt 0 ]; do
 	case $1 in
 	-q|--batch-mode) q=1;;
 	--test-passphrase) test=1;;
+	--readonly|-r) ro=-r;;
 	--type) shift;;
 	--type=*) ;;
 	--volume-key-file) shift; vkfile=$1;;
@@ -100,7 +101,7 @@ open)
 		hashes "$2" | grep -qx "$h" || { echo "No key available with this passphrase." >&2; exit 2; }
 	fi
 	[ "$test" ] && exit 0
-	dev=$(losetup -f --show -o 1048576 "$2") || exit 1
+	dev=$(losetup -f --show $ro -o 1048576 "$2") || exit 1
 	mkdir -p /dev/mapper; n=$(basename $dev); mm=$(cat /sys/block/$n/dev)
 	mknod /dev/mapper/$3 b ${mm%:*} ${mm#*:}; echo $dev > /dev/mapper/.$3;;
 close)

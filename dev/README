@@ -349,6 +349,17 @@ lukstest.sh DAEMON SCUBED3CTL
 	LUKSTEST_FAKE=1 the cryptsetup in PATH may be a stand-in without
 	encryption, like fake-cryptsetup (the plaintext check is skipped).
 
+readonlytest.sh DAEMON SCUBED3CTL
+	Read-only partitions (set-readonly): p shows [R], info readonly=1,
+	mode 0400; opening for writing fails also for root (dd, O_RDWR,
+	fallocate), reading works, the data is unchanged; it can grow but
+	not shrink or be removed; the flag changes only when the partition
+	is not in use; scubed3ctl refuses mke2fs and luksformat, mounts it
+	read-only (also with LUKS, cryptsetup open --readonly) without a
+	warning about the level; in level 2 the writes of another partition
+	leave its data alone; after close and open it is writable. Uses
+	fake-cryptsetup (CRYPTSETUP=path for another cryptsetup).
+
 keystoretest.sh DAEMON SCUBED3CTL
 	The key store, keystorectl (next to SCUBED3CTL) and scubed3ctl: two
 	passphrases (A and B) with views, root (A), hid (B), shared (A and
@@ -407,9 +418,10 @@ fake-cryptsetup
 	A stand-in for cryptsetup for tests without the device mapper (a
 	container), NO ENCRYPTION: luksFormat writes a LUKS signature and the
 	SHA-256 of its keys, open checks the key and maps the payload with a
-	loop device as /dev/mapper/NAME, luksDump (the keyslots, the volume
-	key with --dump-volume-key), luksAddKey, close, isLuks; keys from
-	--key-file (- is stdin) or typed; used by keystoretest.sh and
+	loop device as /dev/mapper/NAME (read-only with --readonly),
+	luksDump (the keyslots, the volume key with --dump-volume-key),
+	luksAddKey, close, isLuks; keys from --key-file (- is stdin) or
+	typed; used by keystoretest.sh, readonlytest.sh and
 	initramfstest.sh.
 
 sockettest.sh DAEMON SCUBED3CTL

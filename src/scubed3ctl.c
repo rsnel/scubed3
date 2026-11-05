@@ -122,6 +122,7 @@ static int ctl_help(ctl_priv_t *priv, char *argv[]) {
 	printf("umount NAME|MOUNTPOINT\n");
 	printf("chown OWNER.GROUP NAME|MOUNTPOINT\n");
 	printf("paranoia LEVEL [KIBPS]\n");
+	printf("set-readonly NAME 1|0 (only reading: mount and luksopen read-only)\n");
 	printf("\nKey store (%s, read only: keystorectl changes it), one view at a time:\n\n", ks.path);
 	printf("unlock            (a passphrase; the view that is unlocked is locked)\n");
 	printf("unlock-until NAME (passphrases until a view has NAME, for a boot: the\n");
@@ -312,6 +313,35 @@ static int check_unmounted(ctl_priv_t *priv, const char *name) {
 	return 1;
 }
 
+/* is partition name read-only (set-readonly)? 1 if so, 0 if not (or if it
+ * is not open), -1 if the connection failed */
+static int is_readonly(ctl_priv_t *priv, const char *name) {
+	int i;
+
+	if (do_server_command(priv->s, 0, "info %s", name)) return -1;
+	if (result.status) return 0;
+	for (i = 0; i < result.argc; i++)
+		if (!strcmp(result.argv[i], "readonly=1")) return 1;
+
+	return 0;
+}
+
+/* the partition must be writable (not read-only), returns 1 if so (a
+ * message is printed if not), -1 if the connection failed */
+static int check_writable(ctl_priv_t *priv, const char *name) {
+	int ro;
+
+	if ((ro = is_readonly(priv, name)) == -1) return -1;
+	if (ro) {
+		printf("partition \"%s\" is read-only (set-readonly %s 0)\n",
+				name, name);
+		exit_status = EXIT_FAILURE;
+		return 0;
+	}
+
+	return 1;
+}
+
 /* the key of the LUKS volume on partition name in the key store, NULL if
  * it is not there (cryptsetup asks the passphrase then); *ambiguous: see
  * ks_lookup */
@@ -321,22 +351,27 @@ static ks_entry_t *luks_key(const char *name, int *ambiguous) {
 	return (e && (e->flags&KS_HAS_LUKS))?e:NULL;
 }
 
-/* open the LUKS volume on partition name as /dev/mapper/PREFIXNAME */
+/* open the LUKS volume on partition name as /dev/mapper/PREFIXNAME (read
+ * only if the partition is read-only) */
 static int luks_open(ctl_priv_t *priv, const char *name) {
-	int ambiguous;
+	int ambiguous, ro;
 	ks_entry_t *e = luks_key(name, &ambiguous);
+	const char *opt;
 
 	if (ambiguous) return 1;
+	if ((ro = is_readonly(priv, name)) == -1) return 1;
+	opt = ro?" --readonly":"";
 	/* with the volume key no KDF runs (faster, also at boot) */
 	if (e && (e->flags&KS_LUKS_VK)) return cryptsetup_with_key(e,
-			"cryptsetup open --volume-key-file /dev/stdin %s/%s "
-			LUKS_NAME, priv->mountpoint, name, luks_prefix, name);
-	if (e) return cryptsetup_with_key(e, "cryptsetup open --key-file=- "
-			"%s/%s " LUKS_NAME, priv->mountpoint, name,
-			luks_prefix, name);
+			"cryptsetup open%s --volume-key-file /dev/stdin %s/%s "
+			LUKS_NAME, opt, priv->mountpoint, name, luks_prefix,
+			name);
+	if (e) return cryptsetup_with_key(e, "cryptsetup open%s "
+			"--key-file=- %s/%s " LUKS_NAME, opt, priv->mountpoint,
+			name, luks_prefix, name);
 
-	return var_system("cryptsetup open %s/%s " LUKS_NAME,
-			priv->mountpoint, name, luks_prefix, name);
+	return var_system("cryptsetup open%s %s/%s " LUKS_NAME,
+			opt, priv->mountpoint, name, luks_prefix, name);
 }
 
 /* the block device whose major:minor is in /sys/block/NAME/dev (or the
@@ -520,6 +555,7 @@ static int ctl_luksformat(ctl_priv_t *priv, char *argv[]) {
 	if (ambiguous) return 0;
 
 	if ((ret = check_unmounted(priv, argv[0])) != 1) return ret;
+	if ((ret = check_writable(priv, argv[0])) != 1) return ret;
 	if ((ret = check_paranoia(priv, "format it")) != 1) return ret;
 	if (is_luks(priv, argv[0])) printf("partition \"%s\" already has a "
 			"LUKS header, it is formatted again\n", argv[0]);
@@ -599,6 +635,7 @@ static int ctl_mke2fs(ctl_priv_t *priv, char *argv[]) {
 	int ret;
 
 	if ((ret = check_unmounted(priv, argv[0])) != 1) return ret;
+	if ((ret = check_writable(priv, argv[0])) != 1) return ret;
 	if ((ret = check_paranoia(priv, "make the filesystem")) != 1)
 		return ret;
 	if (is_luks(priv, argv[0])) {
@@ -611,14 +648,17 @@ static int ctl_mke2fs(ctl_priv_t *priv, char *argv[]) {
 }
 
 static int ctl_mount(ctl_priv_t *priv, char *argv[]) {
-	int ret;
+	int ret, ro, status = exit_status;
 
 	if (*argv[1] != '/') {
 		printf("mountpoint must start with a slash\n");
 		return 0;
 	}
+	/* info and get-aux fail when the partition is not open or not
+	 * mounted yet: that is no error (the exit status with -c) */
 	if (do_server_command(priv->s, 0, "info %s", argv[0])) return -1;
 	if (result.status) {
+		exit_status = status;
 		if ((ret = check_paranoia(priv, "mount it")) != 1) return ret;
 		// we try to open the partition
 		{
@@ -638,21 +678,29 @@ static int ctl_mount(ctl_priv_t *priv, char *argv[]) {
 		if (!result.status) {
 			printf("partition \"%s\" is already mounted on %s\n",
 					argv[0], result.argv[0]);
+			exit_status = EXIT_FAILURE;
 			return 0;
 		}
-		if ((ret = check_paranoia(priv, "mount it")) != 1) return ret;
+		exit_status = status;
+		/* read-only: nothing is written, no warning */
+		if ((ro = is_readonly(priv, argv[0])) == -1) return -1;
+		if (!ro && (ret = check_paranoia(priv, "mount it")) != 1)
+			return ret;
 	}
 
+	/* a read-only partition is mounted read-only */
+	if ((ro = is_readonly(priv, argv[0])) == -1) return -1;
 	if (is_luks(priv, argv[0])) {
 		if (luks_open(priv, argv[0])) return 0;
-		if (var_system("mount /dev/mapper/" LUKS_NAME " %s",
-					luks_prefix, argv[0], argv[1])) {
+		if (var_system("mount%s /dev/mapper/" LUKS_NAME " %s",
+					ro?" -o ro":"", luks_prefix, argv[0],
+					argv[1])) {
 			var_system("cryptsetup close " LUKS_NAME, luks_prefix,
 					argv[0]);
 			return 0;
 		}
-	} else if (var_system("mount -o loop %s/%s %s", priv->mountpoint,
-				argv[0], argv[1])) return 0;
+	} else if (var_system("mount -o loop%s %s/%s %s", ro?",ro":"",
+				priv->mountpoint, argv[0], argv[1])) return 0;
 
 	if (do_server_command(priv->s, 0, "set-aux %s mountpoint %s",
 				argv[0], argv[1])) return -1;

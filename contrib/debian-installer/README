@@ -258,9 +258,10 @@ Getting it into the installer
 - The package scubed3 for the installed system: in a local repository
   that the installer knows (preseed apt-setup/local0/repository), or on
   the image. Without it, finish-install copies the programs of the
-  installer into the target (they work, scubed3ctl without line editing);
-  install the package later, it replaces them (remove
-  /usr/local/sbin/scubed3* and the scripts in /etc/initramfs-tools then).
+  installer into the target (they work, scubed3ctl and keystorectl without
+  line editing); install the package later, it replaces them (remove
+  /usr/local/sbin/scubed3*, /usr/local/sbin/keystorectl and the scripts in
+  /etc/initramfs-tools then).
 
 Preseeding: partman-scubed3/options (the options of the daemon, -m and -M,
 default: chosen for the size of the base device), partman-scubed3/level,

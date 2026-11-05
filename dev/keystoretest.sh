@@ -28,8 +28,9 @@
 # CRYPTSETUP=path: the cryptsetup to use, default the stand-in
 # dev/fake-cryptsetup, it needs no device mapper; with the real one, for
 # example CRYPTSETUP=$(command -v cryptsetup), the device mapper and
-# dm-crypt are used; the partitions with LUKS on them are large enough for
-# a LUKS2 header, at least 3 MiB)
+# dm-crypt are used; the partitions with LUKS on them (LUKS macroblocks,
+# 25 MB) are larger than a LUKS2 header with its default size, 16 MiB:
+# cryptsetup refuses a smaller header on a small device)
 D=$(realpath $1); C=$(realpath $2); T=$(mktemp -d); MNT=/mnt/s3
 KS=$(dirname $C)/keystorectl
 DEV=$(cd "$(dirname "$0")" && pwd)
@@ -49,7 +50,8 @@ fail() { echo "KEYSTORETEST FAILED: $1"; [ -f $T/out ] && cat $T/out; cleanup; e
 ok() { echo "   ok: $1"; }
 
 printf 'iterations=1000\nsalt=keystoretest\n' > $T/s3.conf
-head -c $((700<<16)) /dev/urandom > $T/base
+LUKS=550
+head -c $((2200<<16)) /dev/urandom > $T/base
 $FUSERMOUNT -u -z $MNT 2> /dev/null; rm -f /run/scubed3/control
 $D -b $T/base -m 12 -M 16 -f $MNT > $T/log 2>&1 & sleep 0.5
 
@@ -99,7 +101,7 @@ run "-c unlock -c 'create root' -c 'create shared'" A
 grep -q "Enter passphrase" $T/out && fail "a passphrase was asked"
 run "-c unlock -c 'create hid'" B
 grep -q "Enter passphrase" $T/out && fail "a passphrase was asked"
-for n in root:100 hid:40 shared:30; do ctl -c "resize ${n%:*} ${n#*:}" > /dev/null; done
+for n in root:$LUKS hid:40 shared:30; do ctl -c "resize ${n%:*} ${n#*:}" > /dev/null; done
 head -c 100000 /dev/urandom > $T/data
 for n in root hid shared; do dd if=$T/data of=$MNT/$n conv=notrunc 2> /dev/null; done
 sync; for n in root hid shared; do ctl -c "close $n" > /dev/null; done
@@ -266,7 +268,7 @@ ok "luksstatus: the LUKS header, the key in the key store, the loop device, /dev
 cryptsetup close scubed3-root
 ctl -c "close root" > /dev/null
 run "-c 'create lk'" lpw lpw
-ctl -c "resize lk 80" > /dev/null
+ctl -c "resize lk $LUKS" > /dev/null
 printf 'lukspw' | cryptsetup -q luksFormat --key-file=- $MNT/lk || fail "luksFormat lk"
 krun "-c unlock -c 'import lk 1' -c save" A2 lpw wrongpw yes
 grep -q 'the volume key of the LUKS volume on "lk" is not in the key store' $T/out || fail "import with a wrong LUKS passphrase: $(cat $T/out)"
@@ -409,7 +411,7 @@ ok "a temporary file of a killed write is removed by the next write, import leav
 echo "14. add-passphrase, luksformat with a passphrase"
 printf 'S\n\npp3pass\npp3pass\n' | ks -K $T/k1 -c unlock-all -c "add-passphrase p3 1" -c save > $T/out
 grep -q '"p3" has the key of its passphrase' $T/out || fail "add-passphrase p3: $(cat $T/out)"
-printf 'S\n' | ctl -K $T/k1 -c unlock -c "create p3" -c "resize p3 80" > $T/out
+printf 'S\n' | ctl -K $T/k1 -c unlock -c "create p3" -c "resize p3 $LUKS" > $T/out
 [ -e $MNT/p3 ] || fail "create p3: $(cat $T/out)"
 ctl -c "close p3" > /dev/null
 printf 'pp3pass\n' | ctl -K $T/nokeys -c "open p3" > /dev/null

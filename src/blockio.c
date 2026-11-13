@@ -400,6 +400,31 @@ static void blockio_dev_give_back(blockio_dev_t *dev, blockio_info_t *bi) {
 	dev->b->no_unallocated++;
 }
 
+/* read and decrypt the index of block no into buf (a mesoblock): 1 if it
+ * is an index of the partition (the magic and the hash are right), 0 if it
+ * is not, -1 if it cannot be read (errno is set) */
+static int blockio_dev_load_index(blockio_dev_t *dev, uint32_t no, char *buf) {
+	char sha256[32];
+
+	if (dev->b->read(dev->io, buf, ((off_t)no)<<dev->b->macroblock_log,
+				1<<dev->b->mesoblk_log)) return -1;
+
+	// decrypt indexblock with IV=0: ciphertext is unique due to
+	// first block being a hash of the whole index and the index
+	// containing a unique seqno and nonce (ONLY TRUE FOR CBC(LIKE)!!!!!)
+	//
+	// the nonce is used as IV for all the other mesoblocks
+	// in the datablock
+	cipher_dec(dev->c, buf, buf, 0, 0, no);
+
+	if (!magic_ok(buf + 0x070)) return 0;
+
+	gcry_md_hash_buffer(GCRY_MD_SHA256, sha256, buf + sizeof(sha256),
+			(1<<dev->b->mesoblk_log) - sizeof(sha256));
+
+	return !memcmp(buf, sha256, sizeof(sha256));
+}
+
 static void blockio_dev_take_index(blockio_dev_t*);
 
 static void blockio_dev_read_index(blockio_dev_t*, blockio_info_t*);
@@ -784,12 +809,6 @@ void blockio_dev_select_next_macroblock(blockio_dev_t *dev) {
 			juggler_count(&dev->j));
 }
 
-void blockio_dev_write_current_and_select_next_macroblock(
-		blockio_dev_t *dev) {
-	blockio_dev_write_current_macroblock(dev);
-	blockio_dev_select_next_macroblock(dev);
-}
-
 void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 		const char *name) {
 	int i; 
@@ -1093,23 +1112,17 @@ static void blockio_dev_take_index(blockio_dev_t *dev) {
 /* read and decrypt the index of a block of ours into BASE */
 static void blockio_dev_read_index(blockio_dev_t *dev, blockio_info_t *bi) {
 	uint32_t no = bi - dev->b->blockio_infos;
-	char sha256[32];
+	int ret = blockio_dev_load_index(dev, no, BASE);
 
 	/* this is only done while the partition is opened, if it fails, it
 	 * is not opened (see blockio_dev_init) */
-	if (dev->b->read(dev->io, BASE, ((off_t)no)<<dev->b->macroblock_log,
-			1<<dev->b->mesoblk_log)) {
+	if (ret < 0) {
 		dev->no_macroblocks = 0;
 		ecch_throw(ECCH_DEFAULT, "\"%s\" is not opened: error reading "
 				"the index of block %u: %s", dev->name, no,
 				strerror(errno));
 	}
-	cipher_dec(dev->c, BASE, BASE, 0, 0, no);
-
-	gcry_md_hash_buffer(GCRY_MD_SHA256, sha256, BASE + sizeof(sha256),
-			(1<<dev->b->mesoblk_log) - sizeof(sha256));
-	if (!magic_ok(MAGIC64) ||
-			memcmp(INDEXBLOCK_SHA256, sha256, sizeof(sha256))) {
+	if (!ret) {
 		dev->no_macroblocks = 0;
 		ecch_throw(ECCH_DEFAULT, "\"%s\" is not opened: the index of "
 				"block %u changed while opening", dev->name, no);
@@ -1163,13 +1176,11 @@ static void blockio_dev_bad_index(blockio_dev_t *dev, blockio_info_t *bi,
 void blockio_dev_scan_header(blockio_dev_t *dev, blockio_info_t *bi,
 		uint64_t *seqno) {
 	assert(dev && dev->b);
-	int i;
+	int i, ret;
 	char zero[128] = { };
 	uint32_t no = bi - dev->b->blockio_infos, no_trims;
 
 	assert(no < dev->b->total_macroblocks);
-
-	char sha256[32];
 
 	if (bi->dev) {
 		//VERBOSE("macroblock %d already taken", no);
@@ -1180,47 +1191,14 @@ void blockio_dev_scan_header(blockio_dev_t *dev, blockio_info_t *bi,
 	 * known when the bitmap is known (see blockio_dev_init); most blocks
 	 * are not ours, that is seen from the start of their index */
 	bi->unreadable = 0;
-	switch (blockio_dev_maybe_ours(dev, no)) {
-	case 0:
-		return;
-	case -1:
+	if ((ret = blockio_dev_maybe_ours(dev, no)) > 0)
+		ret = blockio_dev_load_index(dev, no, BASE);
+	if (ret < 0) {
 		WARNING("error reading index of block %u: %s", no,
 				strerror(errno));
 		bi->unreadable = 1;
-		return;
 	}
-	if (dev->b->read(dev->io, BASE, ((off_t)no)<<dev->b->macroblock_log,
-			1<<dev->b->mesoblk_log)) {
-		WARNING("error reading index of block %u: %s", no,
-				strerror(errno));
-		bi->unreadable = 1;
-		return;
-	}
-
-	// decrypt indexblock with IV=0: ciphertext is unique due to
-	// first block being a hash of the whole index and the index
-	// containing a unique seqno and nonce (ONLY TRUE FOR CBC(LIKE)!!!!!)
-	//
-	// the nonce is used as IV for all the other mesoblocks
-	// in the datablock
-	cipher_dec(dev->c, BASE, BASE, 0, 0, no);
-
-	/* check magic */
-	if (!magic_ok(MAGIC64)) {
-//		DEBUG("magic \"%.*s\" not found in macroblock %u",
-//				(int)sizeof(magic), magic, no);
-		return;
-	} //else DEBUG("magic \"%.*s\" found in macroblock %u",
-	//		(int)sizeof(magic), magic, no);
-
-
-	/* check indexblock hash */
-	gcry_md_hash_buffer(GCRY_MD_SHA256, sha256, BASE + sizeof(sha256),
-			(1<<dev->b->mesoblk_log) - sizeof(sha256));
-	if (memcmp(INDEXBLOCK_SHA256, sha256, sizeof(sha256))) {
-		DEBUG("sha256 hash of index block %d failed", no);
-		return;
-	}
+	if (ret <= 0) return;
 
 	/* block seems to belong to us */
 	/* store the seqno and next block */
@@ -1466,21 +1444,12 @@ static void blockio_dev_release_wiped(blockio_dev_t *dev, blockio_info_t *bi) {
 /* does the (free) block have an index of this partition? */
 static int blockio_dev_has_index(blockio_dev_t *dev, blockio_info_t *bi) {
 	uint32_t no = bi - dev->b->blockio_infos;
-	unsigned char *buf;
-	char sha256[32];
-	int ret = 0;
+	char *buf;
+	int ret;
 
 	if (blockio_dev_maybe_ours(dev, no) != 1) return 0;
 	buf = ecalloc(1, 1<<dev->b->mesoblk_log);
-
-	if (dev->b->read(dev->io, buf, ((off_t)no)<<dev->b->macroblock_log,
-				1<<dev->b->mesoblk_log)) goto out;
-	cipher_dec(dev->c, (char*)buf, (char*)buf, 0, 0, no);
-	if (!magic_ok(buf + 0x070)) goto out;
-	gcry_md_hash_buffer(GCRY_MD_SHA256, sha256, buf + sizeof(sha256),
-			(1<<dev->b->mesoblk_log) - sizeof(sha256));
-	ret = !memcmp(buf, sha256, sizeof(sha256));
-out:
+	ret = blockio_dev_load_index(dev, no, buf) == 1;
 	wipememory(buf, 1<<dev->b->mesoblk_log);
 	free(buf);
 	return ret;

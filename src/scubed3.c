@@ -256,41 +256,39 @@ static void pre_emptive_gc(scubed3_t *l) {
 }
 */
 
-// FIXME the following two functions look almost the same...  
+/* a new current block is selected (if the partition has blocks), the GC
+ * runs at once: the current block takes the live data of its tail (and of
+ * a victim, while the partition shrinks), so the current block can always
+ * be written */
+void scubed3_select(scubed3_t *l) {
+	blockio_dev_select_next_macroblock(l->dev);
+	if (!l->dev->bi) return;
+
+	copy_old_block_to_current(l);
+	if (l->dev->tail_macroblock) DEBUG("new block %lu (seqno=%lu) has %u "
+			"mesoblocks due to GC of block %u", id(l->dev->bi),
+			l->dev->bi->seqno, l->dev->bi->no_indices,
+			blockio_get_macroblock_index(l->dev->tail_macroblock));
+}
+
+/* write the current block and select the next one */
+static void advance(scubed3_t *l) {
+	blockio_dev_write_current_macroblock(l->dev);
+	scubed3_select(l);
+}
+
 /* select new blocks until the current block has room, or until the GC
  * has moved mesoblock mesoff (that is about to be written) to the current
  * block (then it can be updated in place, this guarantees progress if all
  * blocks are completely filled with live data) */
 void select_new_macroblock(scubed3_t *l, uint32_t mesoff) {
 	uint32_t index;
-	assert(l->output_initialized);
-	//pre_emptive_gc(l);
+
 	do {
-		blockio_dev_write_current_and_select_next_macroblock(l->dev);
-		copy_old_block_to_current(l);
-		if (l->dev->tail_macroblock) DEBUG("new block %lu (seqno=%lu) has %u mesoblocks due "
-				"to GC of block %u",
-				id(l->dev->bi), l->dev->bi->seqno,
-				l->dev->bi->no_indices,
-				blockio_get_macroblock_index(
-					l->dev->tail_macroblock));
+		advance(l);
 		index = l->block_indices[mesoff];
 	} while (!blockio_dev_free_slots(l->dev) &&
 			(index == 0xFFFFFFFF || ID != id(l->dev->bi)));
-}
-
-void initialize_output(scubed3_t *l) {
-	if (!l->output_initialized) {
-		copy_old_block_to_current(l);
-		if (l->dev->tail_macroblock) DEBUG("new block %lu (seqno=%lu) has %u mesoblocks due "
-				"to GC of block %u",
-				id(l->dev->bi), l->dev->bi->seqno,
-				l->dev->bi->no_indices,
-				blockio_get_macroblock_index(
-					l->dev->tail_macroblock));
-
-		l->output_initialized = 1;
-	}
 }
 
 /* if the current block is its own next block (drawn twice), it is written out
@@ -307,20 +305,8 @@ void scubed3_cycle(scubed3_t *l) {
 	/* there is no current block if all blocks were removed */
 	if (!l->dev->bi) return;
 
-	/* output ONE block, run GC if possible and useful */
-	if (l->output_initialized) { /* output is initialized */
-		//pre_emptive_gc(l);
-		blockio_dev_write_current_macroblock(l->dev);
-		blockio_dev_select_next_macroblock(l->dev);
-		l->output_initialized = 0;
-	} else {
-		copy_old_block_to_current(l);
-		l->output_initialized = 1;
-		//if (!l->cycle_goal) pre_emptive_gc(l);
-		blockio_dev_write_current_macroblock(l->dev);
-		blockio_dev_select_next_macroblock(l->dev);
-		l->output_initialized = 0;
-	}
+	/* output ONE block */
+	advance(l);
 }
 
 static void replay(scubed3_t *l, blockio_info_t *bi) {
@@ -385,12 +371,8 @@ void debug_stuff(scubed3_t *l) {
 #endif
 
 void scubed3_free(scubed3_t *l) {
-	//VERBOSE("freeing scubed3 partition");
-	//if (l->output_initialized) pre_emptive_gc(l);
-
 	/* the current block will be written if it is updated (this
-	 * happens also after a resize), the tail must be absorbed first */
-	/* write out the current block; removed blocks are released after a
+	 * happens also after a resize); removed blocks are released after a
 	 * write, when the next block is drawn without them (see
 	 * blockio_dev_release_removed), they are given away when the
 	 * partition is closed, so write until they are released */
@@ -407,10 +389,7 @@ void scubed3_free(scubed3_t *l) {
 void scubed3_fsync(scubed3_t *l) {
 	if (!l->dev->bi || !l->dev->updated) return;
 
-	initialize_output(l);
-	blockio_dev_write_current_macroblock(l->dev);
-	blockio_dev_select_next_macroblock(l->dev);
-	l->output_initialized = 0;
+	advance(l);
 }
 
 /* write out the current block (if it contains anything), afterwards
@@ -420,9 +399,7 @@ void scubed3_flush(scubed3_t *l) {
 
 	if (!l->dev->updated && !l->dev->bi->no_indices) return;
 
-	initialize_output(l);
 	blockio_dev_write_current_macroblock(l->dev);
-	l->output_initialized = 0;
 }
 
 void scubed3_reinit(scubed3_t *l) {
@@ -664,10 +641,6 @@ int do_write(scubed3_t *l, uint32_t mesoff, uint32_t muoff, uint32_t size,
 	 * the current block is marked as updated after the data is in it,
 	 * selecting a new block resets the updated flag */
 
-	initialize_output(l);
-
-	/* read the index after initialize_output, it may have moved
-	 * the mesoblock from the tail to the current block */
 	index = l->block_indices[mesoff];
 
 	if (ID != id(l->dev->bi)) {
@@ -756,8 +729,7 @@ static void discard_mesoblk(scubed3_t *l, uint32_t L) {
 		index = l->block_indices[L];
 		if (ID == id(l->dev->bi) ||
 				blockio_dev_tomb_fits(l->dev, 1)) break;
-		blockio_dev_write_current_and_select_next_macroblock(l->dev);
-		copy_old_block_to_current(l);
+		advance(l);
 	}
 
 	if (ID == id(l->dev->bi)) remove_slot(l, NO);
@@ -797,8 +769,6 @@ int scubed3_discard(scubed3_t *l, uint64_t offset, uint64_t len) {
 
 	if (offset >= end || !len) return 0;
 	if (len > end - offset) len = end - offset;
-
-	initialize_output(l);
 
 	/* the whole mesoblocks in the range are [first, last) */
 	first = (offset + (1<<log) - 1)>>log;

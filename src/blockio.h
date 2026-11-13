@@ -330,9 +330,6 @@ void blockio_free(blockio_t*);
 
 void blockio_dev_select_next_macroblock(blockio_dev_t*);
 
-void blockio_dev_write_current_and_select_next_macroblock(
-		blockio_dev_t*);
-
 typedef enum blockio_dev_macroblock_status_e {
 		FREE, USED
 } blockio_dev_macroblock_status_t;

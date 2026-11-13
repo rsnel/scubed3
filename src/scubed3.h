@@ -29,8 +29,6 @@ typedef struct scubed3_s {
 	/* must be set from init */
 	struct blockio_dev_s *dev;
 
-	int output_initialized;
-
 	/* some constants for accessor functions */
 	uint16_t mesobits;
 	uint32_t mesomask;
@@ -53,6 +51,8 @@ struct blockio_dev_s;
 void scubed3_init(scubed3_t*, struct blockio_dev_s*);
 
 void scubed3_reinit(scubed3_t*);
+
+void scubed3_select(scubed3_t*);
 
 void scubed3_cycle(scubed3_t*);
 

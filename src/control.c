@@ -521,8 +521,7 @@ static int control_open_create_common(int s, control_thread_priv_t *priv, char *
 
 		assert(!entry->d.bi);
 		/* also if the size is 0, removals may be pending */
-		if (entry->d.no_macroblocks)
-			blockio_dev_select_next_macroblock(&entry->d);
+		if (entry->d.no_macroblocks) scubed3_select(&entry->l);
 
 		/* it was being removed when scubed3 stopped (or crashed): the
 		 * removal continues */
@@ -933,10 +932,7 @@ static int control_resize(int s, control_thread_priv_t *priv, char *argv[]) {
 	entry->size = ((uint64_t)blockio_dev_usable_macroblocks(dev)*
 			dev->b->mmpm)<<dev->b->mesoblk_log;
 
-	if (!dev->bi && dev->no_macroblocks) {
-		blockio_dev_select_next_macroblock(dev);
-		entry->l.output_initialized = 0;
-	}
+	if (!dev->bi && dev->no_macroblocks) scubed3_select(&entry->l);
 
 	dev->updated = 1;
 

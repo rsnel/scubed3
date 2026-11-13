@@ -1461,83 +1461,6 @@ uint32_t blockio_check_data_hashes(blockio_info_t *bi, char *live) {
 	return mismatches;
 }
 
-/* the number of blocks of the partition for the scheduler: the size of the
- * draw set of its current block, the write lands uniformly in it (also
- * the final write of its last block, the draw set of that block is the
- * block itself and the blocks that are removed but not released) */
-uint32_t blockio_dev_weight(blockio_dev_t *dev) {
-	return dev->bi?dev->j.cur_pool:0;
-}
-
-/* the blocks of an open partition that are not in the draw set of its
- * current block: blocks that were added after it was drawn (they may
- * already be in the draw set of the next block), the partition did not
- * write anything to them, so they are free for the scheduler (also if they
- * are removed again: no other partition gets them before the removal is on
- * disk, see blockio_dev_release_removed); returns fresh block n, the number
- * of fresh blocks is put in fresh and the number of blocks in the draw set
- * in pool (that must be the weight of the partition) */
-static blockio_info_t *nth_fresh_block(blockio_dev_t *dev, uint32_t n,
-		uint32_t *fresh, uint32_t *pool) {
-	blockio_info_t *bi, *ret = NULL;
-	uint32_t i;
-
-	*fresh = *pool = 0;
-
-	/* the blocks of a removed partition that are wiped (it has no draw
-	 * set), see blockio_dev_wipe_step */
-	if (dev->dying) {
-		for (bi = dllarr_first(&dev->wipe); bi;
-				bi = dllarr_next(&dev->wipe, bi))
-			if ((*fresh)++ == n) ret = bi;
-		if (dev->prelast && (*fresh)++ == n) ret = dev->prelast;
-		if (dev->last && (*fresh)++ == n) ret = dev->last;
-		return ret;
-	}
-
-	if (!dev->bi) return NULL; /* not yet started, or no blocks */
-
-	for (i = 0; i < juggler_count(&dev->j); i++) {
-		bi = juggler_nth(&dev->j, i);
-		if (juggler_in_current(&dev->j, bi)) (*pool)++;
-		else if ((*fresh)++ == n) ret = bi;
-	}
-
-	for (bi = dllarr_first(&dev->release); bi;
-			bi = dllarr_next(&dev->release, bi)) {
-		if (juggler_in_current(&dev->j, bi)) (*pool)++;
-		else if ((*fresh)++ == n) ret = bi;
-	}
-
-	return ret;
-}
-
-/* the blocks that are free for the scheduler: the unallocated blocks and
- * the fresh blocks of the open partitions (see nth_fresh_block), returns
- * free block n and puts the number of free blocks in count; the draw sets
- * of the current blocks of the open partitions and the free blocks are all
- * blocks of the base device, except the blocks of partitions that are not
- * open (the scheduler does not know about them); a block that is removed
- * from a partition stays in a draw set until it is released, then it is
- * unallocated */
-static blockio_info_t *nth_free_block(blockio_t *b, uint32_t n,
-		uint32_t *count) {
-	blockio_info_t *bi, *ret = NULL;
-	uint32_t i, fresh, pool;
-
-	*count = dllarr_count(&b->unallocated);
-	if (n < *count) ret = dllarr_nth(&b->unallocated, n);
-
-	for (i = 0; i < b->no_devs; i++) {
-		bi = nth_fresh_block(b->devs[i], n - *count, &fresh, &pool);
-		if (n >= *count && !ret) ret = bi;
-		assert(pool == blockio_dev_weight(b->devs[i]));
-		*count += fresh;
-	}
-
-	return ret;
-}
-
 /* write macroblock id (buf is the whole macroblock, the index is its first
  * mesoblock): the data mesoblocks first, then the index, each followed by a
  * sync, so the index is only on disk when its data is; an interrupted
@@ -1833,46 +1756,45 @@ void blockio_finish_wipes(blockio_t *b) {
 }
 
 /* paranoia level 2: one draw of the scheduler, a write goes to a uniformly
- * random block of the whole base device: with probability proportional to
- * its weight an open partition (it writes its current block, which is
- * uniform over its draw set, see blockio_dev_weight), or the free space (a
- * uniformly random free block is overwritten with random data, with io);
+ * random block of the whole base device: a block number is drawn, the block
+ * says who writes:
+ * - a block in the draw set of the current block of an open partition: that
+ *   partition writes its current block (which is uniform over its draw set,
+ *   see juggler.h, so the write is uniform over the base device)
+ * - a block of a removed partition that is wiped: see blockio_dev_wipe_step
+ * - any other block is free: it is overwritten with random data (with io);
+ *   an unallocated block, or a block of an open partition that is not in
+ *   the draw set of its current block: it was added after the current block
+ *   was drawn, the partition did not write anything to it yet (also if it
+ *   is removed again: no other partition gets it before the removal is on
+ *   disk, see blockio_dev_release_removed)
+ * (the blocks of partitions that are not open look unallocated, the
+ * scheduler does not know about them); a block of a partition without a
+ * current block (while it is opened or resized) is not drawn;
+ *
  * returns the partition that must write, or NULL if the free space was
- * written; the caller holds io_mutex */
+ * written (or nothing: only for the clock thread, if no block can be
+ * drawn); the caller holds io_mutex */
 static blockio_dev_t *blockio_draw(blockio_t *b, void *io) {
-	uint32_t i, total, no_free, r;
 	blockio_info_t *bi;
+	blockio_dev_t *dev;
+	int tries = 0;
 
 	pthd_mutex_lock(&b->unallocated_mutex);
-	nth_free_block(b, UINT32_MAX, &no_free);
-	total = no_free;
-	for (i = 0; i < b->no_devs; i++)
-		total += blockio_dev_weight(b->devs[i]);
-	if (!total) { /* only possible for the clock thread */
-		pthd_mutex_unlock(&b->unallocated_mutex);
-		return NULL;
-	}
-	r = random_custom(&b->r, total);
-
-	for (i = 0; i < b->no_devs; i++) {
-		if (r < blockio_dev_weight(b->devs[i])) break;
-		r -= blockio_dev_weight(b->devs[i]);
-	}
-
-	if (i == b->no_devs) { /* the free space */
-		bi = nth_free_block(b, r, &no_free);
-		assert(bi);
-		pthd_mutex_unlock(&b->unallocated_mutex);
-		if (bi->dev && bi->dev->dying)
-			blockio_dev_wipe_step(bi->dev, bi, io);
-		else blockio_write_random(b, io, bi);
-		return NULL;
-	}
+	do {
+		bi = &b->blockio_infos[random_custom(&b->r,
+				b->total_macroblocks)];
+		dev = bi->dev;
+	} while (dev && !dev->dying && !dev->bi && ++tries < 256);
 	pthd_mutex_unlock(&b->unallocated_mutex);
 
-	return b->devs[i];
-}
+	if (dev && dev->dying) blockio_dev_wipe_step(dev, bi, io);
+	else if (dev && !dev->bi) return NULL;
+	else if (dev && juggler_in_current(&dev->j, bi)) return dev;
+	else blockio_write_random(b, io, bi);
 
+	return NULL;
+}
 /* let partition dev write one block (it is drawn, and it is not the
  * partition that is waiting for its turn) */
 static void blockio_give_turn(blockio_t *b, blockio_dev_t *dev) {

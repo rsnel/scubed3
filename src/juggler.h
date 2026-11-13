@@ -49,7 +49,7 @@ typedef struct juggler_s {
 	uint64_t seqno; /* seqno of the most recent write */
 	uint64_t draws; /* the number of draws, the last draw is next */
 	uint64_t cur_draw; /* the draw of the current block */
-	uint32_t next_pool, cur_pool; /* sizes of their draw sets */
+	uint32_t next_pool; /* the size of the draw set of the next block */
 	int greedy; /* paranoia level 0: the next block is the emptiest */
 	random_t *r;
 } juggler_t;

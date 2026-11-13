@@ -370,8 +370,6 @@ uint32_t blockio_dev_usable_macroblocks(blockio_dev_t*);
 
 uint32_t blockio_dev_free_slots(blockio_dev_t*);
 
-uint32_t blockio_dev_weight(blockio_dev_t*);
-
 int blockio_dev_tomb_fits(blockio_dev_t*, uint32_t);
 
 void blockio_dev_add_tomb(blockio_dev_t*, uint32_t);

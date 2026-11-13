@@ -32,7 +32,7 @@ void juggler_init(juggler_t *j, random_t *r) {
 	j->next = NULL;
 	j->seqno = 0;
 	j->draws = j->cur_draw = 0;
-	j->next_pool = j->cur_pool = 0;
+	j->next_pool = 0;
 	j->greedy = 0;
 	j->r = r;
 }
@@ -180,7 +180,6 @@ blockio_info_t *juggler_get_devblock(juggler_t *j) {
 		j->next_pool = j->no_pool;
 	}
 	j->cur_draw = j->draws;
-	j->cur_pool = j->next_pool;
 
 	ret->seqno = ++j->seqno;
 	j->next = juggler_draw(j, ret);

@@ -320,7 +320,7 @@ void scubed3_cycle(scubed3_t *l) {
 	}
 }
 
-void *replay(blockio_info_t *bi, scubed3_t *l) {
+static void replay(scubed3_t *l, blockio_info_t *bi) {
 	uint32_t k, index, n, i, tombs[l->dev->tombs_per_mesoblk];
 
 	VERBOSE("replay at seqno=%ld (%d indices)", bi->seqno, bi->no_indices);
@@ -364,8 +364,6 @@ void *replay(blockio_info_t *bi, scubed3_t *l) {
 		obsolete_mesoblk_byidx(l, index);
 		update_block_indices(l, bi->indices[k], id(bi), k);
 	}
-
-	return NULL;
 }
 
 #if 0
@@ -482,7 +480,7 @@ void scubed3_init(scubed3_t *l, blockio_dev_t *dev) {
 
 	if (!dev->no_macroblocks) return;
 
-	VERBOSE("%d block(s) to replay", dllarr_count(&dev->replay));
+	VERBOSE("%d block(s) to replay", dev->no_replay);
 
 	/* the most recent block absorbed the block that is written next (its
 	 * tail), also the tombstones that were still needed: the slots of
@@ -490,7 +488,7 @@ void scubed3_init(scubed3_t *l, blockio_dev_t *dev) {
 	 * tail would look like a block with live data; and if the write of
 	 * the tail was interrupted, its old index may still be there while
 	 * the slots are partly overwritten); replay obsoletes them */
-	bi = dllarr_last(&dev->replay);
+	bi = dev->no_replay?dev->replay[dev->no_replay - 1]:NULL;
 	if (dev->j.next && dev->j.next != bi) {
 		uint32_t k;
 		bi = dev->j.next;
@@ -499,7 +497,7 @@ void scubed3_init(scubed3_t *l, blockio_dev_t *dev) {
 				bi->indices[k] = BLOCKIO_DEAD;
 	}
 
-	dllarr_iterate(&dev->replay, (dllarr_iterator_t)replay, l);
+	for (i = 0; i < dev->no_replay; i++) replay(l, dev->replay[i]);
 
 	/* so the tail has no live mesoblocks; the most recent block can be
 	 * its own tail (drawn again right after it was written), then it was
@@ -509,7 +507,7 @@ void scubed3_init(scubed3_t *l, blockio_dev_t *dev) {
 	 * (a bug, or someone with the key and write access to the base
 	 * device): the GC could not absorb the tail, the partition is not
 	 * opened */
-	bi = dllarr_last(&dev->replay);
+	bi = dev->no_replay?dev->replay[dev->no_replay - 1]:NULL;
 	if (dev->j.next && (dev->j.next != bi ||
 				juggler_count(&dev->j) > 1)) {
 		uint32_t index;
@@ -562,8 +560,7 @@ void scubed3_init(scubed3_t *l, blockio_dev_t *dev) {
 	}
 
 	/* the replayed blocks are in the pool of the juggler already */
-	while ((bi = dllarr_last(&dev->replay)))
-		dllarr_remove(&dev->replay, bi);
+	dev->no_replay = 0;
 }
 
 /* check the hashes of all live mesoblocks of the partition, report() is

@@ -55,7 +55,7 @@ struct blockio_info_s {
 	uint32_t pool_index; // position in the pool of the juggler
 	uint64_t added, removed; // draws of the juggler (see juggler.h)
 
-	/* for unallocated, replay and release */
+	/* for the lists release and wipe */
 	dllarr_elt_t ur;
 	uint64_t seqno;
 	uint64_t nonce; /* random, new for every write (see blockio_iv0) */
@@ -95,7 +95,12 @@ typedef struct blockio_dev_s {
 	char *name;
 	blockio_t *b;
 	cipher_t *c;
-	dllarr_t replay;
+
+	/* the blocks with an index of ours that were found when the
+	 * partition was opened, sorted by seqno (see blockio_dev_init), they
+	 * are replayed by scubed3_init */
+	blockio_info_t **replay;
+	uint32_t no_replay;
 
 	/* removed blocks, they are given to the pool of unallocated blocks
 	 * after the removal is on disk (in the index of the next write) */
@@ -227,12 +232,11 @@ struct blockio_s {
 	uint32_t hashes_offset;
 	uint32_t bitmap_offset;
 
-	/* the mutex protects the unallocated list
-	 * and the associated *bi->dev pointer in each
-	 * blockio_info_t, which is * NULL if and only if
-	 * the block is in unallocated */
+	/* a block is unallocated if and only if its bi->dev is NULL; the
+	 * mutex protects these pointers and the number of unallocated
+	 * blocks */
 	pthread_mutex_t unallocated_mutex;
-	dllarr_t unallocated;
+	uint32_t no_unallocated;
 
 	uint8_t mesoblk_log;
 	uint16_t mmpm; /* max mesoblocks per macroblock */
@@ -319,8 +323,7 @@ void blockio_dev_init(blockio_dev_t*, blockio_t*, cipher_t*,
 
 void blockio_dev_free(blockio_dev_t*);
 
-void blockio_dev_scan_header(dllarr_t*, blockio_dev_t*,
-		blockio_info_t*, uint64_t*);
+void blockio_dev_scan_header(blockio_dev_t*, blockio_info_t*, uint64_t*);
 
 blockio_info_t *blockio_dev_get_new_macroblock(blockio_dev_t*);
 

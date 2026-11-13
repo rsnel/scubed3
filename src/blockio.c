@@ -218,7 +218,6 @@ static uint64_t mesoblk_hash(const void *ciphertext, size_t size) {
 void blockio_free(blockio_t *b) {
 	uint32_t i;
 	assert(b);
-	dllarr_free(&b->unallocated);
 	for (i = 0; b->blockio_infos && i < b->total_macroblocks; i++)
 		blockio_info_free_tables(&b->blockio_infos[i]);
 	free(b->blockio_infos);
@@ -336,9 +335,7 @@ void blockio_init_file(blockio_t *b, const char *path, uint8_t macroblock_log,
 	b->headers = ecalloc(b->total_macroblocks, BLOCKIO_HEADER);
 	bitmap_init(&b->header_valid, b->total_macroblocks);
 
-	dllarr_init(&b->unallocated, offsetof(blockio_info_t, ur));
-	for (uint32_t i = 0; i < b->total_macroblocks; i++) 
-		dllarr_append(&b->unallocated, &b->blockio_infos[i]);
+	b->no_unallocated = b->total_macroblocks;
 
 	pthd_mutex_init(&b->unallocated_mutex);
 
@@ -404,11 +401,41 @@ static int blockio_dev_maybe_ours(blockio_dev_t *dev, uint32_t id) {
 	return ret;
 }
 
+/* an unallocated block becomes a block of the partition, and a block of the
+ * partition is given back to the unallocated blocks (the caller holds
+ * unallocated_mutex) */
+static void blockio_dev_take(blockio_dev_t *dev, blockio_info_t *bi) {
+	assert(!bi->dev && dev->b->no_unallocated);
+	bi->dev = dev;
+	dev->b->no_unallocated--;
+}
+
+static void blockio_dev_give_back(blockio_dev_t *dev, blockio_info_t *bi) {
+	assert(bi->dev == dev);
+	blockio_info_free_tables(bi);
+	bi->dev = NULL;
+	bi->seqno = 0;
+	dev->b->no_unallocated++;
+}
+
 static void blockio_dev_take_index(blockio_dev_t*);
 
 static void blockio_dev_read_index(blockio_dev_t*, blockio_info_t*);
 
 static void blockio_dev_resume_wipe(blockio_dev_t*);
+
+/* the blocks that are replayed are sorted by seqno; equal seqnos are
+ * possible: an interrupted (ignored) write leaves a block that may be FREE
+ * now, with the same seqno as the block that was written in its slot later,
+ * the stale filter removes it (of two blocks with the same seqno, the one
+ * with the lowest number is the most recent) */
+static int compare_seqno(const void *a, const void *b) {
+	blockio_info_t *x = *(blockio_info_t**)a, *y = *(blockio_info_t**)b;
+
+	if (x->seqno != y->seqno) return (x->seqno > y->seqno)?1:-1;
+
+	return (x < y) - (x > y);
+}
 
 void blockio_dev_free(blockio_dev_t *dev) {
 	int i;
@@ -441,41 +468,20 @@ void blockio_dev_free(blockio_dev_t *dev) {
 		blockio_set_paranoia(dev->b, 1, 0);
 	}
 
-	blockio_info_t *bi;
-
-	/* going to modify bi->dev pointer and the unallocated list */
+	/* all its blocks are unallocated now: the blocks in the pool of the
+	 * juggler, the blocks that were found while it was opened (creating
+	 * an existing partition for example), and the removed blocks that
+	 * are not released (the removal is on disk: the current block was
+	 * written above, and scubed3_free makes sure that it is not its own
+	 * next block) */
 	pthd_mutex_lock(&dev->b->unallocated_mutex);
-
-	for (i = 0; i < dev->b->total_macroblocks; i++) {
-		bi = &dev->b->blockio_infos[i];
-		if (bi->dev == dev) {
-			blockio_info_free_tables(bi);
-			bi->dev = NULL;
-		}
-	}
-
-	/* the replay list may still contain blocks (creating an existing
-	 * device for example), they are also in the pool of the juggler,
-	 * unless opening failed before they were added to it */
-	while ((bi = dllarr_last(&dev->replay))) {
-		dllarr_remove(&dev->replay, bi);
-		if (!juggler_contains(&dev->j, bi))
-			dllarr_append(&dev->b->unallocated, bi);
-	}
-
-	/* re-add blocks to unallocated (removed blocks are not in the pool,
-	 * the removal is on disk: the current block was written above, and
-	 * scubed3_free makes sure that it is not its own next block) */
-	juggler_free_and_empty_into(&dev->j, dllarr_append,
-			&dev->b->unallocated);
-	while ((bi = dllarr_last(&dev->release))) {
-		dllarr_remove(&dev->release, bi);
-		dllarr_append(&dev->b->unallocated, bi);
-	}
-
+	for (i = 0; i < dev->b->total_macroblocks; i++)
+		if (dev->b->blockio_infos[i].dev == dev)
+			blockio_dev_give_back(dev, &dev->b->blockio_infos[i]);
 	pthd_mutex_unlock(&dev->b->unallocated_mutex);
 
-	dllarr_free(&dev->replay);
+	juggler_free(&dev->j);
+	free(dev->replay);
 	dllarr_free(&dev->release);
 	dllarr_free(&dev->wipe);
 	free(dev->old_ondisk);
@@ -712,19 +718,17 @@ void blockio_dev_remove_block(blockio_dev_t *dev, blockio_info_t *bi) {
  * copy_old_block_to_current), so the state never falls back to a state in
  * which a released block is still used */
 static void blockio_dev_release_removed(blockio_dev_t *dev) {
-	blockio_info_t *bi, *next;
+	blockio_info_t *bi, *prev;
 
+	/* (from the end of the list: removing the last element is cheap) */
 	pthd_mutex_lock(&dev->b->unallocated_mutex);
-	for (bi = dllarr_first(&dev->release); bi; bi = next) {
-		next = dllarr_next(&dev->release, bi);
+	for (bi = dllarr_last(&dev->release); bi; bi = prev) {
+		prev = dllarr_prev(&dev->release, bi);
 		if (dev->j.next && bi->removed >= dev->j.draws) continue;
 		dllarr_remove(&dev->release, bi);
 		/* its index will not be replayed anymore */
 		blockio_dev_count_ondisk(dev, bi, -1);
-		blockio_info_free_tables(bi);
-		bi->dev = NULL;
-		bi->seqno = 0;
-		dllarr_append(&dev->b->unallocated, bi);
+		blockio_dev_give_back(dev, bi);
 	}
 	pthd_mutex_unlock(&dev->b->unallocated_mutex);
 }
@@ -859,8 +863,8 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 		const char *name) {
 	int i; 
 	uint64_t seqno = 0;
-	uint32_t next_block;
-	blockio_info_t *bi, *next, *prev;
+	uint32_t next_block, j;
+	blockio_info_t *bi, *prev;
 	bitmap_t prev_status;
 	char err[256] = "";
 	int have_prev = 0;
@@ -868,7 +872,6 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 	assert(b && c);
 	assert(b->mesoblk_log < b->macroblock_log);
 	random_init(&dev->r);
-	dllarr_init(&dev->replay, offsetof(blockio_info_t, ur));
 	dllarr_init(&dev->release, offsetof(blockio_info_t, ur));
 	dllarr_init(&dev->wipe, offsetof(blockio_info_t, ur));
 	bitmap_init(&dev->status, b->max_macroblocks);
@@ -890,6 +893,8 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 	dev->out_macroblock = ecalloc(1, 1<<b->macroblock_log);
 	dev->ram_block = NULL;
 	dev->old_ondisk = ecalloc(b->mmpm, sizeof(uint32_t));
+	dev->replay = ecalloc(b->total_macroblocks + 1, sizeof(*dev->replay));
+	dev->no_replay = 0;
 	/* a slot of tombstones: number of tombstones, tombstones */
 	dev->tombs_per_mesoblk = (1<<(b->mesoblk_log - 2)) - 1;
 
@@ -908,10 +913,12 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 					BLOCKIO_HEADER);
 
 	for (i = 0; i < b->total_macroblocks; i++)
-		blockio_dev_scan_header(&dev->replay, dev,
-				dev->b->blockio_infos + i, &seqno);
+		blockio_dev_scan_header(dev, dev->b->blockio_infos + i, &seqno);
 
 	pthd_mutex_unlock(&b->unallocated_mutex);
+
+	qsort(dev->replay, dev->no_replay, sizeof(*dev->replay),
+			compare_seqno);
 
 	/* (the blocks that were taken are given back by blockio_dev_free) */
 	if (dev->scan_error[0]) {
@@ -920,7 +927,7 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 				dev->name, dev->scan_error);
 	}
 
-	if (!dllarr_count(&dev->replay)) {
+	if (!dev->no_replay) {
 		assert(!seqno);
 		return;
 	}
@@ -930,21 +937,18 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 	 * as if it was never written: its old contents were absorbed by
 	 * the block written before it, and the index of that block says
 	 * that it is written next, so the write will be redone */
-	while ((bi = dllarr_last(&dev->replay)) &&
-			blockio_check_data_hashes(bi, NULL)) {
+	while (blockio_check_data_hashes(dev->replay[dev->no_replay - 1],
+				NULL)) {
+		bi = dev->replay[--dev->no_replay];
 		WARNING("most recent block %u (seqno=%lu) of \"%s\" is "
 				"incomplete (interrupted write), ignoring it",
 				blockio_get_macroblock_index(bi), bi->seqno,
 				dev->name);
 		pthd_mutex_lock(&b->unallocated_mutex);
-		dllarr_remove(&dev->replay, bi);
-		blockio_info_free_tables(bi);
-		bi->dev = NULL;
-		bi->seqno = 0;
-		dllarr_append(&b->unallocated, bi);
+		blockio_dev_give_back(dev, bi);
 		pthd_mutex_unlock(&b->unallocated_mutex);
 
-		if (!(bi = dllarr_last(&dev->replay))) {
+		if (!dev->no_replay) {
 			/* nothing left, the partition was never written */
 			seqno = 0;
 			dev->no_macroblocks = 0;
@@ -954,7 +958,7 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 
 	/* take the state of the partition from the most recent block (with
 	 * equal seqnos, the scan may have taken it from another block) */
-	bi = dllarr_last(&dev->replay);
+	bi = dev->replay[dev->no_replay - 1];
 	seqno = bi->seqno;
 	next_block = bi->next_block;
 
@@ -966,8 +970,8 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 	/* (the index of the most recent block is read first: if it cannot
 	 * be read, nothing is allocated yet) */
 	blockio_dev_read_index(dev, bi);
-	if (next_block != 0xFFFFFFFF &&
-			(prev = dllarr_prev(&dev->replay, bi))) {
+	if (next_block != 0xFFFFFFFF && dev->no_replay > 1) {
+		prev = dev->replay[dev->no_replay - 2];
 		blockio_dev_read_index(dev, prev);
 		bitmap_init(&prev_status, b->max_macroblocks);
 		bitmap_read(&prev_status, (uint32_t*)BITMAP);
@@ -997,9 +1001,8 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 	 * treated as fresh blocks (the loop below adds them) */
 	pthd_mutex_lock(&b->unallocated_mutex);
 
-	bi = dllarr_first(&dev->replay);
-	while (bi) {
-		next = dllarr_next(&dev->replay, bi);
+	for (i = j = 0; i < dev->no_replay; i++) {
+		bi = dev->replay[i];
 		if (have_prev && bi->seqno >= dev->trim_floor &&
 				blockio_dev_get_macroblock_status(bi) == FREE &&
 				bitmap_getbit(&prev_status,
@@ -1007,21 +1010,16 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 			VERBOSE("block %u (seqno=%lu) is removed, but not yet "
 					"released", blockio_get_macroblock_index(bi),
 					bi->seqno);
-			dllarr_remove(&dev->replay, bi);
 			dllarr_append(&dev->release, bi);
 		} else if (blockio_dev_get_macroblock_status(bi) == FREE ||
 				bi->seqno < dev->trim_floor) {
 			VERBOSE("block %u (seqno=%lu) is stale",
 					blockio_get_macroblock_index(bi),
 					bi->seqno);
-			dllarr_remove(&dev->replay, bi);
-			blockio_info_free_tables(bi);
-			bi->dev = NULL;
-			bi->seqno = 0;
-			dllarr_append(&b->unallocated, bi);
-		}
-		bi = next;
+			blockio_dev_give_back(dev, bi);
+		} else dev->replay[j++] = bi;
 	}
+	dev->no_replay = j;
 
 	pthd_mutex_unlock(&b->unallocated_mutex);
 	if (have_prev) bitmap_free(&prev_status);
@@ -1030,7 +1028,7 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 	dev->j.seqno = seqno;
 
 	VERBOSE("we currently got %d blocks, and we expect %d blocks",
-			dllarr_count(&dev->replay), dev->no_macroblocks);
+			dev->no_replay, dev->no_macroblocks);
 
 	/* if the state of the partition does not fit, it is not opened (the
 	 * other partitions are not affected, the blocks that we took are
@@ -1065,8 +1063,7 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 				break;
 			}
 
-			dllarr_remove(&dev->b->unallocated, bi);
-			bi->dev = dev;
+			blockio_dev_take(dev, bi);
 			blockio_prepare_block(bi);
 			juggler_add_macroblock(&dev->j, bi);
 		}	
@@ -1076,9 +1073,8 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 
 	/* all blocks of the partition (also the ones that will be
 	 * replayed) are in the pool of the juggler */
-	for (bi = dllarr_first(&dev->replay); bi;
-			bi = dllarr_next(&dev->replay, bi))
-		juggler_add_macroblock(&dev->j, bi);
+	for (j = 0; j < dev->no_replay; j++)
+		juggler_add_macroblock(&dev->j, dev->replay[j]);
 
 	if (!*err && dev->no_macroblocks != juggler_count(&dev->j))
 		snprintf(err, sizeof(err), "count of macroblocks does not "
@@ -1086,9 +1082,10 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 
 	/* every write has a new seqno (equal seqnos of an interrupted write
 	 * are filtered above), the seqnos do not wrap around */
-	for (bi = dllarr_first(&dev->replay); bi && !*err;
-			bi = dllarr_next(&dev->replay, bi)) {
-		blockio_info_t *n = dllarr_next(&dev->replay, bi);
+	for (j = 0; j < dev->no_replay && !*err; j++) {
+		blockio_info_t *n = (j + 1 < dev->no_replay)?
+			dev->replay[j + 1]:NULL;
+		bi = dev->replay[j];
 		if (n && n->seqno == bi->seqno)
 			snprintf(err, sizeof(err), "blocks %u and %u have the "
 					"same seqno", blockio_get_macroblock_index(bi),
@@ -1185,18 +1182,6 @@ static void blockio_dev_read_index(blockio_dev_t *dev, blockio_info_t *bi) {
 	}
 }
 
-static void sort_to_replay(dllarr_t *replay, blockio_info_t *bi) {
-	/* equal seqnos are possible: an interrupted (ignored) write leaves
-	 * a block that may be FREE now, with the same seqno as the block
-	 * that was written in its slot later, the stale filter removes it */
-	void *compare_seqno(blockio_info_t *bi, uint64_t *seqno) {
-		if (*seqno > bi->seqno) return NULL;
-		else return bi;
-	}
-	dllarr_insert(replay, bi, dllarr_iterate(replay,
-				(dllarr_iterator_t)compare_seqno,
-				&bi->seqno));
-}
 
 static int compare_uint32(const void *a, const void *b) {
 	uint32_t x = *(const uint32_t*)a, y = *(const uint32_t*)b;
@@ -1241,8 +1226,8 @@ static void blockio_dev_bad_index(blockio_dev_t *dev, blockio_info_t *bi,
 	blockio_info_free_tables(bi);
 }
 
-void blockio_dev_scan_header(dllarr_t *replay, blockio_dev_t *dev,
-		blockio_info_t *bi, uint64_t *seqno) {
+void blockio_dev_scan_header(blockio_dev_t *dev, blockio_info_t *bi,
+		uint64_t *seqno) {
 	assert(dev && dev->b);
 	int i;
 	char zero[128] = { };
@@ -1372,8 +1357,7 @@ void blockio_dev_scan_header(dllarr_t *replay, blockio_dev_t *dev,
 			"next=%d", no, bi->seqno, dev->name, bi->no_indices,
 			(int)bi->next_block);
 
-	dllarr_remove(&dev->b->unallocated, bi);
-	sort_to_replay(replay, bi);
+	dev->replay[dev->no_replay++] = bi;
 
 	if (bi->seqno > *seqno) { // candidate found for highest seqno
 		*seqno = bi->seqno;
@@ -1382,7 +1366,7 @@ void blockio_dev_scan_header(dllarr_t *replay, blockio_dev_t *dev,
 	}
 
 	/* mark the block as ours */
-	bi->dev = dev;
+	blockio_dev_take(dev, bi);
 }
 
 int blockio_dev_read_mesoblk_part(blockio_dev_t *dev, void *buf, uint32_t id,
@@ -1542,10 +1526,7 @@ static void blockio_dev_release_wiped(blockio_dev_t *dev, blockio_info_t *bi) {
 	bi->wipe = 0;
 	if (bi == dev->last) dev->last = NULL;
 	if (bi == dev->prelast) dev->prelast = NULL;
-	blockio_info_free_tables(bi);
-	bi->dev = NULL;
-	bi->seqno = 0;
-	dllarr_append(&dev->b->unallocated, bi);
+	blockio_dev_give_back(dev, bi);
 	pthd_mutex_unlock(&dev->b->unallocated_mutex);
 }
 
@@ -1587,12 +1568,11 @@ out:
  * the caller sets last (and prelast) and wipes at once in level 0 and 1 */
 static void blockio_dev_start_wipe(blockio_dev_t *dev) {
 	blockio_t *b = dev->b;
-	blockio_info_t *bi, *next;
+	blockio_info_t *bi;
 	uint32_t i, found = 0;
 
 	pthd_mutex_lock(&b->unallocated_mutex);
-	for (bi = dllarr_first(&dev->release); bi; bi = next) {
-		next = dllarr_next(&dev->release, bi);
+	while ((bi = dllarr_last(&dev->release))) {
 		dllarr_remove(&dev->release, bi);
 		if (bi == dev->last || bi == dev->prelast) continue;
 		bi->wipe = 1;
@@ -1601,8 +1581,7 @@ static void blockio_dev_start_wipe(blockio_dev_t *dev) {
 	for (i = 0; i < b->total_macroblocks; i++) {
 		bi = &b->blockio_infos[i];
 		if (bi->dev || !blockio_dev_has_index(dev, bi)) continue;
-		dllarr_remove(&b->unallocated, bi);
-		bi->dev = dev;
+		blockio_dev_take(dev, bi);
 		bi->wipe = 1;
 		dllarr_append(&dev->wipe, bi);
 		found++;
@@ -1629,10 +1608,11 @@ static void blockio_dev_start_wipe(blockio_dev_t *dev) {
  * partition is opened again), an older index is the most recent one */
 static void blockio_dev_resume_wipe(blockio_dev_t *dev) {
 	blockio_t *b = dev->b;
-	blockio_info_t *bi, *last, *prelast;
+	blockio_info_t *last, *prelast;
+	uint32_t i;
 
-	last = dllarr_last(&dev->replay);
-	prelast = dllarr_prev(&dev->replay, last);
+	last = dev->replay[dev->no_replay - 1];
+	prelast = (dev->no_replay > 1)?dev->replay[dev->no_replay - 2]:NULL;
 	if (prelast) {
 		blockio_dev_read_index(dev, prelast);
 		if (binio_read_uint32_be(PENDING_UINT32) !=
@@ -1642,14 +1622,10 @@ static void blockio_dev_resume_wipe(blockio_dev_t *dev) {
 
 	/* last and prelast stay ours, the other blocks are free */
 	pthd_mutex_lock(&b->unallocated_mutex);
-	while ((bi = dllarr_first(&dev->replay))) {
-		dllarr_remove(&dev->replay, bi);
-		if (bi == last || bi == prelast) continue;
-		blockio_info_free_tables(bi);
-		bi->dev = NULL;
-		bi->seqno = 0;
-		dllarr_append(&b->unallocated, bi);
-	}
+	for (i = 0; i < dev->no_replay; i++)
+		if (dev->replay[i] != last && dev->replay[i] != prelast)
+			blockio_dev_give_back(dev, dev->replay[i]);
+	dev->no_replay = 0;
 	pthd_mutex_unlock(&b->unallocated_mutex);
 
 	dev->no_macroblocks = dev->reserved_macroblocks = 0;
@@ -1740,7 +1716,7 @@ void blockio_dev_wipe_all(blockio_dev_t *dev) {
 	blockio_info_t *bi;
 
 	if (!dev->dying) return;
-	while ((bi = dllarr_first(&dev->wipe)))
+	while ((bi = dllarr_last(&dev->wipe)))
 		blockio_dev_wipe_step(dev, bi, dev->io);
 	while (dev->dying) blockio_dev_wipe_step(dev, dev->prelast?
 			dev->prelast:dev->last, dev->io);
@@ -2294,6 +2270,8 @@ out:
 
 int blockio_dev_allocate_macroblocks(blockio_dev_t *dev, uint32_t size) {
 	int err = 0;
+	blockio_info_t *bi;
+	uint32_t *ids = NULL, n = 0, i;
 	DEBUG("we got a request to add %d macroblocks to %s",
 			size, dev->name);
 
@@ -2305,38 +2283,42 @@ int blockio_dev_allocate_macroblocks(blockio_dev_t *dev, uint32_t size) {
 
 	pthd_mutex_lock(&dev->b->unallocated_mutex);
 
-	if (dllarr_count(&dev->b->unallocated) + dllarr_count(&dev->release) <
-			size) {
+	if (dev->b->no_unallocated + dllarr_count(&dev->release) < size) {
 		err = -1; // not enough unclaimed blocks avaiable
-		// fall through to unlock
-	} else while (size--) {
-		blockio_info_t *bi;
+		size = 0;
+	}
 
-		/* blocks that were removed, but are not yet released, are
-		 * taken back first; they are in the draw set of the current
-		 * block, see juggler_take_back; their index on disk still
-		 * counts (see blockio_dev_count_ondisk), but their indices
-		 * are not live (also of the blocks that are not replayed at
-		 * startup), they are treated like added blocks that still
-		 * have an index of ours (see blockio_dev_check_readded) */
-		if ((bi = dllarr_last(&dev->release))) {
-			dllarr_remove(&dev->release, bi);
-			VERBOSE("taking back block %u",
-					blockio_get_macroblock_index(bi));
-			bi->no_indices = bi->no_nonobsolete = 0;
-			bi->readded = 1;
-			dev->no_macroblocks++;
-			juggler_take_back(&dev->j, bi);
-			blockio_dev_change_macroblock_status(bi, USED);
-			continue;
-		}
-		uint32_t no = random_custom(&dev->r,
-				dllarr_count(&dev->b->unallocated));
+	/* blocks that were removed, but are not yet released, are taken back
+	 * first; they are in the draw set of the current block, see
+	 * juggler_take_back; their index on disk still counts (see
+	 * blockio_dev_count_ondisk), but their indices are not live (also of
+	 * the blocks that are not replayed at startup), they are treated like
+	 * added blocks that still have an index of ours (see
+	 * blockio_dev_check_readded) */
+	while (size && (bi = dllarr_last(&dev->release))) {
+		dllarr_remove(&dev->release, bi);
+		VERBOSE("taking back block %u", blockio_get_macroblock_index(bi));
+		bi->no_indices = bi->no_nonobsolete = 0;
+		bi->readded = 1;
+		dev->no_macroblocks++;
+		juggler_take_back(&dev->j, bi);
+		blockio_dev_change_macroblock_status(bi, USED);
+		size--;
+	}
 
-		bi = dllarr_remove(&dev->b->unallocated,
-					dllarr_nth(&dev->b->unallocated, no));
+	/* the other blocks are chosen at random from the unallocated blocks */
+	if (size) {
+		ids = ecalloc(dev->b->no_unallocated, sizeof(uint32_t));
+		for (i = 0; i < dev->b->total_macroblocks; i++)
+			if (!dev->b->blockio_infos[i].dev) ids[n++] = i;
+		assert(n == dev->b->no_unallocated);
+	}
+	while (size--) {
+		i = random_custom(&dev->r, n);
+		bi = &dev->b->blockio_infos[ids[i]];
+		ids[i] = ids[--n];
 
-		bi->dev = dev;
+		blockio_dev_take(dev, bi);
 
 		blockio_prepare_block(bi);
 		blockio_dev_check_readded(dev, bi);
@@ -2346,6 +2328,7 @@ int blockio_dev_allocate_macroblocks(blockio_dev_t *dev, uint32_t size) {
 		juggler_add_macroblock(&dev->j, bi);
 		blockio_dev_change_macroblock_status(bi, USED);
 	}
+	free(ids);
 
 	/* the next block may have changed, it is the tail of the current
 	 * block; if the old tail is absorbed already, the copy of its live

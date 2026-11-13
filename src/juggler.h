@@ -21,7 +21,6 @@
 #include <stdint.h>
 #include "blockio.h"
 #include "random.h"
-#include "dllarr.h"
 
 /* the juggler decides which block of a partition is written next: every
  * write goes to a block that is drawn uniformly at random from all blocks
@@ -78,9 +77,6 @@ blockio_info_t *juggler_get_devblock(juggler_t*);
 
 void juggler_verbose(juggler_t*, uint32_t (*getnum)(blockio_info_t*, void*),
 		void*);
-
-void juggler_free_and_empty_into(juggler_t*,
-		void *(*append)(dllarr_t*, void*), dllarr_t*);
 
 void juggler_free(juggler_t*);
 

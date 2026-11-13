@@ -200,19 +200,9 @@ void juggler_verbose(juggler_t *j, uint32_t (*getnum)(blockio_info_t*, void*),
 				j->pool[i]->seqno, j->pool[i]->no_nonobsolete);
 }
 
-void juggler_free_and_empty_into(juggler_t *j,
-		void *(*append)(dllarr_t*, void*), dllarr_t *list) {
-	uint32_t i;
-
-	for (i = 0; i < j->no_pool; i++)
-		if (append) append(list, j->pool[i]);
-
+void juggler_free(juggler_t *j) {
 	free(j->pool);
 	j->pool = NULL;
 	j->no_pool = j->size_pool = 0;
 	j->next = NULL;
-}
-
-void juggler_free(juggler_t *j) {
-	juggler_free_and_empty_into(j, NULL, NULL);
 }

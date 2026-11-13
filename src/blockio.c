@@ -506,7 +506,7 @@ uint32_t blockio_dev_free_slots(blockio_dev_t *dev) {
 	uint32_t used;
 	assert(dev->bi);
 
-	if (dev->self_tail || dev->final_pending) return 0;
+	if (dev->self_tail || dev->final_write) return 0;
 
 	used = dev->bi->no_indices + (dev->no_tombs + dev->tombs_per_mesoblk -
 			1)/dev->tombs_per_mesoblk;
@@ -519,7 +519,7 @@ uint32_t blockio_dev_free_slots(blockio_dev_t *dev) {
 int blockio_dev_tomb_fits(blockio_dev_t *dev, uint32_t no) {
 	assert(dev->bi);
 
-	if (dev->self_tail || dev->final_pending) return 0;
+	if (dev->self_tail || dev->final_write) return 0;
 
 	return dev->bi->no_indices + (dev->no_tombs + no +
 			dev->tombs_per_mesoblk - 1)/dev->tombs_per_mesoblk <=
@@ -795,8 +795,8 @@ void blockio_dev_select_next_macroblock(blockio_dev_t *dev) {
 			blockio_dev_remove_block(dev, victim);
 		}
 		blockio_dev_remove_block(dev, dev->bi);
-		if (dev->b->paranoia >= 2) dev->final_pending = 1;
-		else blockio_dev_write_current_macroblock(dev);
+		if (dev->b->paranoia < 2)
+			blockio_dev_write_current_macroblock(dev);
 		return;
 	}
 
@@ -2019,7 +2019,6 @@ void blockio_dev_write_current_macroblock(blockio_dev_t *dev) {
 	DEBUG("write block %u (seqno=%lu)", id, dev->bi->seqno);
 	dev->writes++;
 	dev->self_tail = 0;
-	dev->final_pending = 0;
 
 	/* the tombstones go in slots after the data */
 	for (i = 0; i < dev->no_tombs; i += dev->tombs_per_mesoblk) {

@@ -173,17 +173,14 @@ typedef struct blockio_dev_s {
 	 * before data goes in it (see blockio_dev_select_next_macroblock) */
 	int self_tail;
 
-	/* paranoia level 2: the current block is the last block of the
-	 * partition, it is removed by its final write, when it is its turn */
-	int final_pending;
-
 	/* paranoia level 2: this partition may write one block now */
 	int turn;
 
 	/* shrinking to 0 blocks: zero[0] and zero[1] are the two most
 	 * recently written (different) blocks, their indices say that the
 	 * partition has size 0; final_write: the current block is the last
-	 * block, it is removed by its write */
+	 * block, it is removed by its write (in paranoia level 2 and 3 when
+	 * it is its turn, it takes no data until then) */
 	blockio_info_t *zero[2];
 	int final_write;
 

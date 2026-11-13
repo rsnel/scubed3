@@ -30,22 +30,21 @@ block for use as IV (see Encryption).
 
 indexblocks are encrypted with IV = ESSIV(0, 0, macroblock_number)
 
-mesoblocks are encrypted with IV = ESSIV(seqno^nonce, mesoblock_number,
+mesoblocks are encrypted with IV = ESSIV(nonce, mesoblock_number,
 macroblock_number), mesoblock_number is 1..255 (with the default sizes), the
 nonce is random and new for every write of a macroblock (it is in the
 indexblock)
 
 the indexblock IV will repeat when the same disk block is written
 
-the mesoblock IV does not repeat, also not when a seqno repeats: when the
-base device is restored from a backup and used again, or when a torn write
-is redone (the torn block is ignored, its write is redone in the same block
-with the same seqno); with the seqno alone, someone who has both versions of
+the mesoblock IV does not repeat, also not when a seqno repeats (when the
+base device is restored from a backup and used again); with the seqno as IV,
+someone who has both versions of
 such a block (the backup and the device, or the old pages that an SSD keeps)
 would see the repeated IVs: with CBC the leading 16 byte blocks that are the
 same in both versions, and that the device was rolled back; the IV only
-repeats if the nonces of two writes of the same block happen to collide
-(with their seqnos), with probability about n^2/2^65 for n writes of a block
+repeats if the nonces of two writes of the same block happen to collide,
+with probability about n^2/2^65 for n writes of a block
 
 Encryption
 ~~~~~~~~~~
@@ -57,7 +56,7 @@ AES-256 encryption, with SHA256(key) as key, of the 16 byte block made of iv0
 
 An earlier design used a wide block mode (ABL) for the data, so that a
 macroblock changes completely or not at all. That is not needed: every write
-of a macroblock has a new seqno, so every data mesoblock has a new IV and
+of a macroblock has a new nonce, so every data mesoblock has a new IV and
 changes completely; the indexblock has a fixed IV, but its first 32 bytes are
 a hash of the rest of it, which contains the seqno and the nonce, so with CBC
 the whole indexblock changes as well. To someone without the key, a macroblock changes
@@ -689,20 +688,19 @@ the mesoblocks.
 Layout of macroblock:
 
 0x000000 SHA256_HASH_INDEXBLOCK hash of 0x000020 - 0x003FFF
-0x000020 uint64_t nonce (random, new for every write; 0 in SSS3v0.4)
+0x000020 uint64_t nonce (random, new for every write)
 0x000028 24 bytes, MUST be 0
-0x000040 uint64_t trim_floor (blocks with seqno < trim_floor are stale)
+0x000040 uint64_t trim_floor (blocks with seqno < trim_floor are stale, see
+         Shrinking and Discard)
 0x000048 24 bytes, MUST be 0
 0x000060 uint64_t seqno
 0x000068 uint32_t next_block (the block that will be written after this one,
          0xFFFFFFFF if none)
 0x00006C 4 bytes, MUST be 0
-0x000070 8byte literal "SSS3v0.5" (blocks of "SSS3v0.4" are still read, their
-         nonce is 0, they become SSS3v0.5 when they are written again; an
-         older scubed3 does not know SSS3v0.5 blocks, it would see them as
-         free blocks: DO NOT USE AN OLDER SCUBED3 on a base device that this
-         version wrote to, it may open a partition in an old state, or add
-         its blocks as empty ones)
+0x000070 8byte literal "SSS3v0.6" (blocks of older versions, SSS3v0.4 and
+         SSS3v0.5, are not read: they look like free blocks; an older
+         scubed3 does not know SSS3v0.6 blocks either: DO NOT USE ANOTHER
+         VERSION OF SCUBED3 on a base device, copy the data to a new one)
 0x000078 uint32_t no_macroblocks
 0x00007C uint32_t reserved_blocks
 0x000080 uint32_t pending_removals (shrinking: blocks still to be removed)
@@ -780,7 +778,10 @@ Paranoia level 2 is built on top of this: to write a block of the whole
 disk, a partition is picked with a probability proportional to its pool size
 (or the free space, with a probability proportional to its number of blocks),
 that partition writes the block it has chosen as next_block. All writes on
-the disk are then in uniform random order.
+the disk are then in uniform random order. (The scheduler draws the number
+of a block of the base device: if that block is in the draw set of the
+current block of a partition, see below, that partition writes; any other
+block is free and gets random data.)
 
 When the block that is drawn twice is the current block (it is its own
 tail), it is written out empty at the next write of the partition, it takes
@@ -850,6 +851,11 @@ returns 0 bytes, a read or write that crosses the end is shortened, a write
 that starts at or past the end fails with ENOSPC. Errors (EIO, see above) fail
 the whole request.
 
+The garbage collector runs when a block becomes the current block: it takes
+the live data of its tail at once, so the current block can always be
+written. Its plaintext is encrypted in place when it is written (one
+macroblock of memory per open partition).
+
 A partition can be opened any number of times at once (resize2fs, for
 example, opens it twice); the requests are handled one by one. It cannot be
 closed or resized while it is open. The kernel tells scubed3 asynchronously
@@ -881,21 +887,29 @@ A discarded mesoblock must stay discarded when the partition is opened
 again, also if older versions of it are still on disk (in blocks that were
 not written since). So a discard writes a tombstone: a list of discarded
 logical mesoblocks in a data mesoblock of the current block (index value
-0xFFFFFFFE; a big endian uint32_t count, followed by that many uint32_t's,
-at most 4095 per mesoblock). When a block is replayed, its tombstones are
-applied first: they discard the versions of those mesoblocks in older blocks
-(the data in the block itself is newer).
+0xFFFFFFFE; a big endian uint32_t count, followed by that many tombstones:
+a uint32_t, the logical mesoblock, and a uint64_t, the seqno of the block
+in which the discard was written; at most 1365 per mesoblock). When a block
+is replayed, its tombstones are applied first: they discard the versions of
+those mesoblocks in older blocks (the data in the block itself is newer).
 
-A tombstone is needed as long as a version of its mesoblock is in the index
-of a block on disk; scubed3 counts these versions for every logical mesoblock.
-The GC carries tombstones that are still needed (from the tail, and from the
-victims when shrinking) to the current block, as live data; the others die
-out by themselves when the blocks with old versions are written again. A
-mesoblock that is discarded while it is in the current block (not yet on disk)
-is removed from it. A block that is added to a
-partition (grow) may still have an old index of ours, that would be replayed
-if the partition is opened again before the block is written: its versions
-are counted, and they get tombstones if they were discarded.
+An old version of a discarded mesoblock can only be in a block that is older
+than the discard, so a tombstone is needed as long as a block of the
+partition has a lower seqno than the tombstone (and its mesoblock is not
+written again: the new version is newer than every old one). The GC carries
+the tombstones that are still needed (from the tail, and from the victims
+when shrinking) to the current block, as live data; they keep their seqno.
+When no block of the partition is older than a tombstone, it is dropped, and
+trim_floor is raised to its seqno, as for a trim (see Shrinking): a block
+that the partition gave away earlier may still have an old index of ours
+with an old version in it, if that block is added again (grow), its index is
+below the floor and is never replayed. So the tombstones of a discard die
+out when every block of the partition has been written since (in paranoia
+level 1, 2 and 3 after about N*ln(N) writes of a partition of N blocks; in
+level 0 a block with a lot of live data may never be written again). A
+mesoblock that is discarded while it is in the current block (not yet on
+disk) is removed from it (and gets a tombstone, older versions of it may be
+on disk).
 
 The info command shows tombstone_slots (on disk), tombstones_pending (in the
 current block) and mapped_mesoblocks (mesoblocks that hold data).
@@ -908,7 +922,9 @@ is computed from the target. Mesoblocks past the new end are obsoleted at
 once, and a trim (seqno of the next write, new size) is recorded, so that
 these references are never replayed, not even after a later enlarge. At
 most 8 trims are kept; a trim is dropped when no block in the pool is older
-than it, trim_floor is then raised to its seqno. A shrink that would need
+than it, trim_floor is then raised to its seqno (a block with a seqno below
+trim_floor is never replayed: the trim could apply to a block that was
+removed, and is added again later). A shrink that would need
 a 9th trim is refused.
 
 While removals are pending, every write also drains a victim: the block in

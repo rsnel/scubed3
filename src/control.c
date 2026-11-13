@@ -932,7 +932,15 @@ static int control_resize(int s, control_thread_priv_t *priv, char *argv[]) {
 	entry->size = ((uint64_t)blockio_dev_usable_macroblocks(dev)*
 			dev->b->mmpm)<<dev->b->mesoblk_log;
 
-	if (!dev->bi && dev->no_macroblocks) scubed3_select(&entry->l);
+	/* the new current block (after a shrink, or the first block of the
+	 * partition) may be its own next block: if the resize would only be
+	 * on disk in such a block, it would be lost when the next write (of
+	 * the same block) is interrupted, also after an fsync; it is written
+	 * out now (empty), then the resize is carried by its next write */
+	if (!dev->bi && dev->no_macroblocks) {
+		scubed3_select(&entry->l);
+		scubed3_settle(&entry->l);
+	}
 
 	dev->updated = 1;
 

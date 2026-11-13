@@ -145,7 +145,8 @@ discardtest.py DAEMON SEED
 	Discard (fallocate PUNCH_HOLE and ZERO_RANGE, fstrim): a byte exact
 	model with unaligned punch/zero/write and restarts; completely full
 	partitions; tombstones die out; blocks that come back with a grow with
-	old indices of the partition on them; ext2 (with the ext4 driver),
+	old indices of the partition on them (they are below the floor, or
+	their tombstones are still there); ext2 (with the ext4 driver),
 	ext3, ext4 with -o discard, and XFS if MKFS_XFS is set (xfs_repair is
 	taken from $XFS_REPAIR, from the xfsprogs build tree of mkfs.xfs, or
 	from $PATH): fstrim frees mesoblocks, nothing changes at a restart,
@@ -440,17 +441,15 @@ sockettest.sh DAEMON SCUBED3CTL
 Paranoia levels and the write order
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-ivtest.py DAEMON-crash SEED [OLD-DAEMON]
-	The IVs of the data mesoblocks (ESSIV(seqno^nonce, slot, block)) do
+ivtest.py DAEMON-crash SEED
+	The IVs of the data mesoblocks (ESSIV(nonce, slot, block)) do
 	not repeat when the seqnos repeat: a backup of the base device is
 	restored and used again (after every fsync the indices are read with
 	the key), and interrupted writes (kill -9, torn) are redone (the IV of
 	every block write is logged, SCUBED3_IV_LOG: the interrupted write is
 	not seen in the indices, its data is under the old index); the test
-	fails if one (block, seqno^nonce) belongs to two different writes (it
-	also checks that the seqnos did repeat); with OLD-DAEMON (a scubed3 of version 0.4) a base device
-	written by it is opened, read and written, both versions of blocks
-	are read.
+	fails if one (block, nonce) belongs to two different writes (it
+	also checks that the seqnos did repeat).
 
 wipetest.py DAEMON-crash SEED
 	Removing a partition wipes every block that has an index of it: in
@@ -543,7 +542,7 @@ Offline tools
 ~~~~~~~~~~~~~
 
 s3read.py [-s SALT] BASE PASSPHRASE KDF_ITERATIONS [OUT_IMAGE]
-	An independent reader of the on-disk format (SSS3v0.5 and v0.4,
+	An independent reader of the on-disk format (SSS3v0.6,
 	written from the description in the main README, it shares no code
 	with scubed3): lists
 	the macroblocks of the partition of the passphrase, ignores a torn most

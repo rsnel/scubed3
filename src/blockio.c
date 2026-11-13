@@ -488,7 +488,6 @@ void blockio_dev_free(blockio_dev_t *dev) {
 	free(dev->refcount);
 	free(dev->tombs);
 	free(dev->tmp_macroblock);
-	free(dev->out_macroblock);
 	free(dev->name);
 	if (dev->b && dev->b->close) dev->b->close(dev->io);
 }
@@ -701,7 +700,6 @@ void blockio_dev_remove_block(blockio_dev_t *dev, blockio_info_t *bi) {
 	blockio_dev_change_macroblock_status(bi, FREE);
 	dev->no_macroblocks--;
 	dev->pending_removals--;
-	if (dev->ram_block == bi) dev->ram_block = NULL;
 	dllarr_append(&dev->release, bi);
 	dev->updated = 1; /* the removal must be written */
 }
@@ -746,7 +744,7 @@ static void blockio_dev_take_current(blockio_dev_t *dev) {
 }
 
 void blockio_dev_select_next_macroblock(blockio_dev_t *dev) {
-	blockio_info_t *due, *victim;
+	blockio_info_t *victim;
 	uint32_t i;
 	assert(!dev->bi);
 
@@ -802,37 +800,23 @@ void blockio_dev_select_next_macroblock(blockio_dev_t *dev) {
 		return;
 	}
 
-	/* if the block that is due still has live mesoblocks, it was
-	 * scheduled to be rewritten right after it was written, its live
-	 * data has not been copied elsewhere, so it must be in RAM; if it
-	 * is not (we just opened the device) load it now, while its
-	 * old seqno (needed for the IV) is still known */
-	due = dev->j.next;
-	if (due && due->no_indices && due != dev->ram_block) {
-		uint32_t id = blockio_get_macroblock_index(due);
-		VERBOSE("block %u is due and still has %u indices, loading",
-				id, due->no_indices);
-		for (i = 0; i < due->no_indices; i++)
-			due->hashes[i] |= blockio_dev_read_mesoblk(dev,
-					dev->tmp_macroblock +
-					((i + 1)<<dev->b->mesoblk_log), id, i);
-		dev->ram_block = due;
-	}
-
+	/* the block that becomes the current block is empty: it was the
+	 * next block (the tail) of the block that was written before it,
+	 * that block took its live data (or the partition was just opened,
+	 * and scubed3_init checked it; a block that is its own tail is
+	 * written out empty, see below) */
+	assert(!dev->j.next || !dev->j.next->no_indices);
 	blockio_dev_take_current(dev);
-	dev->ram_block = dev->bi; /* tmp_macroblock now belongs to bi */
 	dev->tail_macroblock = dev->j.next;
 
-	/* if the (empty) selected block is drawn again for the next write,
-	 * it is its own tail: data written to it now would have nowhere to
-	 * go when it is rewritten, so it is written out empty first (this
-	 * happens with probability 1/N), that is the next write of this
-	 * partition: until then the block takes no data (see free_slots), so
-	 * that a write is needed (one write per turn in paranoia level 2);
-	 * if the partition has only one block, it is always its own tail,
-	 * and there is no other block to absorb, so it can keep its data */
-	if (dev->tail_macroblock == dev->bi && !dev->bi->no_indices &&
-			juggler_count(&dev->j) > 1) {
+	/* if the selected block is drawn again for the next write, it is
+	 * its own tail: data written to it now would have nowhere to go
+	 * when it is rewritten (and it would be lost if that write is
+	 * interrupted), so it is written out empty first (this happens with
+	 * probability 1/N), that is the next write of this partition: until
+	 * then the block takes no data (see free_slots), so that a write is
+	 * needed (one write per turn in paranoia level 2) */
+	if (dev->tail_macroblock == dev->bi) {
 		VERBOSE("block %d is drawn twice, writing it out empty "
 				"(pool=%u)", blockio_get_macroblock_index(dev->bi),
 				juggler_count(&dev->j));
@@ -890,8 +874,6 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 	dev->io = (b->open)(b->open_priv);
 
 	dev->tmp_macroblock = ecalloc(1, 1<<b->macroblock_log);
-	dev->out_macroblock = ecalloc(1, 1<<b->macroblock_log);
-	dev->ram_block = NULL;
 	dev->old_ondisk = ecalloc(b->mmpm, sizeof(uint32_t));
 	dev->replay = ecalloc(b->total_macroblocks + 1, sizeof(*dev->replay));
 	dev->no_replay = 0;
@@ -1104,6 +1086,11 @@ void blockio_dev_init(blockio_dev_t *dev, blockio_t *b, cipher_t *c,
 		snprintf(err, sizeof(err), "%u reserved blocks of %u",
 				dev->reserved_macroblocks,
 				dev->no_macroblocks);
+
+	/* with one block, every write would overwrite the only copy of the
+	 * state of the partition (scubed3 does not make such partitions) */
+	if (!*err && dev->no_macroblocks - dev->pending_removals == 1)
+		snprintf(err, sizeof(err), "it has only one block");
 
 	if (!*err && next_block != 0xFFFFFFFF &&
 			(next_block >= dev->b->total_macroblocks ||
@@ -2080,18 +2067,17 @@ void blockio_dev_write_current_macroblock(blockio_dev_t *dev) {
 	}
 #endif
 
-	/* encrypt datablocks (also the unused ones), the plaintext
-	 * stays in tmp_macroblock, store the hash of each ciphertext
+	/* encrypt datablocks (also the unused ones) in place, the block
+	 * is not read anymore (not as the current block: this is the end
+	 * of it, and not from disk before it is written and the partition
+	 * is unlocked), store the hash of each ciphertext
 	 * in the index, together with the corrupt parts of the mesoblocks
 	 * (corrupt mesoblocks that were copied into this block stay marked
 	 * as corrupt) */
 	for (i = 1; i <= dev->b->mmpm; i++) {
-		cipher_enc(dev->c, dev->out_macroblock +
-				(i<<dev->b->mesoblk_log),
-			BASE + (i<<dev->b->mesoblk_log),
-			blockio_iv0(dev->bi), i, id);
-		dev->bi->hashes[i-1] = mesoblk_hash(dev->out_macroblock +
-				(i<<dev->b->mesoblk_log),
+		char *meso = BASE + (i<<dev->b->mesoblk_log);
+		cipher_enc(dev->c, meso, meso, blockio_iv0(dev->bi), i, id);
+		dev->bi->hashes[i-1] = mesoblk_hash(meso,
 				1<<dev->b->mesoblk_log)|
 			((i <= dev->bi->no_indices)?
 			 (dev->bi->hashes[i-1]&BLOCKIO_CORRUPT_MASK):0);
@@ -2144,14 +2130,14 @@ void blockio_dev_write_current_macroblock(blockio_dev_t *dev) {
 			(1<<dev->b->mesoblk_log) - 32 /* size of hash */);
 
 	/* encrypt index */
-	cipher_enc(dev->c, dev->out_macroblock, BASE, 0, 0, id);
+	cipher_enc(dev->c, BASE, BASE, 0, 0, id);
 
 	/* the block must be on disk before the next block is written: the
 	 * next block may be the tail of this block, its live data is in
 	 * this block now; this also means that only the most recently
 	 * written block can be incomplete after a power failure (see
 	 * blockio_write_block, it syncs) */
-	blockio_write_block(dev->b, dev->io, id, dev->out_macroblock);
+	blockio_write_block(dev->b, dev->io, id, BASE);
 
 	/* the old index of this block is replaced by the new one */
 	for (i = 0; i < dev->no_old_ondisk; i++)
@@ -2184,8 +2170,6 @@ void blockio_dev_write_current_macroblock(blockio_dev_t *dev) {
 		wipe = 1;
 	} else if (!dev->dying) blockio_dev_release_removed(dev);
 
-	dev->ram_block = dev->bi; /* its plaintext is still in RAM */
-	if (dev->bi->dev != dev) dev->ram_block = NULL; /* was removed */
 	dev->bi = NULL; /* there is no current block */
 	dev->updated = 0;
 
@@ -2214,10 +2198,6 @@ void blockio_dev_change_macroblock_status(blockio_info_t *bi,
 
 	if (new&1) bitmap_setbit_safe(&bi->dev->status, index);
 	else bitmap_clearbit_safe(&bi->dev->status, index);
-}
-
-int blockio_dev_free_macroblocks(blockio_dev_t *dev, uint32_t size) {
-	FATAL("blockio_dev_free_macroblocks is not implemented");
 }
 
 void blockio_prepare_block(blockio_info_t *bi) {

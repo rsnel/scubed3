@@ -156,16 +156,10 @@ typedef struct blockio_dev_s {
 
 	juggler_t j;
 
-	/* here we build the macroblock
-	 * to be written out to disk */
+	/* here we build the macroblock to be written out to disk (the
+	 * plaintext of the current block, it is encrypted in place when the
+	 * block is written) */
 	char *tmp_macroblock;
-
-	/* the ciphertext of the macroblock is built here, so that
-	 * tmp_macroblock keeps the plaintext; ram_block is the block
-	 * whose plaintext is in tmp_macroblock (if any) */
-	char *out_macroblock;
-	blockio_info_t *ram_block;
-
 
 	// use one random_t per dev, to avoid locking issues
 	random_t r;
@@ -364,8 +358,6 @@ blockio_dev_macroblock_status_t blockio_dev_get_macroblock_status(
 
 // can return error -1: not enough blocks available
 int blockio_dev_allocate_macroblocks(blockio_dev_t*, uint32_t);
-
-int blockio_dev_free_macroblocks(blockio_dev_t*, uint32_t);
 
 void blockio_prepare_block(blockio_info_t*);
 

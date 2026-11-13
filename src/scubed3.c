@@ -501,15 +501,14 @@ void scubed3_init(scubed3_t *l, blockio_dev_t *dev) {
 
 	/* so the tail has no live mesoblocks; the most recent block can be
 	 * its own tail (drawn again right after it was written), then it was
-	 * written out empty (see blockio_dev_select_next_macroblock), unless
-	 * it is the only block of the partition; if the tail has live
+	 * written out empty (see blockio_dev_select_next_macroblock); if the
+	 * tail has live
 	 * mesoblocks, the index of the most recent block is not consistent
 	 * (a bug, or someone with the key and write access to the base
 	 * device): the GC could not absorb the tail, the partition is not
 	 * opened */
 	bi = dev->no_replay?dev->replay[dev->no_replay - 1]:NULL;
-	if (dev->j.next && (dev->j.next != bi ||
-				juggler_count(&dev->j) > 1)) {
+	if (dev->j.next) {
 		uint32_t index;
 		for (i = 0; i < l->no_block_indices; i++) {
 			index = l->block_indices[i];

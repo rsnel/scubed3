@@ -126,7 +126,7 @@ static void absorb_block(scubed3_t *l, blockio_info_t *bi) {
 	int k;
 	uint32_t index;
 	/* the current block can be its own tail (it is rescheduled for
-	 * the next seqno), its data is in RAM and travels with it */
+	 * the next seqno), then it is empty and is written out empty */
 	if (bi && bi != l->dev->bi &&
 			blockio_dev_get_macroblock_status(bi) == USED) {
 

@@ -938,9 +938,6 @@ static int control_resize(int s, control_thread_priv_t *priv, char *argv[]) {
 		entry->l.output_initialized = 0;
 	}
 
-	/* blocks that were added may still have an index of ours */
-	scubed3_readded(&entry->l);
-
 	dev->updated = 1;
 
 	if (!size) finish_removal(entry);

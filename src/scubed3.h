@@ -66,8 +66,6 @@ void scubed3_fsync(scubed3_t*);
 
 int scubed3_discard(scubed3_t*, uint64_t, uint64_t);
 
-void scubed3_readded(scubed3_t*);
-
 uint32_t scubed3_check(scubed3_t*, void (*)(void*, uint32_t, int), void*);
 
 #define id(a)   ((a) - l->dev->b->blockio_infos)

@@ -58,23 +58,20 @@ struct blockio_info_s {
 	/* for the lists release and wipe */
 	dllarr_elt_t ur;
 	uint64_t seqno;
-	uint64_t nonce; /* random, new for every write (see blockio_iv0) */
+
+	/* random, new for every write: the IV of the data mesoblocks of a
+	 * block is ESSIV(nonce, slot, block); a seqno repeats with other
+	 * data if the base device is restored from a backup and used again,
+	 * and someone who has both versions would see the repeated IVs; the
+	 * nonces do not repeat (unless two random 64 bit nonces of one
+	 * block happen to collide) */
+	uint64_t nonce;
 	uint32_t next_block; /* from the index: the block written after it */
 	int unreadable; /* the index could not be read when scanning */
 
 	uint32_t no_indices;
 	uint32_t no_nonobsolete;
 	uint32_t *indices;
-
-	/* the number of indices in the index of this block on disk (indices
-	 * still contains them, also if no_indices was reset to 0, until the
-	 * block becomes the current block and is filled again) */
-	uint32_t no_ondisk;
-
-	/* this block was added to the partition (grow) while it still had
-	 * an index of ours on disk, that will be replayed if the block is
-	 * not written before the partition is opened again */
-	int readded;
 
 	/* the block still has an index of a partition that was removed, it
 	 * is wiped (see blockio_dev_start_wipe) */
@@ -90,6 +87,14 @@ struct blockio_info_s {
 	/* the scubed device associated with this block, if any */
 	struct blockio_dev_s *dev;
 };
+
+/* a tombstone: logical mesoblock mesoblk is discarded, its versions in
+ * blocks with a seqno below seqno (the seqno of the block in which the
+ * discard was written) must not come back (see README, Discard) */
+typedef struct blockio_tomb_s {
+	uint64_t seqno;
+	uint32_t mesoblk;
+} blockio_tomb_t;
 
 typedef struct blockio_dev_s {
 	char *name;
@@ -129,26 +134,14 @@ typedef struct blockio_dev_s {
 	} trims[BLOCKIO_MAX_TRIMS];
 
 	/* a block with a seqno below trim_floor is never replayed (a trim
-	 * that was pruned could apply to it) */
+	 * that was pruned, or a tombstone that is gone, could apply to it) */
 	uint64_t trim_floor;
 
 	blockio_info_t *bi; /* current block */
 
-	/* the on disk indices of the current block, before it became the
-	 * current block (they are replaced on disk when it is written) */
-	uint32_t *old_ondisk;
-	uint32_t no_old_ondisk;
-
-	/* refcount[L] is the number of blocks on disk (that would be
-	 * replayed) with logical mesoblock L in their index, for
-	 * L < no_refcount (the size of the partition in mesoblocks); a
-	 * discarded mesoblock needs a tombstone while its refcount > 0 */
-	uint32_t *refcount;
-	uint32_t no_refcount;
-
 	/* tombstones that will be written in the current block, they take
 	 * slots after the data slots (tombs_per_mesoblk per slot) */
-	uint32_t *tombs;
+	blockio_tomb_t *tombs;
 	uint32_t no_tombs, size_tombs;
 	uint32_t tombs_per_mesoblk;
 
@@ -364,14 +357,14 @@ uint32_t blockio_dev_free_slots(blockio_dev_t*);
 
 int blockio_dev_tomb_fits(blockio_dev_t*, uint32_t);
 
-void blockio_dev_add_tomb(blockio_dev_t*, uint32_t);
-
-void blockio_dev_resize_refcount(blockio_dev_t*, uint32_t);
-
-void blockio_dev_count_ondisk(blockio_dev_t*, blockio_info_t*, int);
+void blockio_dev_add_tomb(blockio_dev_t*, uint32_t, uint64_t);
 
 uint32_t blockio_dev_read_tombs(blockio_dev_t*, blockio_info_t*, uint32_t,
-		uint32_t*);
+		blockio_tomb_t*);
+
+uint64_t blockio_dev_oldest(blockio_dev_t*);
+
+void blockio_dev_raise_floor(blockio_dev_t*, uint64_t);
 
 blockio_info_t *blockio_dev_find_victim(blockio_dev_t*);
 

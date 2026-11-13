@@ -105,7 +105,7 @@ def ours(base):
     with open(base, "rb") as f:
         for b in range(NBLOCKS):
             f.seek(b * MACRO); idx = dec(f.read(MESO), 0, 0, b)
-            if idx[0x70:0x78] == b"SSS3v0.5" and hashlib.sha256(idx[32:]).digest() == idx[:32]:
+            if idx[0x70:0x78] == b"SSS3v0.6" and hashlib.sha256(idx[32:]).digest() == idx[:32]:
                 res.append((b, bytearray(idx)))
     return res
 

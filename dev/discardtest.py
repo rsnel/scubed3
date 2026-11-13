@@ -152,22 +152,21 @@ def part_b():
         cmd("cycle t 1")
     else: raise RuntimeError("B: tombstones do not die out")
     resize(10)          # re-adds the removed blocks, with their old indices
-    readded = open(B + "/discard.log").read().count("indices of ours")
     restart()
     d = open(MNT + "/t", "rb").read()
     if d[:S6] != bytes(S6): raise RuntimeError("B: discarded data came back after grow")
     i = info()
-    print("B: %d tombstone slots died out after %d cycles, re-added blocks with old "
-            "indices: %d, nothing came back (mapped %d)" % (peak, c, readded,
+    print("B: %d tombstone slots died out after %d cycles, the removed blocks were "
+            "added again, nothing came back (mapped %d)" % (peak, c,
             i["mapped_mesoblocks"]), flush=True)
     cmd("close t"); stop()
 
 def part_b2(tries=6):
     """discard first, then shrink: the removed blocks keep old versions on
-    disk, their tombstones die out while the trim of the shrink is still
-    there (so the removed blocks are not below the trim floor), then a grow
-    re-adds them: without tombstones for them, a restart would bring the
-    discarded data back"""
+    disk, some of their tombstones die out while the trim of the shrink is
+    still there, then a grow re-adds them: a restart must not bring the
+    discarded data back (a block that is older than a tombstone that died
+    is below the floor, it is not replayed)"""
     for t in range(tries):
         new_store(12); start()
         cmd("create-internal t CBC_ESSIV(AES256) " + KEY); resize(12)
@@ -187,19 +186,16 @@ def part_b2(tries=6):
         i = info()
         if not i["trims"]:
             cmd("close t"); stop(); continue
-        before = open(B + "/discard.log").read().count("indices of ours")
         resize(12)
-        readded = open(B + "/discard.log").read().count("indices of ours") - before
-        pending = info()["tombstones_pending"]
         restart()
         d = open(MNT + "/t", "rb").read()
         bad = sum(1 for m in range(len(d) // MESO) if d[m * MESO:(m + 1) * MESO] != bytes(MESO))
         cmd("close t"); stop()
         if bad: raise RuntimeError("B2: %d discarded mesoblocks came back after grow" % bad)
-        print("B2: tombstone slots %d -> %d (trims %d), %d re-added blocks with old indices "
-                "got %d tombstones, nothing came back" % (peak, i["tombstone_slots"],
-                i["trims"], readded, pending), flush=True)
-        if readded and pending: return
+        print("B2: tombstone slots %d -> %d (trims %d), the removed blocks were added "
+                "again, nothing came back" % (peak, i["tombstone_slots"], i["trims"]),
+                flush=True)
+        return
     raise RuntimeError("B2: scenario not reached in %d tries" % tries)
 
 def part_full():

@@ -1,5 +1,5 @@
-# s3read.py - independent offline reader for scubed3 base files (format SSS3v0.5,
-# and blocks of SSS3v0.4, without a nonce, as in README/blockio.c)
+# s3read.py - independent offline reader for scubed3 base files (format SSS3v0.6,
+# as in README/blockio.c)
 # usage: python3 s3read.py [-s SALT] BASE PASSPHRASE KDF_ITERATIONS [OUT_IMAGE]
 # lists the macroblocks of the partition and optionally writes the reconstructed partition image
 # (corrupt 4KiB parts are written as zeroes and reported)
@@ -23,14 +23,13 @@ class Store:
         self.ess = Cipher(algorithms.AES(hashlib.sha256(key).digest()), modes.ECB()).encryptor()
         self.f = open(base, 'rb'); self.f.seek(0, 2); nmacro = self.f.tell() // MACRO
         blocks = []
-        self.iv0 = {}   # macroblock -> iv0 of its data mesoblocks: seqno^nonce
+        self.iv0 = {}   # macroblock -> iv0 of its data mesoblocks: the nonce
         for mid in range(nmacro):
             self.f.seek(mid * MACRO); idx = self.dec(self.f.read(MESO), 0, 0, mid)
-            if idx[0x70:0x78] not in (b'SSS3v0.5', b'SSS3v0.4'): continue
+            if idx[0x70:0x78] != b'SSS3v0.6': continue
             if hashlib.sha256(idx[32:]).digest() != idx[:32]: print("bad index hash", mid); continue
             seq = struct.unpack('>Q', idx[0x60:0x68])[0]
-            nonce = struct.unpack('>Q', idx[0x20:0x28])[0] if idx[0x70:0x78] == b'SSS3v0.5' else 0
-            self.iv0[mid] = seq ^ nonce
+            self.iv0[mid] = struct.unpack('>Q', idx[0x20:0x28])[0]
             blocks.append((seq, mid, idx))
         blocks.sort()
         # only the most recent block can be torn (interrupted write)
@@ -60,7 +59,8 @@ class Store:
                     print(f"corrupt tombstones in block {m} slot {k}"); continue
                 pt = self.dec(ct, self.iv0[m], k + 1, m)
                 cnt = struct.unpack('>I', pt[:4])[0]
-                for L in struct.unpack('>%dI' % cnt, pt[4:4 + 4 * cnt]):
+                for t in range(cnt):    # (mesoblock, seqno of the discard)
+                    L = struct.unpack('>I', pt[4 + 12 * t:8 + 12 * t])[0]
                     if L < self.size and not trimmed(s, L): self.loc.pop(L, None)
                 self.tombs += cnt
             for k, logical in enumerate(ind):

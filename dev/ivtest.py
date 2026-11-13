@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # ivtest.py - the IVs of the data mesoblocks do not repeat, also not when the
 # seqnos repeat: when the base device is restored from a backup and used
-# again, or when a torn write is redone (the IV is ESSIV(seqno^nonce, slot,
-# block), with a random nonce for every write, see README, Encryption)
+# again, or when a write is redone after a crash (the IV is ESSIV(nonce,
+# slot, block), with a random nonce for every write, see README, Encryption)
 #
 #  1. a backup of the base device is made, the partition is written, the
 #     backup is restored and the partition is written again (the seqnos
@@ -10,18 +10,14 @@
 #  2. kill -9 with a torn write at a random moment, a restart, more writes
 #     (the interrupted write is redone with the same seqno; scubed3-crash
 #     logs the IV of every block write, see SCUBED3_IV_LOG)
-#  3. a base device written by an older scubed3 (SSS3v0.4, no nonce) is
-#     opened, read and written: both versions of blocks are read
 #
 # after every fsync the indices of the partition are read from the base
 # device (with the key), every write of a block is recorded as (block,
-# seqno^nonce, hash of its index); the test fails if one (block,
-# seqno^nonce) belongs to two different writes
+# nonce, hash of its index); the test fails if one (block, nonce) belongs
+# to two different writes
 #
-# usage: ivtest.py DAEMON-crash SEED [OLD-DAEMON]
-# (small blocks: -m 12 -M 16, 64 KiB macroblocks; with OLD-DAEMON, a build
-# of an older version, part 3 creates the base device with it; without it,
-# part 3 is skipped)
+# usage: ivtest.py DAEMON-crash SEED
+# (small blocks: -m 12 -M 16, 64 KiB macroblocks)
 import os, sys, time, socket, random, hashlib, subprocess, errno, struct, atexit
 import shutil
 FUSERMOUNT = shutil.which("fusermount3") or "fusermount"   # libfuse 3 or 2
@@ -35,7 +31,6 @@ MMPM = MACRO // MESO - 1
 TOTAL = 120
 NB = 40
 daemon, seed = sys.argv[1], int(sys.argv[2])
-old = sys.argv[3] if len(sys.argv) > 3 else None
 rng = random.Random(seed)
 base, logname = B + "/iv.base", B + "/iv.log"
 log = open(logname, "w")
@@ -95,11 +90,11 @@ def indices():
             f.seek(mid * MACRO); c = f.read(MESO)
             iv = ess.update(struct.pack(">QII", 0, 0, mid))
             p = Cipher(algorithms.AES(kb), modes.CBC(iv)).decryptor().update(c)
-            if p[0x70:0x78] not in (b"SSS3v0.5", b"SSS3v0.4"): continue
+            if p[0x70:0x78] != b"SSS3v0.6": continue
             if hashlib.sha256(p[32:]).digest() != p[:32]: continue
             seq = struct.unpack(">Q", p[0x60:0x68])[0]
-            nonce = struct.unpack(">Q", p[0x20:0x28])[0] if p[0x70:0x78] == b"SSS3v0.5" else 0
-            out.append((mid, seq, seq ^ nonce, p[0x70:0x78], p[:32]))
+            nonce = struct.unpack(">Q", p[0x20:0x28])[0]
+            out.append((mid, seq, nonce, p[0x70:0x78], p[:32]))
     return out
 
 writes = {}     # (block, iv0) -> set of index hashes
@@ -194,35 +189,13 @@ seen_seq, seen_iv = {}, {}
 for l in open(ivlog):
     name, blk, seq, nonce = l.split(); blk, seq, nonce = int(blk), int(seq), int(nonce)
     seen_seq[(name, blk, seq)] = seen_seq.get((name, blk, seq), 0) + 1
-    seen_iv[(name, blk, seq ^ nonce)] = seen_iv.get((name, blk, seq ^ nonce), 0) + 1
+    seen_iv[(name, blk, nonce)] = seen_iv.get((name, blk, nonce), 0) + 1
 os.unlink(ivlog)
 s = sum(1 for v in seen_seq.values() if v > 1); i = sum(1 for v in seen_iv.values() if v > 1)
 print("   %d block writes logged, %d times a seqno was used again for a block" %
       (sum(seen_seq.values()), s), flush=True)
 check(s > 0, "the seqnos repeat (the test makes sense)")
 check(i == 0, "no IV is used twice (%d)" % i)
-
-# ------------------------------------------------------------- 3. v0.4
-if old:
-    print("3. a base device written by an older scubed3 (SSS3v0.4)", flush=True)
-    fresh(); create(old)
-    fd = opent("a", os.O_RDWR); write_round(fd, 300); os.close(fd)
-    cmd("close a"); stop()
-    v = [x[3] for x in indices()]
-    check(v and all(m == b"SSS3v0.4" for m in v), "%d blocks of SSS3v0.4" % len(v))
-    start(); cmd("open-internal a CBC_ESSIV(AES256) %s" % K)
-    verify("opened by this version")
-    fd = opent("a", os.O_RDWR); write_round(fd, 60); os.close(fd)
-    verify("written by this version")
-    cmd("close a"); stop()
-    v = [x[3] for x in indices()]
-    print("   %d blocks of SSS3v0.4, %d of SSS3v0.5" % (v.count(b"SSS3v0.4"), v.count(b"SSS3v0.5")),
-          flush=True)
-    check(v.count(b"SSS3v0.4") and v.count(b"SSS3v0.5"), "both versions of blocks")
-    start(); cmd("open-internal a CBC_ESSIV(AES256) %s" % K)
-    verify("after a restart")
-    cmd("close a"); stop()
-else: print("3. skipped (no OLD-DAEMON)", flush=True)
 
 os.unlink(base)
 print("IVTEST %s" % ("OK" if not errors else "FAILED: %s" % errors), flush=True)

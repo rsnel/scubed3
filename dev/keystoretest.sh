@@ -10,7 +10,9 @@
 # passphrases); every write changes the whole file (no 16 byte block stays
 # the same), its size is always the same; A shows and opens only root and
 # shared; a wrong passphrase has no view; an existing partition (with its
-# own passphrase) is imported; LUKS: luksformat and luksopen with the key
+# own passphrase) is imported (keystorectl never uses the daemon: the LUKS
+# volume key comes from a path, the volume or a backup of its header);
+# LUKS: luksformat and luksopen with the key
 # from the store; a passphrase is changed; a save with only A unlocked
 # loses the view of B (as the warning says); setup (guided) makes a key
 # store with two passphrases, a new, an imported and a shared partition;
@@ -176,7 +178,7 @@ ok "the warning is shown, the view of B is lost (as it says)"
 
 echo "8. setup (guided)"
 K=$T/keys2
-krun "-c setup" y P P y Q Q n s1 "" old y opw "" s1 s2 "" "" yes
+krun "-c setup" y P P y Q Q n s1 "" old y "" opw "" s1 s2 "" "" yes
 cp $T/out $T/setup.out
 grep -q "the key store is written" $T/out || fail "setup: $(cat $T/out)"
 size
@@ -300,21 +302,34 @@ ctl -c "close root" > /dev/null
 run "-c 'create lk'" lpw lpw
 ctl -c "resize lk $LUKS" > /dev/null
 printf 'lukspw' | cryptsetup -q luksFormat --key-file=- $MNT/lk || fail "luksFormat lk"
-krun "-c unlock -c 'import lk 1' -c save" A2 lpw wrongpw yes
+krun "-c unlock -c 'import lk 1 $MNT/lk' -c save" A2 lpw wrongpw yes
 grep -q 'the volume key of the LUKS volume on "lk" is not in the key store' $T/out || fail "import with a wrong LUKS passphrase: $(cat $T/out)"
 krun "-c unlock -c 'remove lk 1' -c save" A2 yes
-krun "-c unlock -c 'import lk 1' -c save" A2 lpw lukspw yes
-grep -q 'the volume key of the LUKS volume on "lk" is in the key store' $T/out || fail "import with LUKS: $(cat $T/out)"
 # the number of keyslots of the LUKS volume on partition $1
 lh() { cryptsetup luksDump $MNT/$1 | grep -c '^  [0-9]*: luks2'; }
 [ "$(lh lk)" = 1 ] || fail "the LUKS volume of lk has $(lh lk) keys"
+# from a backup of the header, lk is not open (keystorectl does not ask the
+# daemon anything; without a view argument: the first view)
+cryptsetup luksHeaderBackup $MNT/lk --header-backup-file $T/lk.hdr || fail "luksHeaderBackup lk"
 ctl -c "close lk" > /dev/null
+krun "-c unlock -c 'import lk $T/lk.hdr' -c save" A2 lpw lukspw yes
+grep -q 'the volume key of the LUKS volume on "lk" is in the key store' $T/out || fail "import with a LUKS header: $(cat $T/out)"
+rm -f $T/lk.hdr
 run "-c unlock -c 'open lk' -c 'luksopen lk' -c keys" A2
-[ -b /dev/mapper/scubed3-lk ] || fail "luksopen lk with the imported passphrase: $(cat $T/out)"
+[ -b /dev/mapper/scubed3-lk ] || fail "luksopen lk with the imported volume key: $(cat $T/out)"
 grep -q "^  lk \[LUKS\]" $T/out || fail "keys does not show LUKS for lk: $(cat $T/out)"
 cryptsetup close scubed3-lk
+[ "$(lh lk)" = 1 ] || fail "the import changed the LUKS volume of lk ($(lh lk) keys)"
 ctl -c "close lk" > /dev/null
-ok "import of an open partition with LUKS: with its passphrase its volume key goes into the key store (the volume is not changed)"
+# a path that is not a LUKS volume is refused before anything is asked, a
+# LUKS argument without a / is refused, -a is refused
+krun "-c unlock -c 'import lk2 1 $T/data'" A2
+grep -q "$T/data is not a LUKS volume" $T/out || fail "import with a file that is not LUKS: $(cat $T/out)"
+krun "-c unlock -c 'import lk2 1 nopath'" A2
+grep -q "the LUKS volume is a path, with a /" $T/out || fail "import with a LUKS argument without /: $(cat $T/out)"
+ks -a $T/nosocket -c keys > $T/out 2>&1 && fail "keystorectl -a: $(cat $T/out)"
+grep -q "does not use the scubed3 daemon" $T/out || fail "keystorectl -a: $(cat $T/out)"
+ok "import with the path of a LUKS volume or a backup of its header: with its passphrase its volume key goes into the key store (the volume is not changed), a wrong path is refused, keystorectl -a is refused"
 cp $K $T/keys.before
 krun "-c unlock-all -c passphrase-add -c save" A2 "" "" ""
 grep -q "^no passphrase" $T/out || fail "an empty new passphrase: $(cat $T/out)"
@@ -365,7 +380,7 @@ grep -q "view i[0-9][0-9]: 0 entries" $T/out || fail "the passphrase of a view a
 ok "derive gives the key of a passphrase, -k unlocks and adds views with it (not with a passphrase or a wrong key)"
 
 echo "12. two keystorectl at the same time, scubed3ctl only reads"
-# keystorectl does not use the daemon (only import does): two run at the
+# keystorectl does not use the daemon: two run at the
 # same time; A reads the key store (unlock-all), waits for its new
 # passphrase; B adds a view meanwhile: the save of A would lose it, it is
 # refused

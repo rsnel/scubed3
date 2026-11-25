@@ -18,8 +18,9 @@
 /* the views of the key store are unlocked (more than one, each has a name:
  * iNN by default, NN its slot), changed in memory, and written by save
  * (the whole file again, the views that are not unlocked are lost);
- * scubed3ctl only reads the key store; the daemon is only used by import
- * (the volume key of an open LUKS volume) */
+ * scubed3ctl only reads the key store; keystorectl does not use the
+ * daemon (import reads the volume key of a LUKS volume from a path that
+ * is given: the volume, or a backup of its header) */
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
@@ -37,6 +38,7 @@
 #include "util.h"
 #include "keystore.h"
 #include "ctl_common.h"
+#include "control.h"
 
 /* the key store in memory differs from the file: save writes it */
 static int changed = 0;
@@ -512,13 +514,43 @@ static int dump_label(char *line, const char *what, char **val) {
 	return 1;
 }
 
-/* the volume key of the LUKS volume of a partition, with a passphrase of it
- * (cryptsetup luksDump --dump-volume-key, the passphrase in a memory file,
- * the key comes back on a pipe), 0 if it is in vk (at most KS_LUKS bytes,
- * zero padded) */
-static int luks_dump_vk(ctl_priv_t *priv, const char *name, const char *pw,
-		size_t len, unsigned char *vk) {
-	char *cmd, line[256], *p, *end;
+/* path in single quotes for the shell (a ' becomes '\'') */
+static char *sh_quote(const char *path) {
+	char *q = ecalloc(1, 4*strlen(path) + 3), *p = q;
+
+	*p++ = '\'';
+	for (; *path; path++) {
+		if (*path == '\'') {
+			memcpy(p, "'\\''", 4);
+			p += 4;
+		} else *p++ = *path;
+	}
+	*p = '\'';
+
+	return q;
+}
+
+/* is path a LUKS volume (or a backup of a LUKS header)? */
+static int luks_path_ok(const char *path) {
+	char *cmd, *q = sh_quote(path);
+	int ret;
+
+	if (asprintf(&cmd, "cryptsetup isLuks %s 2>/dev/null", q) == -1)
+		FATAL("out of memory");
+	ret = system(cmd);
+	free(cmd);
+	free(q);
+
+	return !ret;
+}
+
+/* the volume key of a LUKS volume (path: the volume, or a backup of its
+ * header), with a passphrase of it (cryptsetup luksDump --dump-volume-key,
+ * the passphrase in a memory file, the key comes back on a pipe), 0 if it
+ * is in vk (at most KS_LUKS bytes, zero padded) */
+static int luks_dump_vk(const char *path, const char *pw, size_t len,
+		unsigned char *vk) {
+	char *cmd, line[256], *p, *end, *q;
 	int fd, bits = 0, n = 0, dump = 0, ret = -1;
 	unsigned long b;
 	FILE *fp;
@@ -531,10 +563,11 @@ static int luks_dump_vk(ctl_priv_t *priv, const char *name, const char *pw,
 		if (fd != -1) close(fd);
 		return -1;
 	}
+	q = sh_quote(path);
 	if (asprintf(&cmd, "LC_ALL=C cryptsetup luksDump -q --dump-volume-key "
-				"--key-file /dev/fd/%d %s/%s", fd,
-				priv->mountpoint, name) == -1)
+				"--key-file /dev/fd/%d %s", fd, q) == -1)
 		FATAL("out of memory");
+	free(q);
 	if (!(fp = popen(cmd, "r"))) FATAL("popen: %s", strerror(errno));
 	free(cmd);
 	while (fgets(line, sizeof(line), fp)) {
@@ -560,11 +593,13 @@ static int luks_dump_vk(ctl_priv_t *priv, const char *name, const char *pw,
 	return ret;
 }
 
-/* an existing partition: its key from its passphrase; if it is open (in
- * the daemon) and has LUKS on it, the passphrase of its LUKS volume is
- * asked, its volume key goes into the key store (the volume is not
- * changed); otherwise it gets a random volume key (for luksformat) */
-static int ks_import(ctl_priv_t *priv, int view, const char *name) {
+/* an existing partition: its key from its passphrase; with luks (the path
+ * of its LUKS volume, for example the partition in the mount point of the
+ * daemon, or a backup of the LUKS header: cryptsetup luksHeaderBackup) the
+ * passphrase of the LUKS volume is asked, its volume key goes into the key
+ * store (the volume is not changed); without luks it gets a random volume
+ * key (for luksformat) */
+static int ks_import(int view, const char *name, const char *luks) {
 	ks_entry_t *e;
 	char *pw;
 	size_t len, old_len = 0;
@@ -573,6 +608,13 @@ static int ks_import(ctl_priv_t *priv, int view, const char *name) {
 	unsigned char vk[KS_LUKS];
 
 	if (!ks_valid_name(argv[0])) return 0;
+	/* checked before anything is asked */
+	if (luks && !luks_path_ok(luks)) {
+		printf("%s is not a LUKS volume (or a backup of a LUKS "
+				"header)\n", luks);
+		exit_status = EXIT_FAILURE;
+		return 0;
+	}
 	if (ks_find(&ks, view, argv[0], NULL)) {
 		printf("\"%s\" is in view %s already\n", argv[0], vname(view));
 		return 0;
@@ -593,21 +635,15 @@ static int ks_import(ctl_priv_t *priv, int view, const char *name) {
 	 * pipe) its volume key goes into the key store */
 	ks_random(e->luks, KS_LUKS);
 	e->flags |= KS_HAS_LUKS|KS_LUKS_VK;
-	if (ctl_connect(priv, 0)) printf("the scubed3 daemon does not run: "
-			"\"%s\" gets a random volume key\n(for luksformat; if "
-			"it has a LUKS volume, open it and import it again)\n",
-			argv[0]);
-	else if (do_server_command(priv->s, 0, "info %s", argv[0]) ||
-			result.status || !is_luks(priv, argv[0]))
-		printf("\"%s\" is not open, or it has no LUKS volume: it gets "
-				"a random volume key\n(for luksformat; if it has "
-				"a LUKS volume, open it and import it again)\n",
-				argv[0]);
+	if (!luks) printf("no LUKS volume is given: \"%s\" gets a random "
+			"volume key (for luksformat;\nif it has a LUKS volume: "
+			"import NAME [VIEW] LUKS, LUKS the path of the\nvolume, "
+			"for example the partition in the mount point of "
+			"scubed3)\n", argv[0]);
 	else {
 		if (!(old_pw = ask_passphrase("Passphrase of its LUKS volume: ",
 						0, &old_len)) || !old_len ||
-				luks_dump_vk(priv, argv[0], old_pw, old_len,
-					vk)) {
+				luks_dump_vk(luks, old_pw, old_len, vk)) {
 			printf("the volume key of the LUKS volume on \"%s\" is "
 					"not in the key store (a wrong "
 					"passphrase?)\n", argv[0]);
@@ -622,7 +658,6 @@ static int ks_import(ctl_priv_t *priv, int view, const char *name) {
 		wipememory(vk, sizeof(vk));
 		if (old_pw) free_passphrase(old_pw, old_len);
 	}
-	ctl_disconnect(priv);
 	printf("the key of \"%s\" is in view %s (it is not checked: close and "
 			"open it to see\nthat it is right)\n", argv[0], vname(view));
 	if ((other = ks_conflict(&ks, view, argv[0])) >= 0)
@@ -634,11 +669,28 @@ static int ks_import(ctl_priv_t *priv, int view, const char *name) {
 	return 1;
 }
 
+/* import NAME [VIEW] [LUKS]: an argument with a / is the path of the LUKS
+ * volume (the name of a view has no /) */
 static int ctl_import(ctl_priv_t *priv, char *argv[]) {
+	char *view_arg = argv[1], *luks = NULL;
 	int view;
 
-	if ((view = ks_view_arg(argv[1])) < 0) return 0;
-	if (ks_import(priv, view, argv[0])) ks_changed();
+	if (view_arg && strchr(view_arg, '/')) {
+		if (argv[2]) {
+			printf("usage: import NAME [VIEW] [LUKS]\n");
+			exit_status = EXIT_FAILURE;
+			return 0;
+		}
+		luks = view_arg;
+		view_arg = NULL;
+	} else if (view_arg) luks = argv[2];
+	if (luks && !strchr(luks, '/')) {
+		printf("the LUKS volume is a path, with a / (%s)\n", luks);
+		exit_status = EXIT_FAILURE;
+		return 0;
+	}
+	if ((view = ks_view_arg(view_arg)) < 0) return 0;
+	if (ks_import(view, argv[0], luks)) ks_changed();
 
 	return 0;
 }
@@ -667,7 +719,7 @@ static int ctl_remove(ctl_priv_t *priv, char *argv[]) {
  * of every view are chosen; it is written once, at the end */
 static int ctl_setup(ctl_priv_t *priv, char *argv[]) {
 	unsigned char key[32];
-	char prompt[96], *name;
+	char prompt[96], *name, *luks;
 	int v, changed = 0, created = 0, step = 1;
 
 	if (access(ks.path, F_OK)) {
@@ -730,9 +782,14 @@ static int ctl_setup(ctl_priv_t *priv, char *argv[]) {
 					"existing partition with its own "
 					"passphrase? [y/N] ", name);
 			if (!ks_find(&ks, -1, name, NULL) && ks_valid_name(name)
-					&& ask_yn(prompt))
-				changed |= ks_import(priv, v, name);
-			else changed |= ks_add(v, name, NULL);
+					&& ask_yn(prompt)) {
+				luks = ask_line("the path of its LUKS volume, or "
+						"a backup of its LUKS header\n"
+						"(empty: it has no LUKS volume): ");
+				changed |= ks_import(v, name,
+						(luks && *luks)?luks:NULL);
+				free(luks);
+			} else changed |= ks_add(v, name, NULL);
 			free(name);
 		}
 	}
@@ -768,7 +825,9 @@ static int ctl_help(ctl_priv_t *priv, char *argv[]) {
 	printf("add NAME [VIEW]   (new random keys, or the keys of NAME in another view)\n");
 	printf("add-passphrase NAME [VIEW] (the key of a passphrase, not a random key)\n");
 	printf("copy NAME1 NAME2 [VIEW] (NAME2 gets the keys of NAME1)\n");
-	printf("import NAME [VIEW] (an existing partition, with its passphrase)\n");
+	printf("import NAME [VIEW] [LUKS] (an existing partition, with its passphrase;\n");
+	printf("                   LUKS: the path of its LUKS volume, or a backup of its\n");
+	printf("                   header, its volume key goes into the key store)\n");
 	printf("remove NAME [VIEW]\n");
 	printf("save              (writes the key store: ALL its views must be unlocked)\n");
 	printf("quit\n");
@@ -860,8 +919,8 @@ static ctl_command_t ctl_commands[] = {
 		.head.key = "import",
 		.command = ctl_import,
 		.argc = 1,
-		.optargc = 1,
-		.usage = " NAME [VIEW]"
+		.optargc = 2,
+		.usage = " NAME [VIEW] [LUKS]"
 	}, {
 		.head.key = "remove",
 		.command = ctl_remove,
@@ -882,14 +941,13 @@ static void show_help(void) {
 	printf("unlocked and changed in memory, save writes the key store\n");
 	printf("\n");
 	printf("Usage:\n\n$ %s [-C CONFIG_FILE] [-s KDF_SALT] [-i KDF_ITERATIONS] \\\n", exec_name);
-	printf("                [-a SOCKET_ADDRESS] [-K KEY_STORE] [-k] [-YYY] [-c COMMAND]... \\\n");
+	printf("                [-K KEY_STORE] [-k] [-YYY] [-c COMMAND]... \\\n");
 	printf("                [-v] [-q] [-d]\n");
 	printf("\nOptions (defaults shown in parentheses):\n\n");
 	printf("-C CONFIG_FILE    file with the KDF parameters (%s, if it\n", DEFAULT_CONFIG_FILE);
 	printf("                  exists): salt=TEXT, iterations=NUMBER\n");
 	printf("-s KDF_SALT       salt used for KDF, overrides the config file (%s)\n", DEFAULT_KDF_SALT);
 	printf("-i KDF_ITERATIONS iterations done by KDF, overrides the config file (%u)\n", DEFAULT_KDF_ITERATIONS);
-	printf("-a SOCKET_ADDRESS address of scubed3 socket (%s), for import\n", control_socket);
 	printf("-Y                assume Yes to questions, this option is DANGEROUS\n");
 	printf("                  and must be specified 3 times to take effect\n");
 	printf("-c COMMAND        non interactive mode, run COMMAND and exit,\n");
@@ -928,6 +986,8 @@ int main(int argc, char **argv) {
 	int ret = 0, i = 0;
 
 	ctl_init(argc, argv, show_help);
+	if (strcmp(control_socket, CONTROL_SOCKET))
+		FATAL("keystorectl does not use the scubed3 daemon (no -a)");
 	ctl_add_commands(&priv, ctl_commands, NO_COMMANDS);
 	VERBOSE("keystorectl-" VERSION);
 

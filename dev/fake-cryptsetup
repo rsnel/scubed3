@@ -11,11 +11,12 @@
 # cryptsetup: MK bits, MK dump) after the key, luksDump without it the
 # keyslots (as LUKS2: "  N: luks2"), luksAddKey adds a key
 # (after the existing one is given), close removes the mapping, isLuks looks
-# at the signature; keys come from --key-file (- is stdin) or are typed
+# at the signature, luksHeaderBackup copies the header (the first MiB) to
+# --header-backup-file; keys come from --key-file (- is stdin) or are typed
 # (one line); -q: luksFormat does not ask for confirmation
 #
 # usage: put it in PATH as cryptsetup (see lukstest.sh, keystoretest.sh)
-q=; keyfile=; test=; vkfile=; dumpvk=; ro=
+q=; keyfile=; test=; vkfile=; dumpvk=; ro=; hbf=
 args=
 while [ $# -gt 0 ]; do
 	case $1 in
@@ -28,6 +29,8 @@ while [ $# -gt 0 ]; do
 	--volume-key-file=*) vkfile=${1#--volume-key-file=};;
 	--key-size) shift;;
 	--dump-volume-key) dumpvk=1;;
+	--header-backup-file) shift; hbf=$1;;
+	--header-backup-file=*) hbf=${1#--header-backup-file=};;
 	--key-file) shift; keyfile=$1;;
 	--key-file=*) keyfile=${1#--key-file=};;
 	*) args="$args $1";;
@@ -86,6 +89,9 @@ luksDump)
 	printf 'MK dump:\t'
 	vk "$2" | sed 's/../& /g; s/ $//' | fold -w 48 | sed '2,$s/^/\t\t/'
 	echo;;
+luksHeaderBackup)
+	[ -n "$hbf" ] && [ ! -e "$hbf" ] || { echo "Requested header backup file $hbf already exists." >&2; exit 1; }
+	dd if="$2" of="$hbf" bs=1048576 count=1 2> /dev/null;;
 luksAddKey)
 	h=$(keyhash "Enter any existing passphrase: ")
 	hashes "$2" | grep -qx "$h" || { echo "No key available with this passphrase." >&2; exit 2; }

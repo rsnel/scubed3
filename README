@@ -306,8 +306,7 @@ Two programs use it:
 
 	keystorectl	changes the key store: it reads it, unlocks views,
 			changes them in memory; save writes it (nothing is
-			written without save); it does not need the daemon
-			(only import uses it)
+			written without save); it never uses the daemon
 	scubed3ctl	uses the keys: it only reads the key store, ONE view
 			at a time (unlock locks the view that was unlocked),
 			so a name is always one partition
@@ -315,8 +314,9 @@ Two programs use it:
 keystorectl (the prompt is keys>):
 
 	keys> setup		guided: creates the key store, unlocks all its
-				passphrases, adds passphrases and partitions,
-				saves once
+				passphrases, adds passphrases and partitions
+				(an existing partition: as import, it asks the
+				path of its LUKS volume), saves once
 	keys> create		a new key store (random data, no views); it
 				never replaces an existing key store
 	keys> unlock		one passphrase of the key store
@@ -331,12 +331,21 @@ keystorectl (the prompt is keys>):
 				passphrase (asked twice), so that it also
 				opens without the key store; empty: a random
 				key
-	keys> import NAME [VIEW]
-				a partition with its own passphrase; if it is
-				open and has LUKS on it, the passphrase of the
-				LUKS volume is asked, with it its volume key
-				goes into the key store (cryptsetup luksDump
-				--dump-volume-key, the volume is not changed)
+	keys> import NAME [VIEW] [LUKS]
+				a partition with its own passphrase; LUKS is
+				the path of its LUKS volume (it has a /): the
+				partition in the mount point of the daemon
+				(/mnt/s3/NAME, while it is open), or a backup
+				of its LUKS header (cryptsetup luksHeaderBackup
+				/mnt/s3/NAME --header-backup-file FILE, then
+				the partition need not be open; the backup has
+				the keyslots: wipe it afterwards); the
+				passphrase of the LUKS volume is asked, with it
+				its volume key goes into the key store
+				(cryptsetup luksDump --dump-volume-key, the
+				volume is not changed); without LUKS the
+				partition gets a random volume key, for
+				luksformat
 	keys> copy NAME1 NAME2 [VIEW]
 				NAME2 gets the keys of NAME1: the same
 				partition under another name, for example root

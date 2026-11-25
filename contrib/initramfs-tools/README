@@ -99,8 +99,10 @@ Installation
 	s3> mount root /mnt/newroot
 	# rsync -aHAXx / /mnt/newroot/
 
-   An existing partition with another name: keystorectl import NAME (its
-   passphrase, and of its LUKS volume), copy NAME root, save.
+   An existing partition with another name: keystorectl import NAME VIEW
+   /mnt/s3/NAME (its passphrase, and of its LUKS volume; the partition is
+   open, or give a backup of its LUKS header instead), copy NAME root,
+   save.
 
    and in the new system: /etc/fstab with the root file system
    (UUID=... of the file system in the partition), /boot on a normal

@@ -380,10 +380,12 @@ keystoretest.sh DAEMON SCUBED3CTL
 	of the view it unlocked); copy (the same partition under another
 	name), unlock-until (passphrases from a pipe, one answer each, the
 	partitions of the other views are opened; at the end of the input the
-	next command is not done), luksopen-all, import of
-	an open partition with LUKS (with its LUKS passphrase its volume key
-	goes into the key store, a wrong one is refused, the volume keeps one
-	keyslot), an empty new passphrase is refused (key store
+	next command is not done), luksopen-all, import with
+	the path of a LUKS volume, and of a backup of its header while the
+	partition is closed (keystorectl never uses the daemon; with the LUKS
+	passphrase its volume key goes into the key store, a wrong one is
+	refused, the volume keeps one keyslot; a path that is not LUKS, a LUKS
+	argument without a /, and keystorectl -a are refused), an empty new passphrase is refused (key store
 	passphrases are never generated); 300 new key stores with one view:
 	its slot is random (at least 50 of the 64 slots, at most 18 times the
 	same), its default name is the slot (iNN); derive gives the key of a

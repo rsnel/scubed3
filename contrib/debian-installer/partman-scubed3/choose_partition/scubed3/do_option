@@ -252,7 +252,8 @@ do_open () {
 	fi
 	s3_busy open
 	if [ "$luks" ]; then
-		printf '%s\n%s\n' "$pass" "$luks" | s3ks -c "import $name $VIEW" -c save
+		printf '%s\n%s\n' "$pass" "$luks" |
+			s3ks -c "import $name $VIEW $S3MNT/$name" -c save
 	else
 		printf '%s\n' "$pass" | s3ks -c "import $name $VIEW" -c save
 	fi
